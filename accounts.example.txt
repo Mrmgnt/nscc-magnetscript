@@ -1,0 +1,5 @@
+# Format: username:password (satu akun per baris)
+# Baris yang diawali dengan '#' akan diabaikan.
+# Contoh:
+# akun1:pass123
+# akun2:pass456

@@ -1,0 +1,23 @@
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+scratch/
+
+# Sensitive account and credential files
+accounts.txt
+.env
+.env.*
+config.local.json
+session.json
+
+# Node & dependencies
+node_modules/
+package-lock.json
+
+# Operating System files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
