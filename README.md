@@ -25,10 +25,14 @@
   - Cek Level, XP, Gold, status misi, dan jatah reward karakter.
 - **Preset Loadout Switcher (`ns_loadout.js`)**:
   - Simpan dan ganti preset Skill & Gear (PvP / PvE / Hunting).
+  - Kelola preset lokal tersimpan di `loadouts.json`.
 - **Multi-Account Manager (`ns_multi_manager.js`)**:
-  - Eksekusi massal farming akun dari file daftar akun dengan proteksi anti-spam delay.
-- **Account Inspector (`ns_account_inspector.js`)**:
-  - Scan multi-akun untuk memeriksa status Level, Gold, Tokens, Ninja Rank, dan inventori.
+  - Eksekusi massal farming akun dari file `accounts.txt`.
+  - Dilengkapi proteksi jeda acak/anti-detection delay antar akun.
+  - Menyimpan ringkasan eksekusi ke `multi_manager_report.json`.
+- **Account Inspector & Auditor (`ns_account_inspector.js`)**:
+  - Scan multi-akun untuk memeriksa Level, Gold, Saga Tokens, Ninja Rank, Bloodline, dan Gear.
+  - Ekspor hasil audit ke terminal table, file JSON (`account_audit.json`), atau CSV (`account_audit.csv`).
 
 ---
 
@@ -47,18 +51,24 @@ Masukkan username & password akun Ninja Saga kamu (hanya disimpan di sesi memori
 
 ### 3. Menjalankan Mandiri via Terminal (CLI)
 
+#### Kredensial Akun Tunggal:
 ```cmd
-:: Set credential sesi
 set NS_USER=akun_anda
 set NS_PASS=password_anda
+```
 
-:: Leveling hingga level 80 dengan interval 10 detik
+#### Leveling & Misi:
+```cmd
+:: Leveling hingga level 80 dengan jeda 10 detik
 node ns_level.js 80 10
 
 :: Hanya misi tanpa event/hunting
 node ns_level.js 60 8 --only-mission
+```
 
-:: Jalankan event kage / halloween
+#### Event, Training & Hunting:
+```cmd
+:: Jalankan event kage & halloween
 node ns_event.js all 15
 
 :: Training TP & SS
@@ -66,10 +76,70 @@ node ns_train.js tp 5 15
 node ns_train.js ss 5 15
 
 :: Hunting House semua room
-node ns_hunt.js
+node ns_hunt.js run 10 20
 
-:: Cek Status Akun
+:: Cek Status Akun Aktif
 node ns_state.js
+```
+
+#### Loadout & Preset Switcher (`ns_loadout.js`):
+```cmd
+:: Tampilkan menu interaktif loadout
+node ns_loadout.js
+
+:: Lihat daftar preset tersimpan
+node ns_loadout.js list
+
+:: Cek loadout aktif karakter saat ini di server
+node ns_loadout.js current
+
+:: Simpan loadout aktif saat ini sebagai preset baru (misal: pvp)
+node ns_loadout.js save pvp
+
+:: Pasang preset ke karakter di server
+node ns_loadout.js apply pvp
+
+:: Hapus preset tersimpan
+node ns_loadout.js delete pvp
+```
+
+#### Multi-Account Farming Runner (`ns_multi_manager.js`):
+Siapkan file `accounts.txt` (contoh format ada di `accounts.example.txt`):
+```text
+username1:password123
+username2:password456
+```
+Jalankan aksi farming massal:
+```cmd
+:: Jalankan jatah harian untuk seluruh akun di accounts.txt (jeda 15s antar akun)
+node ns_multi_manager.js daily --delay 15
+
+:: Jalankan hunting house untuk seluruh akun
+node ns_multi_manager.js hunt --delay 10
+
+:: Jalankan training TP & SS untuk seluruh akun
+node ns_multi_manager.js train --delay 10
+
+:: Jalankan event battle untuk seluruh akun
+node ns_multi_manager.js event --delay 12
+
+:: Leveling hingga level 60 untuk seluruh akun
+node ns_multi_manager.js level 60
+```
+
+#### Multi-Account Inspector & Audit (`ns_account_inspector.js`):
+```cmd
+:: Pindai seluruh akun di accounts.txt dan tampilkan tabel
+node ns_account_inspector.js
+
+:: Pindai dan simpan laporan ke file CSV
+node ns_account_inspector.js --csv
+
+:: Pindai dan simpan laporan ke file JSON
+node ns_account_inspector.js --json
+
+:: Pindai hanya akun aktif saat ini (NS_USER & NS_PASS)
+node ns_account_inspector.js --me
 ```
 
 ---
