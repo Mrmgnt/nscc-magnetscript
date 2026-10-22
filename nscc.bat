@@ -43,23 +43,24 @@ echo            cc: MagnetScript(Razki)
 echo ==========================================================
 echo   Akun : %NS_USER%
 echo.
-echo   1. Jatah harian + naik level (event, training, hunting, misi)
-echo      - ujian Chunin / Jounin / Special Jounin / Sennin otomatis
-echo   2. Event battle (Halloween Furious Zombie + Tengu Goblin / Kage)
-echo      - sub-menu: all / kage saja / halloween saja
-echo   3. TP Training + SS Training
-echo   4. Hunting House / Eudemong (status saja)
-echo   5. Cek karakter (level, XP, gold, misi)
-echo   6. Ganti akun
-echo   7. Daftar misi per grade (cek sisa misi)
-echo   8. AUTO GRIND - Misi Grade Level (Ujian HARD, sampai target)
-echo      - Murni Misi Grade C/B/A level tertinggi karakter (tanpa event)
-echo   9. CHEAT - Damage besar + HP tidak habis (player only, bukan PvP)
-echo  10. TEST LOCAL - Coba feed hex 8 karakter (localhost.dev)
-echo  11. LOADOUT - Preset Switcher Skill & Gear (PvP / PvE / Hunt)
-echo  12. MULTI-ACCOUNT - Farming Massal dari accounts.txt (Bulk Runner)
-echo  13. INSPECTOR - Audit & Scan Inventori Multi-Akun
-echo   0. Keluar
+echo   -- [ FARMING & LEVELING ] -----------------------------
+echo    1. Jatah harian + auto naik level (TP, SS, Hunt, Event, Misi)
+echo       - ujian Chunin / Jounin / Sp. Jounin / Sennin otomatis
+echo    2. Event battle (Halloween Furious Zombie + Tengu / Kage)
+echo    3. TP Training + SS Training
+echo    4. Hunting House / Eudemon Garden
+echo    8. AUTO GRIND - Misi Grade Level Tertinggi (Exam Hard)
+echo.
+echo   -- [ STATUS & INFORMASI ] -----------------------------
+echo    5. Cek karakter (Level, XP, Gold, status reward)
+echo    7. Daftar misi per grade (cek sisa reward misi)
+echo    6. Ganti akun aktif
+echo.
+echo   -- [ TOOLS & PENGUJIAN ] ------------------------------
+echo    9. CHEAT - Damage besar + HP infinite (player PvE)
+echo   10. TEST LOCAL - Feed hex 8 karakter (localhost/dev)
+echo.
+echo    0. Keluar
 echo ==========================================================
 set "PILIH="
 set /p "PILIH=Pilih menu : "
@@ -74,31 +75,7 @@ if "%PILIH%"=="7" goto MISSIONS
 if "%PILIH%"=="8" goto MISSIONONLY
 if "%PILIH%"=="9" goto CHEAT
 if "%PILIH%"=="10" goto LOCALFEED
-if "%PILIH%"=="11" goto LOADOUT
-if "%PILIH%"=="12" goto MULTI
-if "%PILIH%"=="13" goto INSPECT
 if "%PILIH%"=="0" goto END
-goto MENU
-
-:LOADOUT
-cls
-node ns_loadout.js
-echo.
-pause
-goto MENU
-
-:MULTI
-cls
-node ns_multi_manager.js
-echo.
-pause
-goto MENU
-
-:INSPECT
-cls
-node ns_account_inspector.js
-echo.
-pause
 goto MENU
 
 :LOCALFEED

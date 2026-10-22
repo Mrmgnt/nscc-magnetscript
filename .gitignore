@@ -6,6 +6,12 @@ scratch/
 
 # Sensitive account and credential files
 accounts.txt
+dummy_accounts.txt
+dummy_accounts.json
+loadouts.json
+multi_manager_report.json
+account_audit.json
+account_audit.csv
 .env
 .env.*
 config.local.json
