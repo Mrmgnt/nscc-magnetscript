@@ -59,6 +59,7 @@ echo.
 echo   -- [ TOOLS & PENGUJIAN ] ------------------------------
 echo    9. CHEAT - Damage besar + HP infinite (player PvE)
 echo   10. TEST LOCAL - Feed hex 8 karakter (localhost/dev)
+echo   11. DUMMY FARMER - Auto create & kirim gift harian
 echo.
 echo    0. Keluar
 echo ==========================================================
@@ -75,7 +76,15 @@ if "%PILIH%"=="7" goto MISSIONS
 if "%PILIH%"=="8" goto MISSIONONLY
 if "%PILIH%"=="9" goto CHEAT
 if "%PILIH%"=="10" goto LOCALFEED
+if "%PILIH%"=="11" goto DUMMYFARMER
 if "%PILIH%"=="0" goto END
+goto MENU
+
+:DUMMYFARMER
+cls
+node ns_dummy_farmer.js
+echo.
+pause
 goto MENU
 
 :LOCALFEED
