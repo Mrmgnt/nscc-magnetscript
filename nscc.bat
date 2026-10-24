@@ -33,6 +33,7 @@ if "%WRAP_CODE%"=="99" (
   if exist ".char_env.bat" del ".char_env.bat" >nul 2>nul
   exit /b 0
 )
+set "NS_RELOAD=1"
 :: Bouncing back ke menu jika proses dihentikan
 goto WRAPPER_LOOP
 
@@ -43,6 +44,25 @@ if exist ".char_env.bat" (
 )
 
 if not "%NS_USER%"=="" if not "%NS_PASS%"=="" if not "%NS_CHAR_ID%"=="" (
+  if "%NS_RELOAD%"=="1" goto MENU
+  cls
+  echo ======================================================================
+  echo                     NINJASAGA BOT - NSCC
+  echo                     cc: MagnetScript(Razki)
+  echo ======================================================================
+  echo   Ditemukan sesi tersimpan sebelumnya:
+  echo     Akun     : %NS_USER%
+  echo     Karakter : %NS_CHAR_NAME% (Level %NS_CHAR_LEVEL% ^| Slot %NS_CHAR_SLOT%)
+  echo ======================================================================
+  echo.
+  echo   [ 1 ] Lanjut gunakan akun ^& karakter ini
+  echo   [ 2 ] Ganti karakter lain di akun ini
+  echo   [ 3 ] Login akun baru / ganti akun
+  echo.
+  set "SESI_OPT="
+  set /p "SESI_OPT=Pilih [1/2/3, Enter = 1]: "
+  if "%SESI_OPT%"=="2" goto GANTICHAR
+  if "%SESI_OPT%"=="3" goto GANTI
   goto MENU
 )
 
@@ -94,11 +114,12 @@ echo   [ 4 ] TOOLS ^& PENGUJIAN
 echo        12. Memory Patch Cheat (Damage Tinggi ^& Infinite HP PvE)
 echo        13. Dummy Farmer (Auto Create Akun ^& Kirim Gift Harian)
 echo        14. Test Local Feed (Multi-Threaded Dev Test)
+echo        15. Multi-Account ^& Multi-Character Runner (accounts.txt)
 echo.
 echo         0. Keluar
 echo ======================================================================
 set "PILIH="
-set /p "PILIH=Pilih menu [0-14]: "
+set /p "PILIH=Pilih menu [0-15]: "
 
 if "%PILIH%"=="1" goto DAILY
 if "%PILIH%"=="2" goto EVENT
@@ -114,6 +135,7 @@ if "%PILIH%"=="11" goto GANTI
 if "%PILIH%"=="12" goto CHEAT
 if "%PILIH%"=="13" goto DUMMYFARMER
 if "%PILIH%"=="14" goto LOCALFEED
+if "%PILIH%"=="15" goto MULTIMANAGER
 if "%PILIH%"=="0" goto END
 goto MENU
 
@@ -327,6 +349,7 @@ set "NS_CHAR_LEVEL="
 set "NS_CHAR_GENDER="
 set "NS_CHAR_SLOT="
 set "NS_FORCE_SELECT="
+set "NS_RELOAD="
 goto LOGIN
 
 :CHEAT
@@ -384,6 +407,21 @@ echo   Mode   : login akun, 5 request paralel, jeda batch 3 detik.
 echo   Tekan Ctrl+C untuk menghentikan pengujian.
 echo.
 node ns_local_feed_test.js
+echo.
+pause
+goto MENU
+
+:MULTIMANAGER
+cls
+echo ======================================================================
+echo             MULTI-ACCOUNT ^& MULTI-CHARACTER BULK RUNNER
+echo ======================================================================
+echo   Menjalankan akun dan karakter dari accounts.txt secara otomatis
+echo   dengan jeda aman tanpa saling bertabrakan sesi login.
+echo.
+echo   Tips: Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti ke menu.
+echo.
+node ns_multi_manager.js
 echo.
 pause
 goto MENU

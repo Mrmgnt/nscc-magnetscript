@@ -23,7 +23,7 @@ const dir = __dirname;
 
 const argv = process.argv.slice(2);
 const iLv = argv.indexOf('--level');
-const targetLevel = iLv >= 0 ? Number(argv[iLv + 1] || 0) : 0;
+const targetLevel = iLv >= 0 ? Number(argv[iLv + 1] || 0) : (process.env.NS_TARGET_LEVEL ? Number(process.env.NS_TARGET_LEVEL) : 0);
 
 const tahap = [
     ['Special Event: Kage', ['node', 'ns_event.js', 'kage', '20']],
@@ -35,6 +35,43 @@ const tahap = [
 if (targetLevel) tahap.push(['Auto level ' + targetLevel, ['node', 'ns_level.js', String(targetLevel), '25']]);
 
 if (!process.env.NS_USER || !process.env.NS_PASS) { line('Butuh NS_USER dan NS_PASS.'); process.exit(1); }
+
+const { spawn } = require('child_process');
+const c = require('./nsclient.js');
+
+function runTahap(cmd) {
+    return new Promise(resolve => {
+        let stdout = '';
+        let stderr = '';
+        const child = spawn(cmd[0], cmd.slice(1), {
+            cwd: dir,
+            env: process.env,
+            windowsHide: true
+        });
+
+        child.stdout.on('data', chunk => {
+            const str = chunk.toString();
+            stdout += str;
+            process.stdout.write(str);
+        });
+
+        child.stderr.on('data', chunk => {
+            const str = chunk.toString();
+            stderr += str;
+            if (!/tput|tcsetattr|Inappropriate ioctl/i.test(str)) {
+                process.stderr.write(str);
+            }
+        });
+
+        child.on('close', code => {
+            resolve({ status: code || 0, stdout, stderr });
+        });
+
+        child.on('error', err => {
+            resolve({ status: 1, stdout, stderr: err.message });
+        });
+    });
+}
 
 function angka(out) {
     // "RINGKASAN hunting: 10 room dicoba, 4 benar-benar dikreditkan"
@@ -53,27 +90,28 @@ function sebab(out) {
     return penting.length ? penting[penting.length - 1].trim().slice(0, 120) : '';
 }
 
-const hasil = [];
-for (const [nama, cmd] of tahap) {
-    line('');
-    line('################ ' + nama + ' ################');
-    const r = spawnSync(cmd[0], cmd.slice(1), { cwd: dir, encoding: 'utf8', env: process.env, maxBuffer: 32 * 1024 * 1024 });
-    const out = String(r.stdout || '');
-    process.stdout.write(out);
-    if (r.stderr && !/tput|tcsetattr|Inappropriate ioctl/i.test(r.stderr)) process.stderr.write(String(r.stderr));
-    hasil.push([nama, r.status, angka(out), sebab(out)]);
-}
+(async () => {
+    c.enableGracefulStop('menu bot');
+    const hasil = [];
+    for (const [nama, cmd] of tahap) {
+        line('');
+        line('################ ' + nama + ' ################');
+        const r = await runTahap(cmd);
+        hasil.push([nama, r.status, angka(r.stdout), sebab(r.stdout)]);
+    }
 
-line('');
-line('################ RINGKASAN HARIAN ################');
-for (const [nama, kode, kredit, alasan] of hasil) {
-    line('  ' + nama.padEnd(26) + '| ' + (kode === 0 ? 'exit 0' : 'exit ' + kode) + ' | reward masuk: ' + kredit + (alasan ? ' | ' + alasan : ''));
-}
-const totalMasuk = hasil.reduce((a, h) => a + h[2], 0);
-line('');
-line('Total reward masuk ke karakter: ' + totalMasuk + ' tahap.');
-if (!totalMasuk) line('Tidak ada reward yang masuk. Cek alasan per tahap di atas (limit harian / level / reward akun kosong).');
-line('');
-line('Catatan: TP/SS dibatasi server 1x per hari, hunting 1x per room per hari,');
-line('Kage berhenti sendiri saat energy habis, Halloween berhenti saat heart habis.');
-process.exit(hasil.every(h => h[1] === 0) ? 0 : 1);
+    line('');
+    line('################ RINGKASAN HARIAN ################');
+    for (const [nama, kode, kredit, alasan] of hasil) {
+        line('  ' + nama.padEnd(26) + '| ' + (kode === 0 ? 'exit 0' : 'exit ' + kode) + ' | reward masuk: ' + kredit + (alasan ? ' | ' + alasan : ''));
+    }
+    const totalMasuk = hasil.reduce((a, h) => a + h[2], 0);
+    line('');
+    line('');
+    line('Catatan: TP/SS dibatasi server 1x per hari, hunting 1x per room per hari,');
+    line('Kage berhenti sendiri saat energy habis, Halloween berhenti saat heart habis.');
+    process.exit(hasil.every(h => h[1] === 0) ? 0 : 1);
+})().catch(e => {
+    line('FATAL ' + (e.message || e));
+    process.exit(1);
+});

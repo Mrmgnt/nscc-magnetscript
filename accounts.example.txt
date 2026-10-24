@@ -1,5 +1,33 @@
-# Format: username:password (satu akun per baris)
-# Baris yang diawali dengan '#' akan diabaikan.
-# Contoh:
-# akun1:pass123
-# akun2:pass456
+# ==============================================================================
+# NINJA SAGA MULTI-ACCOUNT & MULTI-CHARACTER CONFIGURATION
+# cc: MagnetScript(Razki)
+# ==============================================================================
+# Format per baris:
+#   username:password:targetLevel:characterSlot
+#
+# Keterangan:
+#   - username      : Nama login akun Ninja Saga
+#   - password      : Password akun
+#   - targetLevel   : Target level untuk auto-leveling (opsional, default: 60)
+#   - characterSlot : Slot karakter (1, 2, 3...) atau nama karakter (opsional, default: 1)
+#
+# Catatan penting:
+#   Baris yang diawali '#' adalah komentar dan akan diabaikan.
+#   Jika 1 akun memiliki 2 karakter, masukkan 2 baris terpisah dengan slot berbeda.
+#   Bot akan mengerjakannya secara bergantian (sekuensial) agar sesi tidak bertabrakan!
+#
+# ==============================================================================
+# CONTOH PENGGUNAAN:
+# ==============================================================================
+#
+# Akun 1 (Memiliki 2 karakter):
+# - Karakter slot 1 ingin target level 60
+# - Karakter slot 2 ingin target level 40
+# akun1:rahasia123:60:1
+# akun1:rahasia123:40:2
+#
+# Akun 2 (Memiliki 1 karakter, target level 80):
+# akun2:password456:80:1
+#
+# Akun 3 (Memiliki 1 karakter, target level 100):
+# akun3:password789:100:1

@@ -62,8 +62,9 @@ const GRADE_A_SET = new Set(GRADE_A_ARR);
 const GRADE_S_SET = new Set(GRADE_S_ARR);
 
 // tambahan misi vendor level 79+ yang belum ada di daftar ringkas (Stage 1-5, XP besar)
+let DATA = null;
 try {
-    const DATA = require('./ns_mission_data.json');
+    DATA = require('./ns_mission_data.json');
     const ada = new Set(MISI.map(m => m[0]));
     for (const m of DATA) if (m.vendor && m.xp > 0 && m.level >= 79 && !ada.has(m.id)) MISI.push([m.id, m.level, m.xp]);
 } catch (e) { /* data lengkap tidak ada, pakai daftar ringkas */ }
@@ -130,6 +131,7 @@ const UJIAN = {
     const u = process.env.NS_USER, p = process.env.NS_PASS;
     if (!u || !p) { line('Butuh NS_USER dan NS_PASS.'); process.exit(1); }
     if (!target) { line('Pakai: node ns_level.js <targetLevel> [jedaDetik] [--easy]'); process.exit(1); }
+    line('Menghubungkan ke server Ninja Saga untuk auto level ' + target + '...');
 
     let s = await c.login(u, p);
     if (!s.ok) { line('LOGIN GAGAL: ' + s.stage + ' (' + (s.message || s.body || 'status ' + s.http) + ')'); process.exit(2); }
@@ -202,18 +204,23 @@ const UJIAN = {
     }
 
     async function baca() {
-        for (let i = 1; i <= 5; i++) {
+        for (let i = 1; i <= 6; i++) {
             const r = await c.amf('CharacterDAO.getCharacterById', [s.sessionKey, charId]);
             const b = (r && r.body) || {};
             if (b.gk) {
                 const x = b.result || {};
                 return { gk: String(b.gk), level: Number(x.character_level), xp: Number(x.character_xp), gold: Number(x.character_gold), mission: String(x.character_mission || '') };
             }
+            if (b.cooldown || /wait a moment/i.test(String(b.error || ''))) {
+                const waitSec = Math.max(3, Number(b.cooldown || 6) + 1);
+                await sleep(waitSec * 1000);
+                continue;
+            }
             if (Number(b.error) === 101 || Number(b.error) === 102) {
                 const sNew = await c.login(u, p);
                 if (sNew && sNew.ok) { s = sNew; h = k.mk(s.sessionKey); }
             }
-            if (i < 5) await sleep(2000);
+            if (i < 6) await sleep(2000);
         }
         return null;
     }
@@ -316,7 +323,7 @@ const UJIAN = {
 
     let n = 0, gagalBeruntun = 0, selesai = 0, tanpaXp = 0, tunggu = 0;
     const MAKS = 500;
-    const jedaTunggu = Math.max(5, Number(process.env.NS_WAIT_MIN || 10)) * 60000; // menit
+    const jedaTunggu = Math.max(10, Number(process.env.NS_WAIT_SEC || 20)) * 1000; // 20 detik
     let sudahHunting = false;
 
     // Mode auto-grind murni misi grade level (tanpa event Kage/Halloween)
@@ -375,7 +382,8 @@ const UJIAN = {
             return true;
         }).sort((a, b) => (b[2] - a[2]) || (b[1] - a[1])).slice(0, 40);
         if (!kandidat.length) {
-            line('semua misi grade ' + (gradeFilter || 'semua') + ' yang tersedia di level ' + st.level + ' sudah selesai.');
+            line('semua misi grade ' + (gradeFilter || 'semua') + ' yang tersedia di level ' + st.level + ' sedang istirahat / tuntas.');
+            cooldown.clear(); // Pulihkan cooldown misi grade repeatable agar bisa diulang
             // Fallback Hunting House jika misi grade di level ini habis tapi belum capai target
             if (!noHunt && !sudahHunting) {
                 sudahHunting = true;
@@ -389,7 +397,7 @@ const UJIAN = {
                 }
             }
             tunggu++;
-            line('semua misi grade di level ' + st.level + ' sudah tuntas. Tunggu ' + Math.round(jedaTunggu / 60000) + ' menit (putaran ' + tunggu + ')...');
+            line('semua misi grade di level ' + st.level + ' sedang cooling down. Tunggu ' + Math.round(jedaTunggu / 1000) + ' detik (putaran ' + tunggu + ')...');
             await sleep(jedaTunggu);
             sudahHunting = false; gagalHariIni.clear(); tanpaXp = 0; gagalBeruntun = 0;
             continue;
@@ -404,22 +412,30 @@ const UJIAN = {
             if (!st2) break;
             n++; sukses = true; gagalBeruntun = 0; selesai++;
             const dXp = st2.xp - st.xp;
-            line('#' + n + ' ' + mid + ' OK  lv ' + st.level + ' -> ' + st2.level + ' | XP +' + dXp + ' | gold ' + st2.gold);
+            const dGold = st2.gold - st.gold;
+            const mInfo = (DATA && DATA.find(x => x.id === mid)) || {};
+            const mName = mInfo.name ? `[${mInfo.name}]` : '';
+            line('  +-------------------------------------------------------------');
+            line(`  | ✓ [#${n}] Misi ${mid} ${mName} SELESAI`);
+            line(`  |   Level : Lv ${st.level}${st2.level > st.level ? ' -> Lv ' + st2.level + ' (LEVEL UP! 🎉)' : ''}`);
+            line(`  |   XP    : +${dXp.toLocaleString()} (XP Karakter: ${st2.xp.toLocaleString()})`);
+            line(`  |   Gold  : +${dGold.toLocaleString()} (Gold Karakter: ${st2.gold.toLocaleString()})`);
+            line('  +-------------------------------------------------------------');
             st = st2;
             if (dXp <= 0) {
-                // reward bisa telat masuk — cek 1x setelah 30s, jangan blokir lama
-                await sleep(30000);
+                // reward bisa telat masuk — cek 1x setelah 15s
+                await sleep(15000);
                 const st3 = await baca();
                 const telat = st3 ? st3.xp - st.xp : 0;
                 if (st3 && telat > 0) {
-                    line('  (reward telat masuk) XP +' + telat + ' | gold ' + st3.gold);
+                    const telatGold = st3.gold - st.gold;
+                    line(`    (Reward telat masuk) XP +${telat.toLocaleString()} | Gold +${telatGold.toLocaleString()}`);
                     st = st3; tanpaXp = 0;
                 } else {
                     if (st3) st = st3;
                     tanpaXp++;
-                    // jangan blacklist permanen: misi grade bisa dibayar lagi nanti, cukup istirahat 3 menit
-                    cooldown.set(mid, Date.now() + 3 * 60000);
-                    line('  ' + mid + ' belum bayar sekarang — istirahat 3 menit, lanjut misi lain.');
+                    cooldown.set(mid, Date.now() + 30000);
+                    line('    ' + mid + ' belum bayar saat ini — istirahat 30 detik, mencoba misi lain.');
                 }
             } else { tanpaXp = 0; }
             break;
@@ -435,7 +451,7 @@ const UJIAN = {
                 continue;
             }
             tunggu++;
-            line('tunggu ' + Math.round(jedaTunggu / 60000) + ' menit (putaran tunggu ' + tunggu + ').');
+            line('tunggu ' + Math.round(jedaTunggu / 1000) + ' detik (putaran tunggu ' + tunggu + ').');
             await sleep(jedaTunggu);
             tanpaXp = 0; gagalBeruntun = 0; gagalHariIni.clear(); sudahHunting = false;
             continue;
@@ -462,13 +478,19 @@ const UJIAN = {
                     }
                 }
                 if (onlyMission && noHunt && noEvent) {
-                    line('mode misi-saja: tidak ada misi yang diterima server. Selesai.');
-                    break;
+                    if (st.level >= target) {
+                        line('mode misi-saja: target level telah tercapai. Selesai.');
+                        break;
+                    }
+                    line('mode misi-saja: menunggu jeda server ' + Math.round(jedaTunggu / 1000) + ' detik sebelum mencoba lagi...');
+                    await sleep(jedaTunggu);
+                    gagalBeruntun = 0; gagalHariIni.clear(); cooldown.clear(); tanpaXp = 0;
+                    continue;
                 }
                 tunggu++;
-                line('tidak ada misi yang bisa dikerjakan sekarang — tunggu ' + Math.round(jedaTunggu / 60000) + ' menit (putaran tunggu ' + tunggu + ').');
+                line('tidak ada misi yang bisa dikerjakan sekarang — tunggu ' + Math.round(jedaTunggu / 1000) + ' detik (putaran tunggu ' + tunggu + ').');
                 await sleep(jedaTunggu);
-                gagalBeruntun = 0; gagalHariIni.clear(); sudahHunting = false; tanpaXp = 0;
+                gagalBeruntun = 0; gagalHariIni.clear(); cooldown.clear(); sudahHunting = false; tanpaXp = 0;
                 continue;
             }
             await sleep(10000);
