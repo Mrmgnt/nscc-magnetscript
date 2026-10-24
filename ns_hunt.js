@@ -42,13 +42,19 @@ function eh(str) {
     const maks = Number(process.argv[3] || 10);
     const jeda = Math.max(8, Number(process.argv[4] || 20));
     const mulaiRoom = Math.max(0, Number(process.argv[5] || 0));
+    c.enableGracefulStop('menu bot');
     const u = process.env.NS_USER, p = process.env.NS_PASS;
     if (!u || !p) { line('Butuh NS_USER dan NS_PASS.'); process.exit(1); }
 
     const s = await c.login(u, p);
     if (!s.ok) { line('LOGIN GAGAL: ' + s.stage + ' (' + (s.message || s.body || 'status ' + s.http) + ')'); process.exit(2); }
     const h = k.mk(s.sessionKey);
-    const charId = (await c.amf('CharacterDAO.getCharactersList', [s.sessionKey])).body.result[0][0];
+    const rl = await c.amf('CharacterDAO.getCharactersList', [s.sessionKey]);
+    const chars = (rl && rl.body && Array.isArray(rl.body.result)) ? rl.body.result : [];
+    const row = c.getSelectedChar(chars, process.env.NS_CHAR_ID || process.env.NS_CHAR_SLOT);
+    if (!row) { line('gagal ambil karakter'); process.exit(3); }
+    const charId = row[0];
+    line('Karakter aktif : ' + charId + ' "' + row[1] + '" (Lv ' + (row[2] || '?') + ')');
 
     async function baca() {
         for (let i = 0; i < 6; i++) {

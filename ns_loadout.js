@@ -54,11 +54,13 @@ async function loginClient() {
         process.exit(2);
     }
     const rl = await c.amf('CharacterDAO.getCharactersList', [s.sessionKey]);
-    if (!rl.body || !rl.body.result || !rl.body.result[0]) {
-        line('ERROR: Tidak dapat mengambil daftar karakter.');
+    const chars = (rl && rl.body && Array.isArray(rl.body.result)) ? rl.body.result : [];
+    const row = c.getSelectedChar(chars, process.env.NS_CHAR_ID || process.env.NS_CHAR_SLOT);
+    if (!row) {
+        line('ERROR: Tidak dapat mengambil karakter.');
         process.exit(3);
     }
-    const charId = rl.body.result[0][0];
+    const charId = row[0];
 
     let charObj = null;
     for (let i = 1; i <= 6; i++) {

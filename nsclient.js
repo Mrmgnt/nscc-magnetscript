@@ -237,4 +237,53 @@ async function login(username, password) {
     };
 }
 
-module.exports = { login, amf, httpJson, AMF_HOST, API_HOST, BUILD_NO, SALT, CODEC, sha1, getHash, getArrayHash, getLoginHash, ucEncode };
+function getSelectedChar(charList, target) {
+    if (!charList || !charList.length) return null;
+    if (!target) return charList[0];
+    const tStr = String(target).trim().toLowerCase();
+    // 1. Match by charId (column 0)
+    const byId = charList.find(c => String(c[0]) === tStr);
+    if (byId) return byId;
+    // 2. Match by charName (column 1)
+    const byExactName = charList.find(c => String(c[1]).toLowerCase() === tStr);
+    if (byExactName) return byExactName;
+    const bySubName = charList.find(c => String(c[1]).toLowerCase().includes(tStr));
+    if (bySubName) return bySubName;
+    // 3. Match by slot number (1-based: 1, 2, ...)
+    const num = parseInt(tStr, 10);
+    if (!isNaN(num) && num >= 1 && num <= charList.length) {
+        return charList[num - 1];
+    }
+    return charList[0];
+}
+
+function enableGracefulStop(label = 'menu') {
+    let stopping = false;
+    const handleStop = (trigger) => {
+        if (stopping) process.exit(0);
+        stopping = true;
+        console.log(`\n\n[i] Proses dihentikan (${trigger}). Kembali ke ${label}...`);
+        process.exit(0);
+    };
+
+    process.on('SIGINT', () => handleStop('Ctrl+C'));
+    process.on('SIGTERM', () => handleStop('SIGTERM'));
+
+    if (process.stdin.isTTY && process.stdin.setRawMode) {
+        try {
+            process.stdin.setRawMode(true);
+            process.stdin.resume();
+            process.stdin.setEncoding('utf8');
+            process.stdin.on('data', chunk => {
+                const s = String(chunk);
+                if (s === 'q' || s === 'Q' || s === '\u001b') {
+                    handleStop('Tombol Q');
+                } else if (s === '\u0003') {
+                    handleStop('Ctrl+C');
+                }
+            });
+        } catch (_) {}
+    }
+}
+
+module.exports = { login, amf, httpJson, getSelectedChar, enableGracefulStop, AMF_HOST, API_HOST, BUILD_NO, SALT, CODEC, sha1, getHash, getArrayHash, getLoginHash, ucEncode };

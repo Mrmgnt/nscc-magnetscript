@@ -27,6 +27,7 @@ const now = () => Math.floor(Date.now() / 1000);
     const mode = (process.argv[2] || 'tp').toLowerCase();
     const maks = Number(process.argv[3] || 5);
     const jeda = Number(process.argv[4] || 20);
+    c.enableGracefulStop('menu bot');
     const u = process.env.NS_USER, p = process.env.NS_PASS;
     if (!u || !p) { line('Butuh NS_USER dan NS_PASS.'); process.exit(1); }
     if (mode !== 'tp' && mode !== 'ss') { line('Pakai: node ns_train.js tp|ss [maks] [jeda]'); process.exit(1); }
@@ -34,8 +35,12 @@ const now = () => Math.floor(Date.now() / 1000);
     const s = await c.login(u, p);
     if (!s.ok) { line('LOGIN GAGAL: ' + s.stage + ' (' + (s.message || s.body || 'status ' + s.http) + ')'); process.exit(2); }
     const rl = await c.amf('CharacterDAO.getCharactersList', [s.sessionKey]);
-    const charId = rl.body.result[0][0];
+    const chars = (rl && rl.body && Array.isArray(rl.body.result)) ? rl.body.result : [];
+    const row = c.getSelectedChar(chars, process.env.NS_CHAR_ID || process.env.NS_CHAR_SLOT);
+    if (!row) { line('ERROR: Tidak ada karakter ditemukan.'); process.exit(3); }
+    const charId = row[0];
     const h = k.mk(s.sessionKey);
+    line('Karakter aktif : ' + charId + ' "' + row[1] + '" (Lv ' + (row[2] || '?') + ')');
 
     async function baca() {
         for (let i = 1; i <= 6; i++) {

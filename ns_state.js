@@ -7,7 +7,11 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     const s = await c.login(process.env.NS_USER, process.env.NS_PASS);
     if (!s.ok) { console.log('LOGIN GAGAL: ' + s.stage + ' (' + (s.message || s.body || 'status ' + s.http) + ')'); process.exit(2); }
     const rl = await c.amf('CharacterDAO.getCharactersList', [s.sessionKey]);
-    const id = rl.body.result[0][0];
+    const chars = (rl && rl.body && Array.isArray(rl.body.result)) ? rl.body.result : [];
+    const row = c.getSelectedChar(chars, process.env.NS_CHAR_ID || process.env.NS_CHAR_SLOT);
+    if (!row) { console.log('ERROR: Karakter tidak ditemukan.'); process.exit(3); }
+    const id = row[0];
+    console.log('Karakter aktif : ' + id + ' "' + row[1] + '" (Lv ' + (row[2] || '?') + ')');
     let x = null;
     for (let i = 1; i <= 6; i++) {
         const r = await c.amf('CharacterDAO.getCharacterById', [s.sessionKey, id]);

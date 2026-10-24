@@ -17,8 +17,12 @@ const DATA = require('./ns_mission_data.json');
 (async () => {
     const s = await c.login(process.env.NS_USER, process.env.NS_PASS);
     if (!s.ok) { line('LOGIN GAGAL: ' + s.stage + ' (' + (s.message || s.body || 'status ' + s.http) + ')'); process.exit(2); }
-    const ids = (await c.amf('CharacterDAO.getCharactersList', [s.sessionKey])).body.result[0];
-    const b = (await c.amf('CharacterDAO.getCharacterById', [s.sessionKey, ids[0]])).body;
+    const rl = await c.amf('CharacterDAO.getCharactersList', [s.sessionKey]);
+    const chars = (rl && rl.body && Array.isArray(rl.body.result)) ? rl.body.result : [];
+    const row = c.getSelectedChar(chars, process.env.NS_CHAR_ID || process.env.NS_CHAR_SLOT);
+    if (!row) { line('ERROR: Karakter tidak ditemukan.'); process.exit(3); }
+    const charId = row[0];
+    const b = (await c.amf('CharacterDAO.getCharacterById', [s.sessionKey, charId])).body;
     const r = b.result || {};
     const lv = Number(r.character_level || 0);
     const rank = Number(r.character_rank || 0);
@@ -28,15 +32,15 @@ const DATA = require('./ns_mission_data.json');
     const semua = DATA.filter(m => m.grade);
     const byGrade = {};
     for (const m of semua) (byGrade[m.grade] = byGrade[m.grade] || []).push(m);
-    // Label menu game: Grade A = lv 42-78, B = lv 20-39, C = lv 1-19, S = misi khusus 75 energy
-    const tier = l => (l >= 42 && l <= 78) ? 'A' : l >= 20 && l <= 39 ? 'B' : l >= 1 && l <= 19 ? 'C' : '';
+    // Label menu game: Grade S = lv 80-100, Grade A = lv 42-78, B = lv 20-39, C = lv 1-19
+    const tier = l => (l >= 80) ? 'S' : (l >= 42 && l <= 78) ? 'A' : l >= 20 && l <= 39 ? 'B' : l >= 1 && l <= 19 ? 'C' : '';
 
     line('karakter : ' + r.character_name + ' | level ' + lv + ' | rank ' + rank);
-    line('grade kamu: ' + (tier(lv) || '-') + '  (A = lv 42-78, B = lv 20-39, C = lv 1-19, S = misi 75 energy)');
+    line('grade kamu: ' + (tier(lv) || '-') + '  (S = lv 80-100 stamina, A = lv 42-78, B = lv 20-39, C = lv 1-19)');
     line('');
 
     if (grade) {
-        const pakaiTier = ['A', 'B', 'C'].includes(grade);
+        const pakaiTier = ['A', 'B', 'C', 'S'].includes(grade);
         const list = pakaiTier ? semua.filter(m => tier(m.level) === grade) : (byGrade[grade] || []);
         if (!list.length) {
             line('GRADE ' + grade + ' TIDAK ADA misi untuk level sekarang.');
@@ -47,7 +51,8 @@ const DATA = require('./ns_mission_data.json');
         list.sort((a, b2) => a.level - b2.level);
         for (const m of list) {
             const st = done.has(m.id) ? (m.daily ? 'HARIAN' : 'SELESAI') : (m.level <= lv ? 'SIAP' : 'butuh lv ' + m.level);
-            line('  ' + m.id.padEnd(8) + 'lv ' + String(m.level).padEnd(3) + 'XP ' + String(m.xp).padEnd(7) + st.padEnd(12) + m.name.slice(0, 40));
+            const extraNote = m.grade === 'S' ? ' [-12 Stamina]' : '';
+            line('  ' + m.id.padEnd(8) + 'lv ' + String(m.level).padEnd(3) + 'XP ' + String(m.xp).padEnd(7) + st.padEnd(12) + m.name.slice(0, 30) + extraNote);
         }
         process.exit(0);
     }

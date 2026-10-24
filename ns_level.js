@@ -126,6 +126,7 @@ const UJIAN = {
         if (!gradeFilter) return true;
         return getMissionGrade(mid, lv) === gradeFilter;
     }
+    c.enableGracefulStop('menu bot');
     const u = process.env.NS_USER, p = process.env.NS_PASS;
     if (!u || !p) { line('Butuh NS_USER dan NS_PASS.'); process.exit(1); }
     if (!target) { line('Pakai: node ns_level.js <targetLevel> [jedaDetik] [--easy]'); process.exit(1); }
@@ -133,10 +134,13 @@ const UJIAN = {
     let s = await c.login(u, p);
     if (!s.ok) { line('LOGIN GAGAL: ' + s.stage + ' (' + (s.message || s.body || 'status ' + s.http) + ')'); process.exit(2); }
     let rl = await c.amf('CharacterDAO.getCharactersList', [s.sessionKey]);
-    let row = rl.body.result[0], charId = row[0];
+    let chars = (rl && rl.body && Array.isArray(rl.body.result)) ? rl.body.result : [];
+    let row = c.getSelectedChar(chars, process.env.NS_CHAR_ID || process.env.NS_CHAR_SLOT);
+    if (!row) { line('ERROR: Tidak ada karakter ditemukan.'); process.exit(3); }
+    let charId = row[0];
     let h = k.mk(s.sessionKey);
     line('akun      : ' + s.username);
-    line('karakter  : ' + charId + ' "' + row[1] + '"');
+    line('karakter  : ' + charId + ' "' + row[1] + '" (Lv ' + (row[2] || '?') + ')');
     line('target    : level ' + target + ' | jeda ' + jeda + 's | ujian ' + (pakaiEasy ? 'EASY' : 'HARD'));
     if (onlyMission) line('mode      : MISI SAJA (tanpa event / hunting / training, ujian tetap otomatis) | grade ' + (gradeFilter || 'otomatis') + ' | maks ' + (maxMisi || 'tanpa batas') + ' misi');
     line('');
@@ -180,8 +184,10 @@ const UJIAN = {
                 s = sNew;
                 h = k.mk(s.sessionKey);
                 const rlNew = await c.amf('CharacterDAO.getCharactersList', [s.sessionKey]);
-                if (rlNew && rlNew.body && rlNew.body.result && rlNew.body.result[0]) {
-                    charId = rlNew.body.result[0][0];
+                const charsNew = (rlNew && rlNew.body && Array.isArray(rlNew.body.result)) ? rlNew.body.result : [];
+                const rowNew = c.getSelectedChar(charsNew, process.env.NS_CHAR_ID || charId);
+                if (rowNew) {
+                    charId = rowNew[0];
                 }
                 const stNew = await baca();
                 if (stNew) {

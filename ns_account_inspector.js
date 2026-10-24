@@ -78,63 +78,70 @@ async function inspectAccount(username, password) {
 
     const tokens = (s.accountFlag !== undefined && s.accountFlag !== null) ? Number(s.accountFlag) : 0;
     const rl = await c.amf('CharacterDAO.getCharactersList', [s.sessionKey]);
-    if (!rl.body || !rl.body.result || !rl.body.result[0]) {
-        return {
+    const rawList = (rl.body && Array.isArray(rl.body.result)) ? rl.body.result : [];
+    if (rawList.length === 0) {
+        return [{
             username,
             playerId: s.playerId,
             tokens,
             status: 'NO_CHARACTER'
-        };
+        }];
     }
 
-    const charId = rl.body.result[0][0];
-    let charObj = null;
-    for (let i = 1; i <= 6; i++) {
-        const r = await c.amf('CharacterDAO.getCharacterById', [s.sessionKey, charId]);
-        if (r.body && r.body.gk) {
-            charObj = r.body.result;
-            break;
+    const charRows = [];
+    for (const chItem of rawList) {
+        const charId = chItem[0];
+        let charObj = null;
+        for (let i = 1; i <= 6; i++) {
+            const r = await c.amf('CharacterDAO.getCharacterById', [s.sessionKey, charId]);
+            if (r.body && r.body.gk) {
+                charObj = r.body.result;
+                break;
+            }
+            await sleep(2000);
         }
-        await sleep(3000);
-    }
 
-    if (!charObj) {
-        return {
+        if (!charObj) {
+            charRows.push({
+                username,
+                playerId: s.playerId,
+                charId,
+                tokens,
+                status: 'CHAR_LOAD_FAILED'
+            });
+            continue;
+        }
+
+        // Ekstraksi currency event
+        const cur = {};
+        String(charObj.character_common_currency || '').split(',').forEach(p => {
+            const [a, b] = p.split(':');
+            if (a) cur[a] = +b;
+        });
+
+        const rankNumber = Number(charObj.character_rank) || 0;
+        const rankTitle = RANK_NAMES[rankNumber] || ('Rank ' + rankNumber);
+
+        charRows.push({
             username,
             playerId: s.playerId,
             charId,
+            charName: charObj.character_name || '-',
+            level: Number(charObj.character_level) || 1,
+            xp: Number(charObj.character_xp) || 0,
+            gold: Number(charObj.character_gold) || 0,
             tokens,
-            status: 'CHAR_LOAD_FAILED'
-        };
+            rank: rankTitle,
+            bloodline: charObj.character_bloodline || '(none)',
+            weapon: charObj.character_equipped_weapon || '(default)',
+            backItem: charObj.character_equipped_back_item || '(none)',
+            bodySet: charObj.character_body_set || '(default)',
+            halloweenHeart: cur[1027] !== undefined ? cur[1027] : 0,
+            status: 'OK'
+        });
     }
 
-    // Ekstraksi currency event
-    const cur = {};
-    String(charObj.character_common_currency || '').split(',').forEach(p => {
-        const [a, b] = p.split(':');
-        if (a) cur[a] = +b;
-    });
-
-    const rankNumber = Number(charObj.character_rank) || 0;
-    const rankTitle = RANK_NAMES[rankNumber] || ('Rank ' + rankNumber);
-
-    return {
-        username,
-        playerId: s.playerId,
-        charId,
-        charName: charObj.character_name || '-',
-        level: Number(charObj.character_level) || 1,
-        xp: Number(charObj.character_xp) || 0,
-        gold: Number(charObj.character_gold) || 0,
-        tokens,
-        rank: rankTitle,
-        bloodline: charObj.character_bloodline || '(none)',
-        weapon: charObj.character_equipped_weapon || '(default)',
-        backItem: charObj.character_equipped_back_item || '(none)',
-        bodySet: charObj.character_body_set || '(default)',
-        halloweenHeart: cur[1027] !== undefined ? cur[1027] : 0,
-        status: 'OK'
-    };
+    return charRows;
 }
 
 function printTable(rows) {
@@ -258,7 +265,11 @@ for (let i = 0; i < args.length; i++) {
         line(`[${i + 1}/${list.length}] Memindai akun: ${acc.user} ...`);
         try {
             const data = await inspectAccount(acc.user, acc.pass);
-            results.push(data);
+            if (Array.isArray(data)) {
+                results.push(...data);
+            } else {
+                results.push(data);
+            }
         } catch (e) {
             results.push({ username: acc.user, status: 'ERROR', error: e.message });
         }

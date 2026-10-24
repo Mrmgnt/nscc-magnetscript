@@ -33,16 +33,19 @@ const KAGE_ENEMY = 'enemy571';
 const JSON_EMPTY = '{"battles":[]}';
 
 async function login() {
+    c.enableGracefulStop('menu bot');
     const u = process.env.NS_USER, p = process.env.NS_PASS;
     if (!u || !p) { line('Butuh NS_USER dan NS_PASS.'); process.exit(1); }
     const s = await c.login(u, p);
     if (!s.ok) { line('LOGIN GAGAL: ' + s.stage + ' (' + (s.message || s.body || 'status ' + s.http) + ')'); process.exit(2); }
     const rl = await c.amf('CharacterDAO.getCharactersList', [s.sessionKey]);
-    if (!rl.body || !rl.body.result || !rl.body.result.length) {
+    const chars = (rl && rl.body && Array.isArray(rl.body.result)) ? rl.body.result : [];
+    const row = c.getSelectedChar(chars, process.env.NS_CHAR_ID || process.env.NS_CHAR_SLOT);
+    if (!row) {
         line('GAGAL ambil karakter: ' + JSON.stringify(rl.body || rl));
         process.exit(2);
     }
-    const row = rl.body.result[0];
+    line('Karakter aktif : ' + row[0] + ' "' + row[1] + '" (Lv ' + (row[2] || '?') + ')');
     return { s, charId: row[0], nama: row[1] };
 }
 
