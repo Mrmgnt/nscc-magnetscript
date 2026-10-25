@@ -230,6 +230,7 @@ async function login(username, password) {
         signature,
         hashTime,
         accountType: arr[1],
+        tokens: arr[2] !== undefined ? Number(arr[2]) : 0,
         accountFlag: arr[2],
         sessionKey: arr[3],           // "gs_..." — dipakai semua service
         accountSignature: b.signature,

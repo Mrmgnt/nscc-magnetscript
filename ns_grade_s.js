@@ -36,11 +36,11 @@ function kv(s) {
 }
 
 const STAGES = [
-    { num: 1, id: 'msn274', mid: '274', reqLv: 80, staminaCost: 12, xp: 82700, gold: 5000, name: 'Stage 1' },
-    { num: 2, id: 'msn275', mid: '275', reqLv: 81, staminaCost: 12, xp: 88600, gold: 5300, name: 'Stage 2 (Story Genin)' },
-    { num: 3, id: 'msn276', mid: '276', reqLv: 82, staminaCost: 12, xp: 92580, gold: 5500, name: 'Stage 3' },
-    { num: 4, id: 'msn277', mid: '277', reqLv: 83, staminaCost: 12, xp: 95430, gold: 5600, name: 'Stage 4' },
-    { num: 5, id: 'msn278', mid: '278', reqLv: 84, staminaCost: 12, xp: 100000, gold: 5900, name: 'Stage 5' }
+    { num: 1, id: 'msn274', mid: 'msn274', reqLv: 80, staminaCost: 12, xp: 82700, gold: 5000, name: 'Stage 1' },
+    { num: 2, id: 'msn275', mid: 'msn275', reqLv: 81, staminaCost: 12, xp: 88600, gold: 5300, name: 'Stage 2 (Story Genin)' },
+    { num: 3, id: 'msn276', mid: 'msn276', reqLv: 82, staminaCost: 12, xp: 92580, gold: 5500, name: 'Stage 3' },
+    { num: 4, id: 'msn277', mid: 'msn277', reqLv: 83, staminaCost: 12, xp: 95430, gold: 5600, name: 'Stage 4' },
+    { num: 5, id: 'msn278', mid: 'msn278', reqLv: 84, staminaCost: 12, xp: 100000, gold: 5900, name: 'Stage 5' }
 ];
 
 const args = process.argv.slice(2);

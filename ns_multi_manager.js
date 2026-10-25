@@ -132,9 +132,9 @@ async function runBulk(action, extraArgs = [], delaySec = 10) {
         if (action === 'daily') {
             scriptArgs = acc.targetLevel ? ['--level', String(acc.targetLevel)] : [];
         } else if (action === 'level') {
-            scriptArgs = [String(acc.targetLevel || 60), '25'];
+            scriptArgs = [String(acc.targetLevel || 60), '8'];
         } else if (action === 'grades') {
-            scriptArgs = ['all', '25'];
+            scriptArgs = ['all', '8'];
         } else if (action === 'hunt') {
             scriptArgs = ['run', '10', '20'];
         } else if (action === 'train') {

@@ -94,7 +94,7 @@ if not "%NS_CHAR_NAME%"=="" (
 echo ======================================================================
 echo.
 echo   [ 1 ] RUTINITAS HARIAN ^& EVENT
-echo         1. Jatah Harian Lengkap (Daily TP/SS + Hunt + Event)
+echo         1. Jatah Harian Lengkap (Daily TP/SS + Hunt + Event + Auto Exam)
 echo         2. Event Battle (Halloween Furious Zombie + Tengu / Kage)
 echo         3. TP Training ^& SS Training (Jalur Misi Resmi)
 echo         4. Hunting House / Eudemon Garden (Boss Hunt Auto)
@@ -105,21 +105,20 @@ echo         6. Auto Leveling + Ujian Hard (Chunin / Jounin / Sennin)
 echo         7. Murni Grinding Misi Grade Level (C / B / A / S)
 echo         8. Cek Daftar Misi ^& Status Selesai (Per Grade)
 echo.
-echo   [ 3 ] INFORMASI ^& KARAKTER
-echo         9. Cek Status Karakter (Level, XP, Gold, Token, Event Item)
-echo        10. Ganti Karakter Aktif (Pilih karakter lain di akun ini)
-echo        11. Ganti Akun / Logout
+echo   [ 3 ] TOOLS ^& PENGUJIAN
+echo         9. Dummy Farmer (Auto Register/Login Akun ^& Kirim Gift Harian)
+echo        10. Test Local Feed (Multi-Threaded Dev Test)
+echo        11. Multi-Account ^& Multi-Character Runner (accounts.txt)
 echo.
-echo   [ 4 ] TOOLS ^& PENGUJIAN
-echo        12. Memory Patch Cheat (Damage Tinggi ^& Infinite HP PvE)
-echo        13. Dummy Farmer (Auto Create Akun ^& Kirim Gift Harian)
-echo        14. Test Local Feed (Multi-Threaded Dev Test)
-echo        15. Multi-Account ^& Multi-Character Runner (accounts.txt)
+echo   [ 4 ] INFORMASI ^& KARAKTER
+echo        12. Cek Status Karakter (Level, XP, Gold, Token, Status Ujian, Item)
+echo        13. Ganti Karakter Aktif (Pilih karakter lain di akun ini)
+echo        14. Ganti Akun / Logout
 echo.
 echo         0. Keluar
 echo ======================================================================
 set "PILIH="
-set /p "PILIH=Pilih menu [0-15]: "
+set /p "PILIH=Pilih menu [0-14]: "
 
 if "%PILIH%"=="1" goto DAILY
 if "%PILIH%"=="2" goto EVENT
@@ -129,13 +128,12 @@ if "%PILIH%"=="5" goto GRADES
 if "%PILIH%"=="6" goto LEVEL
 if "%PILIH%"=="7" goto MISSIONONLY
 if "%PILIH%"=="8" goto MISSIONS
-if "%PILIH%"=="9" goto STATE
-if "%PILIH%"=="10" goto GANTICHAR
-if "%PILIH%"=="11" goto GANTI
-if "%PILIH%"=="12" goto CHEAT
-if "%PILIH%"=="13" goto DUMMYFARMER
-if "%PILIH%"=="14" goto LOCALFEED
-if "%PILIH%"=="15" goto MULTIMANAGER
+if "%PILIH%"=="9" goto DUMMYFARMER
+if "%PILIH%"=="10" goto LOCALFEED
+if "%PILIH%"=="11" goto MULTIMANAGER
+if "%PILIH%"=="12" goto STATE
+if "%PILIH%"=="13" goto GANTICHAR
+if "%PILIH%"=="14" goto GANTI
 if "%PILIH%"=="0" goto END
 goto MENU
 
@@ -351,44 +349,6 @@ set "NS_CHAR_SLOT="
 set "NS_FORCE_SELECT="
 set "NS_RELOAD="
 goto LOGIN
-
-:CHEAT
-cls
-echo ======================================================================
-echo      CHEAT: DAMAGE BESAR + HP TIDAK HABIS (PLAYER ONLY)
-echo ======================================================================
-echo.
-echo   PENTING: Patch ini HANYA mempengaruhi damage player di battle PvE.
-echo   Musuh di Arena / PvP / Clan Battle TIDAK di-patch (tidak terpengaruh).
-echo   Jalankan sebagai Administrator agar WriteProcessMemory berhasil.
-echo.
-echo   Metode: scan pattern di memori Flash Player, patch 2 byte damage saja.
-echo   Array asli  : A2 25 E8 07 A3 A2 46  (damage ~2000)
-echo   Array patch : A2 25 A9 A2 A3 A2 46  (damage ~42000)
-echo.
-echo   1. Damage besar saja
-echo   2. HP tidak habis saja  (panduan manual CE)
-echo   3. Semua (damage + HP)
-echo   4. Restore ke nilai normal
-echo   5. Cek status (proses Flash Player aktif?)
-echo.
-set "CHT="
-set /p "CHT=Pilih (1/2/3/4/5, kosong = 3) : "
-echo.
-if "%CHT%"=="1" (
-  node ns_cheat.js damage
-) else if "%CHT%"=="2" (
-  node ns_cheat.js hp
-) else if "%CHT%"=="4" (
-  node ns_cheat.js restore
-) else if "%CHT%"=="5" (
-  node ns_cheat.js status
-) else (
-  node ns_cheat.js all
-)
-echo.
-pause
-goto MENU
 
 :DUMMYFARMER
 cls

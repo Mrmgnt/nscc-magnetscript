@@ -17,27 +17,66 @@
  * yang BENAR-BENAR masuk (bukan cuma "exit 0").
  */
 'use strict';
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const line = s => console.log(s);
 const dir = __dirname;
+const c = require('./nsclient.js');
 
 const argv = process.argv.slice(2);
 const iLv = argv.indexOf('--level');
 const targetLevel = iLv >= 0 ? Number(argv[iLv + 1] || 0) : (process.env.NS_TARGET_LEVEL ? Number(process.env.NS_TARGET_LEVEL) : 0);
 
-const tahap = [
-    ['Special Event: Kage', ['node', 'ns_event.js', 'kage', '20']],
-    ['Special Event: Halloween', ['node', 'ns_event.js', 'halloween', '10']],
-    ['Daily: TP Training', ['node', 'ns_train.js', 'tp', '5', '20']],
-    ['Daily: SS Training', ['node', 'ns_train.js', 'ss', '5', '20']],
-    ['Daily: Hunting House', ['node', 'ns_hunt.js', 'run', '10', '20']]
-];
-if (targetLevel) tahap.push(['Auto level ' + targetLevel, ['node', 'ns_level.js', String(targetLevel), '25']]);
-
 if (!process.env.NS_USER || !process.env.NS_PASS) { line('Butuh NS_USER dan NS_PASS.'); process.exit(1); }
 
-const { spawn } = require('child_process');
-const c = require('./nsclient.js');
+async function bangunDaftarTahap() {
+    const list = [
+        ['Special Event: Kage', ['node', 'ns_event.js', 'kage', '20']],
+        ['Special Event: Halloween', ['node', 'ns_event.js', 'halloween', '10']],
+        ['Daily: TP Training', ['node', 'ns_train.js', 'tp', '5', '20']],
+        ['Daily: SS Training', ['node', 'ns_train.js', 'ss', '5', '20']],
+        ['Daily: Hunting House', ['node', 'ns_hunt.js', 'run', '10', '20']]
+    ];
+
+    // Cek profil karakter untuk evaluasi Ujian (Lv 20, 40, 60, 80) & Grade S
+    let charLevel = 1;
+    let charRank = 1;
+    try {
+        const u = process.env.NS_USER, p = process.env.NS_PASS;
+        const s = await c.login(u, p);
+        if (s && s.sessionKey) {
+            const charId = process.env.NS_CHAR_ID || (s.characters && s.characters[0] && (s.characters[0].id || s.characters[0].character_id));
+            if (charId) {
+                const sc = await c.selectCharacter(s.sessionKey, charId);
+                const rawChar = (sc && sc.character) || (s.characters && s.characters.find(x => String(x.id || x.character_id) === String(charId))) || {};
+                charLevel = Number(rawChar.character_level || rawChar.level || 1);
+                charRank = Number(rawChar.character_rank || 1);
+            }
+        }
+    } catch (e) {
+        // Jika gagal pre-check, fallback ke variabel env
+        charLevel = Number(process.env.NS_CHAR_LEVEL || 1);
+    }
+
+    // Jika level >= 80, sertakan jatah misi Grade S harian
+    if (charLevel >= 80) {
+        list.push(['Daily: Misi Grade S', ['node', 'ns_grade_s.js', '5']]);
+    }
+
+    // Deteksi kebutuhan Ujian di Level 20, 40, 60, 80
+    let butuhUjianNama = '';
+    if (charLevel >= 80 && charRank < 8) butuhUjianNama = 'Ujian Sennin / Tutor (Lv 80 Cap)';
+    else if (charLevel >= 60 && charRank < 6) butuhUjianNama = 'Ujian Special Jounin (Lv 60 Cap)';
+    else if (charLevel >= 40 && charRank < 4) butuhUjianNama = 'Ujian Jounin (Lv 40 Cap)';
+    else if (charLevel >= 20 && charRank < 2) butuhUjianNama = 'Ujian Chunin (Lv 20 Cap)';
+
+    if (butuhUjianNama) {
+        list.push(['Auto Exam: ' + butuhUjianNama, ['node', 'ns_level.js', String(targetLevel || charLevel), '8']]);
+    } else if (targetLevel && targetLevel > charLevel) {
+        list.push(['Auto Leveling ke ' + targetLevel, ['node', 'ns_level.js', String(targetLevel), '8']]);
+    }
+
+    return list;
+}
 
 function runTahap(cmd) {
     return new Promise(resolve => {
@@ -92,6 +131,7 @@ function sebab(out) {
 
 (async () => {
     c.enableGracefulStop('menu bot');
+    const tahap = await bangunDaftarTahap();
     const hasil = [];
     for (const [nama, cmd] of tahap) {
         line('');

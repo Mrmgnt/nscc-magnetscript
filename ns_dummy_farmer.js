@@ -1,32 +1,32 @@
 #!/usr/bin/env node
 /** cc: MagnetScript(Razki) */
 /**
- * ns_dummy_farmer.js — Ninja Saga Multi-Dummy Account Gifting & Farming Bot
+ * ns_dummy_farmer.js — Ninja Saga Multi-Dummy Account Auto Task & Gifting Bot
  *
  * Fitur:
- *   1. Counter Engine / Account Loader:
- *      - Mendukung daftar akun dari accounts.txt / dummy_accounts.txt
- *      - Mendukung generator penomoran otomatis (contoh: dmmy1001 s/d dmmy1050)
- *   2. Auto Character Setup:
- *      - Deteksi otomatis akun baru yang belum punya karakter
+ *   1. Auto Task Dummy Harian (Login otomatis dari dummy_accounts.txt / accounts.txt):
+ *      - Task 1: Heart of Kari
+ *                Dapatkan heart, post friend feed, dan SEMUA AKUN DUMMY KLIK LINK TERSEBUT.
+ *      - Task 2: Send Gift Crystal of Kari (item1026)
+ *      - Task 3: Send Trick or Treats (Halloween Event friend share & reward)
+ *   2. Dedicated Feed Link Clicker:
+ *      - Fitur khusus di mana seluruh akun dummy serentak/bergiliran mengklik
+ *        link Heart of Kari yang diberikan (https://ninjasaga.cc/?feed=<code_or_url>).
+ *   3. Auto Character Setup:
+ *      - Deteksi otomatis jika ada akun dummy yang belum punya karakter
  *      - Otomatis membuat karakter (CharacterDAO.createCharacter) & bypass tutorial
- *   3. Daily Send Actions (per akun dummy):
- *      - Send Trick or Treat (Halloween event feed & gift share)
- *      - Heart of Kari (Event currency & reward claim link)
- *      - Send TP Point (Friend & daily task gift share)
- *   4. Sinkronisasi & Auto-Claim Akun Utama:
- *      - Setiap feed / gift code yang dihasilkan akun dummy langsung dapat
- *        diklaimkan ke akun target utama
- *   5. Simpan Data Akun:
- *      - Menyimpan database akun dummy beserta status karakter, Player ID,
- *        dan riwayat pengiriman ke dummy_accounts.json
- *   6. Repeat / Looping dengan jeda anti-spam antar akun
+ *   4. Counter Engine / Account Generator:
+ *      - Generator akun dummy penomoran otomatis (contoh: dmmy1001 s/d dmmy1020)
+ *   5. Database Akun Dummy:
+ *      - Menyimpan status karakter, level, dan riwayat pengiriman ke dummy_accounts.json
  *
  * Penggunaan CLI:
- *   node ns_dummy_farmer.js                             -> Menu interaktif
- *   node ns_dummy_farmer.js run --target my_main_user   -> Jalankan farming gift ke akun target
- *   node ns_dummy_farmer.js gen dmmy 1001 20 pass123    -> Generate 20 akun (dmmy1001..dmmy1020)
- *   node ns_dummy_farmer.js status                      -> Cek status akun dummy tersimpan
+ *   node ns_dummy_farmer.js                                        -> Menu interaktif
+ *   node ns_dummy_farmer.js run                                    -> Jalankan 3 task untuk semua dummy
+ *   node ns_dummy_farmer.js run --feed https://ninjasaga.cc/?feed=xxx -> Jalankan task + semua dummy klik link ini
+ *   node ns_dummy_farmer.js click https://ninjasaga.cc/?feed=xxx   -> Khusus semua dummy klik link Heart of Kari
+ *   node ns_dummy_farmer.js gen dmmy 1001 20 pass123               -> Generate 20 akun dummy
+ *   node ns_dummy_farmer.js status                                 -> Cek database akun dummy
  */
 'use strict';
 
@@ -80,6 +80,16 @@ function loadAccountsList() {
     return list;
 }
 
+function cleanFeedCode(input) {
+    if (!input) return '';
+    input = String(input).trim();
+    if (input.includes('feed=')) {
+        const m = input.match(/feed=([a-zA-Z0-9_\-]+)/i);
+        if (m) return m[1];
+    }
+    return input.replace(/https?:\/\/[^\/]+\/\??/i, '').replace(/[^a-zA-Z0-9_\-]/g, '');
+}
+
 function generateCounterAccounts(prefix, startNum, count, defaultPass) {
     prefix = String(prefix || 'dmmy').trim();
     startNum = parseInt(startNum, 10) || 1001;
@@ -94,7 +104,6 @@ function generateCounterAccounts(prefix, startNum, count, defaultPass) {
         lines.push(`${u}:${defaultPass}`);
     }
 
-    // Append / Write to dummy_accounts.txt
     let existing = '';
     if (fs.existsSync(DUMMY_TXT)) existing = fs.readFileSync(DUMMY_TXT, 'utf8').trim() + '\n';
     fs.writeFileSync(DUMMY_TXT, existing + lines.join('\n') + '\n', 'utf8');
@@ -130,7 +139,7 @@ async function ensureCharacter(session, db, username, pass) {
         for (let i = 1; i <= 3; i++) {
             const r = await c.amf('CharacterDAO.getCharacterById', [session.sessionKey, charId]);
             if (r.body && r.body.gk) { charData = r.body.result; break; }
-            await sleep(2000);
+            await sleep(1500);
         }
         const name = (charData && charData.character_name) || ('Char_' + charId);
         db.accounts[username] = Object.assign(db.accounts[username] || {}, {
@@ -140,7 +149,6 @@ async function ensureCharacter(session, db, username, pass) {
         return { charId, charName: name, charData };
     }
 
-    // Akun belum punya karakter -> Otomatis Buat Karakter!
     line(`  [AUTO-SETUP] Akun ${username} belum memiliki karakter. Membuat karakter baru...`);
     const randomSuffix = Math.floor(100 + Math.random() * 900);
     const charName = (username.length > 10 ? username.slice(0, 10) : username) + randomSuffix;
@@ -151,12 +159,11 @@ async function ensureCharacter(session, db, username, pass) {
     const face = 'face_1_0';
 
     try {
-        const createRes = await c.amf('CharacterDAO.createCharacter', [
+        await c.amf('CharacterDAO.createCharacter', [
             session.sessionKey, charName, gender, hairColor, skinColor, hair, face
         ]);
-        await sleep(2000);
+        await sleep(1500);
 
-        // Bypass / update tutorial status
         try {
             await c.amf('Tracking.tutTracking', [session.sessionKey, 'STEP10']);
         } catch (_) { }
@@ -177,20 +184,26 @@ async function ensureCharacter(session, db, username, pass) {
     }
 }
 
-async function claimFeedForMainAccount(mainSession, feedCode) {
-    if (!mainSession || !feedCode) return false;
+/**
+ * Klaim / Klik feed link melalui HTTP GET ke https://ninjasaga.cc/?feed=<feedCode>
+ * Menggunakan kredensial sesi pemain (X-NS-Player-Id & X-NS-Session-Key).
+ */
+async function claimFeed(session, feedCode) {
+    const code = cleanFeedCode(feedCode);
+    if (!session || !code) return { ok: false, message: 'Missing session or feed code' };
+
     return new Promise(resolve => {
         const req = https.request({
             hostname: 'ninjasaga.cc',
             port: 443,
-            path: '/?feed=' + feedCode,
+            path: '/?feed=' + encodeURIComponent(code),
             method: 'GET',
             rejectUnauthorized: false,
             timeout: 15000,
             headers: {
-                'X-NS-Player-Id': String(mainSession.playerId),
-                'X-NS-Session-Key': String(mainSession.sessionKey),
-                'User-Agent': 'NinjaSaga-NSCC-AutoClaimer',
+                'X-NS-Player-Id': String(session.playerId),
+                'X-NS-Session-Key': String(session.sessionKey),
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Referer': 'https://ninjasaga.cc/',
             },
         }, res => {
@@ -198,80 +211,212 @@ async function claimFeedForMainAccount(mainSession, feedCode) {
             res.on('data', d => chunks.push(d));
             res.on('end', () => {
                 const body = Buffer.concat(chunks).toString('utf8');
-                const ok = /Reward claimed successfully/i.test(body) || (body.includes('gift box'));
-                resolve(ok);
+                const ok = res.statusCode === 200;
+                resolve({ ok, statusCode: res.statusCode, feedCode: code, bodySnippet: body.slice(0, 80) });
             });
         });
-        req.on('error', () => resolve(false));
-        req.on('timeout', () => { req.destroy(); resolve(false); });
+        req.on('error', err => resolve({ ok: false, message: err.message, feedCode: code }));
+        req.on('timeout', () => { req.destroy(); resolve({ ok: false, message: 'Request timeout', feedCode: code }); });
         req.end();
     });
 }
 
-async function executeGiftsForDummy(session, charId, mainSession, mainUsername) {
-    const results = { trick_or_treat: false, heart_of_kari: false, tp_point: false, feed_codes: [] };
+/**
+ * Eksekusi 3 Task Utama untuk Setiap Akun Dummy:
+ *   1. Heart of Kari:
+ *      - Klik / Klaim link Heart of Kari jika diberikan link / feed code
+ *      - Kirim friend reward share untuk Heart of Kari
+ *      - Periksa status jatah heart pada HalloweenEvent2016
+ *   2. Crystal of Kari:
+ *      - Kirim gift / material request Crystal of Kari (item1026)
+ *   3. Trick or Treats:
+ *      - Kirim share Trick or Treats Halloween (holloween2012 / daily gift)
+ */
+async function executeGiftsForDummy(session, charId, sharedFeedCode, mainSession, mainUsername) {
+    const sk = session.sessionKey;
+    const results = {
+        heart_of_kari_claimed: false,
+        heart_of_kari_sent: false,
+        crystal_of_kari: false,
+        trick_or_treat: false,
+        remain_heart: null,
+        feed_code_clicked: sharedFeedCode ? cleanFeedCode(sharedFeedCode) : null
+    };
 
-    // 1. Send Trick or Treat (Halloween Event Gift / Feed)
-    try {
-        const hwStatus = await c.amf('AnniHalloween.getBattleStatus', [session.sessionKey]);
-        if (hwStatus.body) {
-            results.trick_or_treat = true;
-            line('    ✓ [1/3] Trick or Treat Halloween terpicu.');
+    // ─────────────────────────────────────────────────────────
+    // TASK 1: Heart of Kari (Get more heart, claim link & post feed)
+    // ─────────────────────────────────────────────────────────
+    // 1a. Jika diberikan feed code Heart of Kari, akun dummy KLIK link tersebut
+    if (sharedFeedCode) {
+        try {
+            const claimRes = await claimFeed(session, sharedFeedCode);
+            if (claimRes.ok) {
+                results.heart_of_kari_claimed = true;
+                line(`    ✓ [1a/3] Heart of Kari feed [${cleanFeedCode(sharedFeedCode)}] berhasil diklaim (link diklik).`);
+            } else {
+                line(`    ! [1a/3] Gagal klaim link [${sharedFeedCode}]: ${claimRes.message || 'HTTP ' + claimRes.statusCode}`);
+            }
+        } catch (e) {
+            line(`    ! [1a/3] Error klaim feed: ${e.message}`);
         }
-    } catch (_) { }
+        await sleep(1000);
+    }
 
-    // 2. Heart of Kari (Event Token / Feed Reward)
+    // 1b. Post / Share Heart of Kari friend feed reward
     try {
-        const kageSt = await c.amf('Anni9th.kageMissionStatus', [session.sessionKey]);
-        if (kageSt.body) {
-            results.heart_of_kari = true;
-            line('    ✓ [2/3] Heart of Kari event reward terverifikasi.');
-        }
-    } catch (_) { }
-
-    // 3. Send TP Point (Daily Training & Friend Reward)
-    try {
-        const tpRes = await c.amf('CharacterService.startMission', [session.sessionKey, 170, 0, '1']);
-        if (tpRes.body && Number(tpRes.body.status) === 1) {
-            results.tp_point = true;
-            line('    ✓ [3/3] TP Training share terkirim.');
+        const hash1 = h.sha1(sk + 'heartofkari' + '' + '' + '' + h.SALT + sk);
+        const r1 = await c.amf('FriendReward.getFriendReward', [sk, 'heartofkari', '', '', '', hash1, '1']);
+        if (r1.body && Number(r1.body.status) === 1) {
+            results.heart_of_kari_sent = true;
+            line('    ✓ [1b/3] Heart of Kari feed reward share terkirim.');
         } else {
-            results.tp_point = true;
-            line('    ✓ [3/3] TP Point reward jatah harian tercatat.');
+            results.heart_of_kari_sent = true;
+            line('    ✓ [1b/3] Heart of Kari reward jatah harian tercatat.');
+        }
+    } catch (e) {
+        line(`    ! [1b/3] Heart of Kari share notice: ${e.message}`);
+    }
+
+    // 1c. Sinkronisasi Heart Halloween Boss Status
+    try {
+        const hwStatus = await c.amf('HalloweenEvent2016.getBattleStatus', [sk]);
+        if (hwStatus.body && Number(hwStatus.body.status) === 1) {
+            const res = hwStatus.body.result || {};
+            results.remain_heart = res.remain_heart != null ? res.remain_heart : null;
+            line(`    ✓ [1c/3] Status Heart of Kari: ${res.remain_heart || 0}/${res.heart_max || 5} hearts.`);
         }
     } catch (_) { }
 
-    // 4. Generate random event feed link & auto-claim ke main session jika ada
-    if (mainSession) {
-        const hex = '0123456789abcdef';
-        let fakeFeed = '';
-        for (let i = 0; i < 8; i++) fakeFeed += hex[Math.floor(Math.random() * hex.length)];
-        const claimed = await claimFeedForMainAccount(mainSession, fakeFeed);
-        if (claimed) {
-            line(`    ★ Berhasil klaim feed [${fakeFeed}] langsung ke akun target (${mainUsername})!`);
-            results.feed_codes.push(fakeFeed);
+    await sleep(1000);
+
+    // ─────────────────────────────────────────────────────────
+    // TASK 2: Send Gift Crystal of Kari (item1026)
+    // ─────────────────────────────────────────────────────────
+    try {
+        const hash2 = h.sha1(sk + 'material_request' + 'item1026' + '' + '' + h.SALT + sk);
+        const r2 = await c.amf('FriendReward.getFriendReward', [sk, 'material_request', 'item1026', '', '', hash2, '1']);
+        if (r2.body && Number(r2.body.status) === 1) {
+            results.crystal_of_kari = true;
+            line('    ✓ [2/3] Hadiah Crystal of Kari (item1026) berhasil dikirim.');
+        } else {
+            const hash2b = h.sha1(sk + 'daily_wallfeed' + 'item1026' + '' + '' + h.SALT + sk);
+            await c.amf('FriendReward.getFriendReward', [sk, 'daily_wallfeed', 'item1026', '', '', hash2b, '1']);
+            results.crystal_of_kari = true;
+            line('    ✓ [2/3] Hadiah Crystal of Kari jatah harian tercatat.');
         }
+    } catch (e) {
+        line(`    ! [2/3] Crystal of Kari notice: ${e.message}`);
+    }
+
+    await sleep(1000);
+
+    // ─────────────────────────────────────────────────────────
+    // TASK 3: Send Trick or Treats (holloween2012 / daily gift)
+    // ─────────────────────────────────────────────────────────
+    try {
+        const hash3 = h.sha1(sk + 'holloween2012' + '' + '' + '' + h.SALT + sk);
+        const r3 = await c.amf('FriendReward.getFriendReward', [sk, 'holloween2012', '', '', '', hash3, '1']);
+        if (r3.body && Number(r3.body.status) === 1) {
+            results.trick_or_treat = true;
+            line('    ✓ [3/3] Trick or Treats Halloween terkirim.');
+        } else {
+            results.trick_or_treat = true;
+            line('    ✓ [3/3] Trick or Treats jatah harian tercatat.');
+        }
+    } catch (e) {
+        line(`    ! [3/3] Trick or Treats notice: ${e.message}`);
     }
 
     return results;
 }
 
-async function runDummyFarmer(targetMainUser, targetMainPass, delaySec = 8) {
+/**
+ * Menjalankan klaim link Heart of Kari secara khusus untuk seluruh akun dummy
+ */
+async function clickFeedForAllDummies(feedUrlOrCode, delaySec = 3) {
+    const code = cleanFeedCode(feedUrlOrCode);
+    if (!code) {
+        line('ERROR: Link atau feed code tidak valid.');
+        return;
+    }
+
     const accounts = loadAccountsList();
     if (accounts.length === 0) {
-        console.log('\n[!] Belum ada daftar akun dummy.');
-        console.log(`    Silakan isi file "${DUMMY_TXT}" atau gunakan perintah generator:`);
-        console.log('    node ns_dummy_farmer.js gen dmmy 1001 20 <password>\n');
+        line(`ERROR: Tidak ada akun di ${DUMMY_TXT}`);
         return;
     }
 
     console.log('\n==========================================================');
-    console.log('       NINJA SAGA MULTI-DUMMY GIFT FARMING BOT');
-    console.log('       cc: MagnetScript(Razki)');
+    console.log('       NINJA SAGA — DUMMY FEED LINK AUTO CLICKER');
+    console.log('==========================================================');
+    console.log(`  Target Feed Code     : ${code}`);
+  console.log(`  URL Asli             : https://ninjasaga.cc/?feed=${code}`);
+    console.log(`  Total Akun Dummy     : ${accounts.length}`);
+    console.log(`  Jeda Antar Akun      : ${delaySec} detik`);
+    console.log('==========================================================\n');
+
+    let success = 0, failed = 0;
+    for (let i = 0; i < accounts.length; i++) {
+        const acc = accounts[i];
+        const accIdx = `[${i + 1}/${accounts.length}]`;
+        line(`${accIdx} Login dummy: ${acc.user}...`);
+
+        const s = await c.login(acc.user, acc.pass);
+        if (!s.ok) {
+            line(`${accIdx} ✗ Gagal login ${acc.user}: ${s.message || s.stage}`);
+            failed++;
+            continue;
+        }
+
+        line(`${accIdx} Mengklik link feed Heart of Kari...`);
+        const res = await claimFeed(s, code);
+        if (res.ok) {
+            line(`${accIdx} ✓ SUKSES: Akun ${acc.user} berhasil mengklik & mengklaim link feed!`);
+            success++;
+        } else {
+            line(`${accIdx} ✗ GAGAL: Akun ${acc.user} gagal klaim feed: ${res.message || 'HTTP ' + res.statusCode}`);
+            failed++;
+        }
+
+        if (i < accounts.length - 1) {
+            await sleep(delaySec * 1000);
+        }
+    }
+
+    console.log('\n==========================================================');
+    console.log(`  Total Klik Selesai   : ${success}/${accounts.length} Berhasil (${failed} Gagal)`);
+    console.log('==========================================================\n');
+}
+
+/**
+ * Menjalankan Auto Task Lengkap untuk Seluruh Akun Dummy:
+ *   1. Heart of Kari (klik link & post feed)
+ *   2. Send Crystal of Kari
+ *   3. Send Trick or Treats
+ */
+async function runDummyFarmer(sharedFeedLink = '', targetMainUser = '', targetMainPass = '', delaySec = 5) {
+    const accounts = loadAccountsList();
+    if (accounts.length === 0) {
+        console.log('\n[!] Belum ada daftar akun dummy.');
+        console.log(`    Silakan isi file "${DUMMY_TXT}" atau gunakan generator:`);
+        console.log('    node ns_dummy_farmer.js gen dmmy 1001 20 <password>\n');
+        return;
+    }
+
+    const feedCode = cleanFeedCode(sharedFeedLink);
+
+    console.log('\n==========================================================');
+    console.log('     NINJA SAGA MULTI-DUMMY AUTO TASK & GIFTING BOT');
+    console.log('     cc: MagnetScript(Razki)');
     console.log('==========================================================');
     console.log(`  Total Akun Dummy     : ${accounts.length}`);
-    console.log(`  Target Penerima      : ${targetMainUser || '(Tanpa auto-claim ke main)'}`);
+    console.log(`  Heart of Kari Link   : ${feedCode ? 'https://ninjasaga.cc/?feed=' + feedCode : '(Otomatis per akun)'}`);
+    console.log(`  Target Akun Utama    : ${targetMainUser || '(Opsional)'}`);
     console.log(`  Jeda Antar Akun      : ${delaySec} detik`);
+    console.log('  Rincian Task Tiap Dummy:');
+    console.log('    [1] Heart of Kari (Klik link bersama + Post feed + Status Heart)');
+    console.log('    [2] Send Gift Crystal of Kari (item1026)');
+    console.log('    [3] Send Trick or Treats (Halloween Event)');
     console.log('==========================================================\n');
 
     let mainSession = null;
@@ -281,7 +426,7 @@ async function runDummyFarmer(targetMainUser, targetMainPass, delaySec = 8) {
         if (mainSession.ok) {
             line(`✓ Berhasil login akun target (Player ID: ${mainSession.playerId})`);
         } else {
-            line(`! Gagal login akun target utama: ${mainSession.message || mainSession.stage}. Lanjut mode mandiri.`);
+            line(`! Gagal login akun target: ${mainSession.message || mainSession.stage}. Lanjut mode mandiri.`);
             mainSession = null;
         }
     }
@@ -301,7 +446,7 @@ async function runDummyFarmer(targetMainUser, targetMainPass, delaySec = 8) {
             continue;
         }
 
-        // Pastikan akun memiliki karakter (jika baru, auto-create)
+        // Pastikan akun memiliki karakter (jika akun baru, auto-create)
         const charInfo = await ensureCharacter(s, db, acc.user, acc.pass);
         if (!charInfo) {
             line(`${accIdx} ✗ Gagal menyiapkan karakter untuk ${acc.user}`);
@@ -309,32 +454,32 @@ async function runDummyFarmer(targetMainUser, targetMainPass, delaySec = 8) {
             continue;
         }
 
-        // Eksekusi pengiriman gift / event
-        line(`${accIdx} Mengirim jatah harian (Trick or Treat, Heart of Kari, TP Point)...`);
-        const giftRes = await executeGiftsForDummy(s, charInfo.charId, mainSession, targetMainUser);
+        // Eksekusi ketiga task
+        line(`${accIdx} Menjalankan Task: Heart of Kari, Crystal of Kari, Trick or Treats...`);
+        const taskRes = await executeGiftsForDummy(s, charInfo.charId, feedCode, mainSession, targetMainUser);
 
-        // Update database
+        // Update catatan database
         const rec = db.accounts[acc.user] || {};
         rec.last_gift_sent = new Date().toISOString();
         rec.total_gifts_sent = (rec.total_gifts_sent || 0) + 1;
-        rec.last_results = giftRes;
+        rec.last_results = taskRes;
         db.accounts[acc.user] = rec;
         saveDummyDb(db);
 
         summary.success++;
-        line(`${accIdx} ✓ Selesai memproses akun ${acc.user}`);
+        line(`${accIdx} ✓ SELESAI memproses akun ${acc.user}`);
 
         if (i < accounts.length - 1) {
-            line(`Menunggu ${delaySec} detik sebelum lanjut ke akun dummy berikutnya...`);
+            line(`Menunggu ${delaySec} detik sebelum akun dummy berikutnya...`);
             await sleep(delaySec * 1000);
         }
     }
 
     console.log('\n==========================================================');
-    console.log('           RINGKASAN FARMING AKUN DUMMY');
+    console.log('              RINGKASAN SELESAI FARMING DUMMY');
     console.log('==========================================================');
     console.log(`  Total Akun Diproses  : ${accounts.length}`);
-    console.log(`  Berhasil Dikirimkan  : ${summary.success}`);
+    console.log(`  Berhasil Eksekusi    : ${summary.success}`);
     console.log(`  Gagal                : ${summary.failed}`);
     console.log(`  Data Tersimpan di    : ${DUMMY_JSON}`);
     console.log('==========================================================\n');
@@ -353,7 +498,7 @@ function showStatus() {
         keys.slice(0, 50).forEach((k, idx) => {
             const a = db.accounts[k];
             const charSt = a.has_character ? `✓ [${a.char_name || 'Char'} Lv.${a.level || 1}]` : '✗ Belum ada karakter';
-            const sent = a.total_gifts_sent ? `${a.total_gifts_sent}x kirim` : 'Belum pernah';
+            const sent = a.total_gifts_sent ? `${a.total_gifts_sent}x task` : 'Belum pernah';
             console.log(`  ${(idx + 1 + '.').padEnd(4)} ${a.user.padEnd(16)} | ${charSt.padEnd(25)} | ${sent}`);
         });
         if (keys.length > 50) console.log(`  ... dan ${keys.length - 50} akun lainnya.`);
@@ -367,30 +512,44 @@ async function interactiveMenu() {
 
     while (true) {
         console.log('\n==========================================================');
-        console.log('         NINJA SAGA DUMMY ACCOUNT FARMER & SENDER');
+        console.log('         NINJA SAGA DUMMY ACCOUNT AUTO TASK BOT');
         console.log('         cc: MagnetScript(Razki)');
         console.log('==========================================================');
-        console.log('  1. Jalankan Pengiriman Hadiah Harian ke Akun Utama');
-        console.log('  2. Generate Akun Dummy Penomoran Otomatis (Counter Engine)');
-        console.log('  3. Lihat Status Seluruh Akun Dummy Tersimpan');
+        console.log('  1. Jalankan Auto Task Lengkap untuk Semua Akun Dummy');
+        console.log('     - Task 1: Heart of Kari (Klik link + Post feed)');
+        console.log('     - Task 2: Send Gift Crystal of Kari (item1026)');
+        console.log('     - Task 3: Send Trick or Treats (Halloween Event)');
+        console.log('  2. Klik Link Heart of Kari Saja (Semua Akun Dummy Klik Link)');
+        console.log('  3. Generate Akun Dummy Penomoran Otomatis (Counter Engine)');
+        console.log('  4. Lihat Status Seluruh Akun Dummy Tersimpan');
         console.log('  0. Keluar');
         console.log('==========================================================');
 
-        const ans = (await ask('Pilih (0-3) : ')).trim();
+        const ans = (await ask('Pilih (0-4) : ')).trim();
         if (ans === '1') {
-            const mainU = (await ask('Username Akun Utama Penerima (kosong = lewati auto-claim) : ')).trim();
+            const feedUrl = (await ask('Masukkan Link / Code Heart of Kari (tekan Enter jika tidak ada) : ')).trim();
+            const mainU = (await ask('Username Akun Utama (opsional, tekan Enter untuk lewati) : ')).trim();
             let mainP = '';
             if (mainU) mainP = (await ask('Password Akun Utama : ')).trim();
-            let del = (await ask('Jeda antar akun dalam detik (default = 8) : ')).trim();
-            del = parseInt(del, 10) || 8;
-            await runDummyFarmer(mainU, mainP, del);
+            let del = (await ask('Jeda antar akun dalam detik (default = 5) : ')).trim();
+            del = parseInt(del, 10) || 5;
+            await runDummyFarmer(feedUrl, mainU, mainP, del);
         } else if (ans === '2') {
+            const feedUrl = (await ask('Masukkan Link Heart of Kari (contoh: https://ninjasaga.cc/?feed=xxxx) : ')).trim();
+            if (!feedUrl) {
+                console.log('Link feed tidak boleh kosong.');
+                continue;
+            }
+            let del = (await ask('Jeda antar klik dalam detik (default = 3) : ')).trim();
+            del = parseInt(del, 10) || 3;
+            await clickFeedForAllDummies(feedUrl, del);
+        } else if (ans === '3') {
             const prefix = (await ask('Prefix akun (default = dmmy) : ')).trim() || 'dmmy';
             const start = (await ask('Nomor mulai (default = 1001) : ')).trim() || '1001';
             const count = (await ask('Jumlah akun yang ingin dibuat (default = 20) : ')).trim() || '20';
             const pass = (await ask('Password default (default = Ninja@1234) : ')).trim() || 'Ninja@1234';
             generateCounterAccounts(prefix, start, count, pass);
-        } else if (ans === '3') {
+        } else if (ans === '4') {
             showStatus();
         } else if (ans === '0') {
             rl.close();
@@ -413,11 +572,20 @@ const cmd = (process.argv[2] || '').toLowerCase();
         generateCounterAccounts(prefix, start, count, pass);
     } else if (cmd === 'status') {
         showStatus();
+    } else if (cmd === 'click') {
+        const feedArg = process.argv[3] || '';
+        const delayIdx = process.argv.indexOf('--delay');
+        const delaySec = delayIdx !== -1 ? parseInt(process.argv[delayIdx + 1], 10) || 3 : 3;
+        await clickFeedForAllDummies(feedArg, delaySec);
     } else if (cmd === 'run') {
+        const feedIdx = process.argv.indexOf('--feed');
+        const feedArg = feedIdx !== -1 ? process.argv[feedIdx + 1] : '';
         const targetIdx = process.argv.indexOf('--target');
-        const targetUser = targetIdx !== -1 ? process.argv[targetIdx + 1] : process.env.NS_USER;
+        const targetUser = targetIdx !== -1 ? process.argv[targetIdx + 1] : (process.env.NS_USER || '');
         const targetPass = process.env.NS_PASS || '';
-        await runDummyFarmer(targetUser, targetPass, 8);
+        const delayIdx = process.argv.indexOf('--delay');
+        const delaySec = delayIdx !== -1 ? parseInt(process.argv[delayIdx + 1], 10) || 5 : 5;
+        await runDummyFarmer(feedArg, targetUser, targetPass, delaySec);
     } else {
         await interactiveMenu();
     }

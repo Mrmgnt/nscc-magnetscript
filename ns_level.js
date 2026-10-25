@@ -78,12 +78,12 @@ try {
     }
 } catch (e) { /* kalau file tidak ada, anggap tidak ada misi berulang */ }
 const ULANG = new Set([...DAILY]);
-// peta grade misi (E/D/C/S). Misi bergrade dikasih jeda lebih longgar (15s).
+// peta grade misi (E/D/C/S).
 let GRADE = new Map();
 try {
     for (const m of require('./ns_mission_data.json')) if (m.grade) GRADE.set(m.id, String(m.grade).toUpperCase());
 } catch (e) { /* abaikan */ }
-const JEDA_GRADE = 15; // detik untuk misi yang punya grade
+const JEDA_ANTAR_MISI = 2; // detik jeda aman antar misi (seperti pada ns_grade_s.js)
 
 const UJIAN = {
     20: { hard: ['msn55', 'msn56', 'msn57', 'msn58', 'msn59'], easy: null, nama: 'Chunin' },
@@ -92,9 +92,37 @@ const UJIAN = {
     80: { hard: ['msn266', 'msn259', 'msn267', 'msn260', 'msn268', 'msn261', 'msn270', 'msn262', 'msn269', 'msn263', 'msn264', 'msn265'], easy: ['msn250', 'msn252', 'msn249', 'msn253', 'msn248', 'msn254', 'msn247', 'msn255', 'msn251', 'msn256', 'msn257', 'msn258'], nama: 'Sennin LV80' }
 };
 
+const RANK_NAMES = {
+    0: 'Academy Student',
+    1: 'Genin',
+    2: 'Chunin',
+    3: 'Tensai Chunin',
+    4: 'Jounin',
+    5: 'Tensai Jounin',
+    6: 'Special Jounin',
+    7: 'Tensai Special Jounin',
+    8: 'Tutor / Sennin',
+    9: 'Senior Tutor'
+};
+
+function butuhUjian(st) {
+    if (!st) return null;
+    const lv = Number(st.level || 1);
+    const rk = Number(st.rank !== undefined ? st.rank : 1);
+    // Level 80 Cap: butuh Ujian Sennin / Tutor
+    if (lv >= 80 && rk < 8) return { t: 80, nama: 'Sennin / Ninja Tutor (Lv 80)', targetRank: 8 };
+    // Level 60 Cap: butuh Ujian Special Jounin
+    if (lv >= 60 && rk < 6) return { t: 60, nama: 'Special Jounin (Lv 60)', targetRank: 6 };
+    // Level 40 Cap: butuh Ujian Jounin
+    if (lv >= 40 && rk < 4) return { t: 40, nama: 'Jounin (Lv 40)', targetRank: 4 };
+    // Level 20 Cap: butuh Ujian Chunin
+    if (lv >= 20 && rk < 2) return { t: 20, nama: 'Chunin (Lv 20)', targetRank: 2 };
+    return null;
+}
+
 (async () => {
     const target = Number(process.argv[2] || 0);
-    const jeda = Number(process.argv[3] || 25);
+    const jeda = Number(process.env.NS_JEDA || process.argv[3] || 8);
     // Ujian SELALU hard mode — --easy diabaikan kecuali --force-easy juga disertakan
     const pakaiEasy = process.argv.includes('--force-easy') && process.argv.includes('--easy');
     const onlyMission = process.argv.includes('--only-mission');
@@ -209,7 +237,14 @@ const UJIAN = {
             const b = (r && r.body) || {};
             if (b.gk) {
                 const x = b.result || {};
-                return { gk: String(b.gk), level: Number(x.character_level), xp: Number(x.character_xp), gold: Number(x.character_gold), mission: String(x.character_mission || '') };
+                return {
+                    gk: String(b.gk),
+                    level: Number(x.character_level),
+                    xp: Number(x.character_xp),
+                    gold: Number(x.character_gold),
+                    rank: Number(x.character_rank || 1),
+                    mission: String(x.character_mission || '')
+                };
             }
             if (b.cooldown || /wait a moment/i.test(String(b.error || ''))) {
                 const waitSec = Math.max(3, Number(b.cooldown || 6) + 1);
@@ -339,31 +374,61 @@ const UJIAN = {
         process.exit(r.ok ? 0 : 1);
     }
     while (st.level < target && n < MAKS && (!maxMisi || n < maxMisi)) {
-        // 1) ujian kalau menyentuh ambang (20 Chunin, 40 Jounin, 60 Special Jounin, 80 Sennin) — SELALU HARD
-        const ambang = Object.keys(UJIAN).map(Number).filter(t => st.level >= t && !ujianSkip.has(t)).sort((a, b) => a - b);
-        let kerjakanUjian = null;
-        for (const t of ambang) {
-            const cfg = UJIAN[t];
-            const rantaiPenuh = (pakaiEasy && cfg.easy) ? cfg.easy : cfg.hard;
-            const sisa = rantaiPenuh.filter(mid => !selesaiSet.has(mid));
-            if (sisa.length) { kerjakanUjian = { t, cfg, rantai: sisa }; break; }
-        }
-        if (kerjakanUjian) {
-            line('== UJIAN ' + kerjakanUjian.cfg.nama + ' (' + kerjakanUjian.rantai.length + ' misi, HARD) ==');
-            let okU = 0;
-            for (const mid of kerjakanUjian.rantai) {
-                const r = await jalankanMisi(mid);
-                if (!r.ok) { line('  ' + mid + ' GAGAL  ' + (r.fatal || r.err)); if (r.fatal) { line('STOP: ' + r.fatal); process.exit(4); } break; }
-                okU++;
-                line('  ' + mid + ' OK  (' + okU + '/' + kerjakanUjian.rantai.length + ')');
-                st = await baca() || st;
-            }
-            line('  hasil ujian: ' + okU + '/' + kerjakanUjian.rantai.length + ' diterima server');
-            if (okU === 0) {
-                ujianSkip.add(kerjakanUjian.t);
-                line('  ujian ini tidak diterima server — dilewati supaya tidak mengulang terus.');
-            }
+        // 1) Ujian wajib jika karakter menyentuh batas level cap rank (20 Chunin, 40 Jounin, 60 Sp Jounin, 80 Sennin)
+        const pendingExam = butuhUjian(st);
+        if (pendingExam) {
             line('');
+            line('======================================================================');
+            line('  [!] UJIAN OTOMATIS: Level ' + st.level + ' - ' + pendingExam.nama);
+            line('  Rank saat ini : ' + (RANK_NAMES[st.rank] || ('Rank ' + st.rank)) + ' -> Target: ' + (RANK_NAMES[pendingExam.targetRank] || ('Rank ' + pendingExam.targetRank)));
+            line('  Ujian ini WAJIB diselesaikan agar batas level terbuka dan XP bisa bertambah.');
+            line('======================================================================');
+
+            const cfg = UJIAN[pendingExam.t];
+            const rantaiPenuh = (pakaiEasy && cfg.easy) ? cfg.easy : cfg.hard;
+            // Jalankan misi yang belum tercatat, atau seluruh rantai jika status rank belum tereksekusi
+            let rantaiUjian = rantaiPenuh.filter(mid => !selesaiSet.has(mid));
+            if (!rantaiUjian.length) {
+                // Semua tercatat di selesaiSet tapi rank belum naik -> jalankan ulang rantai ujian penuh
+                rantaiUjian = rantaiPenuh;
+            }
+
+            line('  Memulai rangkaian ujian ' + pendingExam.nama + ' (' + rantaiUjian.length + ' misi, ' + (pakaiEasy && cfg.easy ? 'EASY' : 'HARD') + ')...');
+            let okU = 0;
+            for (const mid of rantaiUjian) {
+                line('  -> Menjalankan ujian stage: ' + mid + '...');
+                const r = await jalankanMisi(mid);
+                if (!r.ok) {
+                    line('  [X] Ujian stage ' + mid + ' GAGAL: ' + (r.fatal || r.err));
+                    if (r.fatal) { line('STOP: ' + r.fatal); process.exit(4); }
+                    break;
+                }
+                okU++;
+                line('  [✓] Ujian stage ' + mid + ' SELESAI (' + okU + '/' + rantaiUjian.length + ')');
+                selesaiSet.add(mid);
+                await sleep(JEDA_ANTAR_MISI * 1000);
+            }
+
+            line('  Hasil rangkaian ujian: ' + okU + '/' + rantaiUjian.length + ' tahap sukses diproses.');
+            line('  Memperbarui data rank karakter dari server...');
+            await relogin();
+            st = await baca() || st;
+
+            if (st.rank >= pendingExam.targetRank) {
+                line('  🎉 SELAMAT! Karakter berhasil LULUS ujian ' + pendingExam.nama + '!');
+                line('  Rank Baru: ' + (RANK_NAMES[st.rank] || ('Rank ' + st.rank)) + ' | Level Cap terbuka!');
+                tanpaXp = 0; gagalBeruntun = 0; gagalHariIni.clear(); cooldown.clear();
+            } else {
+                line('  [!] Catatan: Rank masih ' + (RANK_NAMES[st.rank] || ('Rank ' + st.rank)) + '. Server mungkin butuh sinkronisasi.');
+                await sleep(5000);
+                await relogin();
+                st = await baca() || st;
+                if (st.rank >= pendingExam.targetRank) {
+                    line('  🎉 SINKRONISASI SUKSES: Rank baru ' + (RANK_NAMES[st.rank] || ('Rank ' + st.rank)) + '!');
+                    tanpaXp = 0; gagalBeruntun = 0; gagalHariIni.clear(); cooldown.clear();
+                }
+            }
+            line('======================================================================\n');
             n++;
             continue;
         }
@@ -407,7 +472,7 @@ const UJIAN = {
             const r = await jalankanMisi(mid);
             if (!r.ok) { line('  ' + mid + ' ditolak (' + (r.fatal || r.err) + ')'); if (r.fatal) { line('STOP: ' + r.fatal); process.exit(4); } continue; }
             if (r.skip) { line('  ' + mid + ' dilewati (sudah selesai / jatah habis / diistirahatkan)'); await sleep(1000); continue; }
-            { const jd = GRADE.has(mid) ? JEDA_GRADE : Math.max(5, jeda); await sleep(jd * 1000); }
+            await sleep(JEDA_ANTAR_MISI * 1000);
             const st2 = await baca();
             if (!st2) break;
             n++; sukses = true; gagalBeruntun = 0; selesai++;
@@ -423,6 +488,16 @@ const UJIAN = {
             line('  +-------------------------------------------------------------');
             st = st2;
             if (dXp <= 0) {
+                // Deteksi apakah XP 0 karena tertahan Level Cap & wajib Ujian
+                const cekUjianLagi = butuhUjian(st);
+                if (cekUjianLagi) {
+                    line('');
+                    line('  [!] DETEKSI LEVEL CAP: Karakter mencapai Lv ' + st.level + ' dan belum lulus Ujian!');
+                    line('  [!] XP tertahan pada batas level. Mengalihkan langsung ke UJIAN ' + cekUjianLagi.nama + '...');
+                    tanpaXp = 0;
+                    break;
+                }
+
                 // reward bisa telat masuk — cek 1x setelah 15s
                 await sleep(15000);
                 const st3 = await baca();
