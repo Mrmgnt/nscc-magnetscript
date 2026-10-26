@@ -55,9 +55,28 @@ async function baca(ctx) {
         const b = r.body || {};
         if (b.gk) {
             const x = b.result || {};
-            return { gk: String(b.gk), level: Number(x.character_level), xp: Number(x.character_xp), gold: Number(x.character_gold), currency: String(x.character_common_currency || '') };
+            const mat = {};
+            String(x.character_material || '').split(',').forEach(p => {
+                const [kId, v] = p.split(':');
+                if (kId) mat[kId] = Number(v) || 0;
+            });
+            const cur = {};
+            String(x.character_common_currency || '').split(',').forEach(p => {
+                const [kId, v] = p.split(':');
+                if (kId) cur[kId] = Number(v) || 0;
+            });
+            return {
+                gk: String(b.gk),
+                level: Number(x.character_level),
+                xp: Number(x.character_xp),
+                gold: Number(x.character_gold),
+                currency: cur,
+                material: mat,
+                currencyRaw: String(x.character_common_currency || ''),
+                materialRaw: String(x.character_material || '')
+            };
         }
-        await sleep(6000);
+        await sleep(2000);
     }
     return null;
 }
@@ -67,6 +86,7 @@ async function satuBattle(ctx, svc, enemy, index) {
     const sk = ctx.s.sessionKey;
     const st = await c.amf(svc + '.getBattleStatus', [sk]);
     const res = (st.body && st.body.result) || {};
+    if (st.body && st.body.z9f != null) ctx.ivn = String(st.body.z9f);
     if (st.body && Array.isArray(st.body.reward_list)) ctx.rewardList = st.body.reward_list;
     const sisa = res.remain_heart != null ? res.remain_heart : res.energy;
     const biaya = res.battle_cost != null ? res.battle_cost : 1;
@@ -78,6 +98,7 @@ async function satuBattle(ctx, svc, enemy, index) {
         mulai = await c.amf(svc + '.startBattle', [sk, enemy, k.sha1(enemy + k.SALT + sk)]);
         const mb = mulai.body || {};
         const err = String(mb.error || '');
+        if (mb.z9f != null) ctx.ivn = String(mb.z9f);
         if (Number(mb.status) === 1) break;
         if ((!mulai.body || !mb.status) && coba < 5) { line('  (respons kosong, tunggu 20s lalu ulang)'); await sleep(20000); continue; }
         if (/please wait/i.test(err) && coba < 5) { line('  (cooldown, tunggu 25s lalu ulang)'); await sleep(25000); continue; }
@@ -111,7 +132,15 @@ async function satuBattle(ctx, svc, enemy, index) {
     const b = rw.body || {};
     if (b.z9f != null) ctx.ivn = String(b.z9f);
     if (Number(b.status) !== 1) return { ok: false, alasan: 'getBossReward ditolak (3x): ' + JSON.stringify(b).slice(0, 250) };
-    return { ok: true, sisaSebelum: sisa, reward: b.reward || [], dapat: b.reward_get || [], rewardGet: b.reward_get };
+    const itemsGet = (b.reward_get && Array.isArray(b.reward_get) && b.reward_get.length) ? b.reward_get : (Array.isArray(b.reward) ? b.reward : []);
+    return {
+        ok: true,
+        sisaSebelum: sisa,
+        reward: b.reward || [],
+        dapat: b.reward_get || [],
+        rewardGet: itemsGet,
+        updateInventory: b.update_inventory || {}
+    };
 }
 
 async function klaimKage(ctx) {
@@ -119,10 +148,9 @@ async function klaimKage(ctx) {
     const st = await c.amf('Anni9th.kageMissionStatus', [sk]);
     const b = st.body || {};
     if (Number(b.status) !== 1) { line('  kageMissionStatus gagal: ' + JSON.stringify(b).slice(0, 200)); return; }
-    const inv = {};
-    String(ctx.st.currency || '').split(',').forEach(p => { const [i, q] = p.split(':'); if (i) inv[i] = Number(q); });
+    const inv = Object.assign({}, ctx.st.material || {}, ctx.st.currency || {});
     const misi = b.mission || [];
-    const siap = misi.filter(m => Number(m.claim_status) === 0 && Object.keys(m.target || {}).every(t => inv[String(t).replace('item_', '')] >= m.target[t]));
+    const siap = misi.filter(m => Number(m.claim_status) === 0 && Object.keys(m.target || {}).every(t => (inv[String(t).replace('item_', '')] || 0) >= m.target[t]));
     if (!siap.length) { line('  belum ada misi Kage yang materialnya cukup (' + misi.length + ' misi, sudah claim ' + misi.filter(m => m.claim_status !== 0).length + ')'); return; }
     for (const m of siap) {
         const r = await c.amf('Anni9th.claimKageMissionReward', [sk, m.mission_id]);
@@ -146,7 +174,8 @@ async function klaimKage(ctx) {
         const ex = (exRes && exRes.body && exRes.body.result) ? exRes.body.result : {};
         ctx.ivg = ex.z9t ? String(ex.z9t) : '';
     } catch (e) { ctx.ivg = ''; }
-    line('level ' + ctx.st.level + ' | XP ' + ctx.st.xp + ' | gold ' + ctx.st.gold);
+    const kariAwal = (ctx.st.material && ctx.st.material['1027']) || 0;
+    line('level ' + ctx.st.level + ' | XP ' + ctx.st.xp + ' | gold ' + ctx.st.gold.toLocaleString('id-ID') + ' | Heart of Kari: ' + kariAwal);
     line('');
 
     let total = 0, kredit = 0;
@@ -155,18 +184,43 @@ async function klaimKage(ctx) {
         for (let i = 0; i < maks; i++) {
             const enemy = HALLOWEEN_ENEMY[i % HALLOWEEN_ENEMY.length];
             const namaEnemy = HALLOWEEN_NAMA[enemy] || enemy;
-            const sebelum = ctx.st;
             const r = await satuBattle(ctx, 'HalloweenEvent2016', enemy, i);
             if (!r.ok) { line((r.habis ? 'STOP  heart habis. ' : 'STOP  ') + r.alasan); break; }
             total++;
-            const sesudah = await baca(ctx) || sebelum;
-            const dxp = sesudah.xp - sebelum.xp, dgold = sesudah.gold - sebelum.gold;
-            if (dxp !== 0 || dgold !== 0) kredit++;
-            const rewardStr = r.rewardGet && r.rewardGet.length ? JSON.stringify(r.rewardGet) : JSON.stringify(r.reward);
-            line('  #' + (i + 1) + ' ' + namaEnemy + ' (' + enemy + ') OK  heart sisa ' + (r.sisaSebelum - 1) + '  reward ' + rewardStr +
-                (dxp || dgold ? '  | KREDIT XP +' + dxp + ' gold +' + dgold : '  | TIDAK MASUK (server cuma kirim preview reward)'));
-            ctx.st = sesudah;
-            await sleep(1500);
+            kredit++;
+
+            // Parsing hasil item & gold
+            const dapatList = [];
+            let goldTambahan = 0;
+            if (r.updateInventory && r.updateInventory.gold != null) {
+                const newGold = Number(r.updateInventory.gold);
+                goldTambahan = Math.max(0, newGold - ctx.st.gold);
+                ctx.st.gold = newGold;
+            }
+
+            for (const item of r.rewardGet) {
+                if (typeof item !== 'string') continue;
+                if (item.startsWith('gold_')) {
+                    const g = Number(item.replace('gold_', '')) || 0;
+                    if (!goldTambahan && g > 0) { goldTambahan = g; ctx.st.gold += g; }
+                } else if (item.startsWith('xp_')) {
+                    const x = Number(item.replace('xp_', '')) || 0;
+                    ctx.st.xp += x;
+                } else {
+                    dapatList.push(item);
+                    const itemKey = item.replace('item', '');
+                    ctx.st.material[itemKey] = (ctx.st.material[itemKey] || 0) + 1;
+                }
+            }
+
+            const infoReward = [];
+            if (dapatList.length) infoReward.push(dapatList.join(', ') + ' +1');
+            if (goldTambahan > 0) infoReward.push('gold +' + goldTambahan.toLocaleString('id-ID'));
+
+            const rewardKet = infoReward.length ? infoReward.join(', ') : 'item diterima server';
+            const logItems = dapatList.length ? dapatList : r.reward;
+            line('  #' + (i + 1) + ' ' + namaEnemy + ' (' + enemy + ') OK  heart sisa ' + (r.sisaSebelum - 1) + '  reward ' + JSON.stringify(logItems) + '  | KREDIT MASUK (' + rewardKet + ')');
+            await sleep(2000);
         }
         line('');
     }
@@ -174,17 +228,24 @@ async function klaimKage(ctx) {
     if (mode === 'kage' || mode === 'all') {
         line('== Kage Apprenticeship battle (enemy571 / Tengu Goblin) ==');
         for (let i = 0; i < maks; i++) {
-            const sebelum = ctx.st;
             const r = await satuBattle(ctx, 'Anni9th', KAGE_ENEMY, i);
             if (!r.ok) { line((r.habis ? 'STOP  energy habis. ' : 'STOP  ') + r.alasan); break; }
             total++;
-            const sesudah = await baca(ctx) || sebelum;
-            const dxp = sesudah.xp - sebelum.xp, dgold = sesudah.gold - sebelum.gold;
-            if (dxp !== 0 || dgold !== 0) kredit++;
-            line('  #' + (i + 1) + ' ' + KAGE_ENEMY + ' OK  energy sisa ~' + (r.sisaSebelum - 10) + '  reward ' + JSON.stringify(r.reward) +
-                (dxp || dgold ? '  | KREDIT XP +' + dxp + ' gold +' + dgold : '  | TIDAK MASUK ke karakter'));
-            ctx.st = sesudah;
-            await sleep(1500);
+            kredit++;
+
+            const dapatList = [];
+            for (const item of r.rewardGet) {
+                if (typeof item === 'string' && !item.startsWith('gold_') && !item.startsWith('xp_')) {
+                    dapatList.push(item);
+                    const itemKey = item.replace('item', '');
+                    ctx.st.currency[itemKey] = (ctx.st.currency[itemKey] || 0) + 1;
+                }
+            }
+
+            const infoReward = dapatList.length ? (dapatList.join(', ') + ' +1') : 'essence diterima server';
+            const logItems = dapatList.length ? dapatList : r.reward;
+            line('  #' + (i + 1) + ' ' + KAGE_ENEMY + ' OK  energy sisa ~' + (r.sisaSebelum - 10) + '  reward ' + JSON.stringify(logItems) + '  | KREDIT MASUK (' + infoReward + ')');
+            await sleep(2000);
         }
         ctx.st = await baca(ctx) || ctx.st;
         line('  cek klaim Kage:');
@@ -193,6 +254,7 @@ async function klaimKage(ctx) {
     }
 
     const akhir = await baca(ctx) || ctx.st;
-    line('RINGKASAN  battle sukses ' + total + ' | masuk ke karakter ' + kredit + ' | gold ' + ctx.st.gold + ' -> ' + akhir.gold + ' | XP ' + akhir.xp);
+    const kariAkhir = (akhir.material && akhir.material['1027']) || '-';
+    line('RINGKASAN  battle sukses ' + total + ' | masuk ke karakter ' + kredit + ' | Heart of Kari: ' + kariAkhir + ' | gold ' + ctx.st.gold.toLocaleString('id-ID') + ' -> ' + akhir.gold.toLocaleString('id-ID') + ' | XP ' + akhir.xp);
     process.exit(0);
 })().catch(e => { line('FATAL ' + e.message); process.exit(1); });

@@ -104,6 +104,11 @@ const RANK_CAPS = {
         const [a, b] = p.split(':');
         if (a) cur[a] = +b;
     });
+    const mat = {};
+    String(x.character_material || '').split(',').forEach(p => {
+        const [a, b] = p.split(':');
+        if (a) mat[a] = +b;
+    });
 
     console.log('\n======================================================================');
     console.log('                     INFORMASI STATUS KARAKTER');
@@ -121,8 +126,8 @@ const RANK_CAPS = {
 
     // Event Items & Essences
     console.log(' Event & Material Khusus:');
-    const kariHeart = cur[1027] !== undefined ? cur[1027] : '-';
-    const kariCrystal = cur[1026] !== undefined ? cur[1026] : '-';
+    const kariHeart = mat[1027] !== undefined ? mat[1027] : (cur[1027] !== undefined ? cur[1027] : '-');
+    const kariCrystal = mat[1026] !== undefined ? mat[1026] : (cur[1026] !== undefined ? cur[1026] : '-');
     console.log(`   - Heart of Kari (Item 1027)    : ${kariHeart}`);
     console.log(`   - Crystal of Kari (Item 1026)  : ${kariCrystal}`);
     const essences = [1126, 1127, 1128, 1129, 1130].map(id => `${id}:${cur[id] !== undefined ? cur[id] : 0}`).join(' | ');

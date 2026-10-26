@@ -118,6 +118,11 @@ async function inspectAccount(username, password) {
             const [a, b] = p.split(':');
             if (a) cur[a] = +b;
         });
+        const mat = {};
+        String(charObj.character_material || '').split(',').forEach(p => {
+            const [a, b] = p.split(':');
+            if (a) mat[a] = +b;
+        });
 
         const rankNumber = Number(charObj.character_rank) || 0;
         const rankTitle = RANK_NAMES[rankNumber] || ('Rank ' + rankNumber);
@@ -136,7 +141,7 @@ async function inspectAccount(username, password) {
             weapon: charObj.character_equipped_weapon || '(default)',
             backItem: charObj.character_equipped_back_item || '(none)',
             bodySet: charObj.character_body_set || '(default)',
-            halloweenHeart: cur[1027] !== undefined ? cur[1027] : 0,
+            halloweenHeart: mat[1027] !== undefined ? mat[1027] : (cur[1027] !== undefined ? cur[1027] : 0),
             status: 'OK'
         });
     }
