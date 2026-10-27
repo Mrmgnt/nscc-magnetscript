@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CheatTable CheatEngineTableVersion="52">
+  <CheatEntries>
+    <CheatEntry>
+      <ID>9</ID>
+      <Description>"Darah Kebal AMAN (script, aktifkan saat HP penuh)"</Description>
+      <Color>00AA00</Color>
+      <VariableType>Auto Assembler Script</VariableType>
+      <AssemblerScript>[ENABLE]
+{$lua}
+if syntaxcheck then return end
+
+-- Aman: tidak freeze buta. Hanya menulis jika chain valid DAN stabil,
+-- dan hanya mengisi HP kembali ke nilai maksimum yang dicatat saat aktif.
+local chain = {0x508, 0x8, 0x4C, 0x510, 0x1D0, 0x4}
+local FINAL = 0xED8
+
+local function valid(p)
+  return p ~= nil and p &gt; 0x10000 and p &lt; 0x7FFF0000
+end
+
+local function resolve()
+  local base = getAddress("Adobe AIR.dll")
+  if not valid(base) then return nil end
+  local p = readPointer(base + 0xE29C18)
+  for i = 1, #chain do
+    if not valid(p) then return nil end
+    p = readPointer(p + chain[i])
+  end
+  if not valid(p) then return nil end
+  return p + FINAL
+end
+
+local a0 = resolve()
+if a0 == nil then showMessage("Chain belum valid. Aktifkan saat sudah di dalam battle.") return end
+hpMax = readInteger(a0)
+if hpMax == nil or hpMax &lt;= 0 then showMessage("HP tidak valid") return end
+lastAddr = a0
+
+if hpTimer ~= nil then hpTimer.destroy() end
+hpTimer = createTimer(nil)
+hpTimer.Interval = 250
+hpTimer.OnTimer = function(t)
+  local a = resolve()
+  if a == nil then lastAddr = nil return end
+  if a ~= lastAddr then lastAddr = a return end   -- tunggu 1 tick sampai alamat stabil
+  local cur = readInteger(a)
+  if cur ~= nil and cur &gt; 0 and cur &lt; hpMax then
+    writeInteger(a, hpMax)
+  end
+end
+
+[DISABLE]
+{$lua}
+if syntaxcheck then return end
+if hpTimer ~= nil then hpTimer.destroy() hpTimer = nil end
+</AssemblerScript>
+    </CheatEntry>
+    <CheatEntry>
+      <ID>10</ID>
+      <Description>"Always Hit / Anti Dodge (Set action.dodge = false)"</Description>
+      <Color>00AA00</Color>
+      <VariableType>Auto Assembler Script</VariableType>
+      <AssemblerScript>[ENABLE]
+// BattleProcessor.checkDodge:
+// Saat syarat dodge tercapai, game mengeksekusi: _loc15_.dodge = true (pushtrue 26)
+// Mengubah 26 (pushtrue) menjadi 27 (pushfalse) sehingga dodge selalu false.
+aobscan(dodgeAOB, 13 06 00 00 62 0F 26 61 BF 4B)
+registersymbol(dodgeAOB)
+
+dodgeAOB+6:
+  db 27
+
+[DISABLE]
+dodgeAOB+6:
+  db 26
+
+unregistersymbol(dodgeAOB)
+</AssemblerScript>
+    </CheatEntry>
+    <CheatEntry>
+      <ID>11</ID>
+      <Description>"Anti Cooldown / No Cooldown (All Skills Instant)"</Description>
+      <Color>00AA00</Color>
+      <VariableType>Auto Assembler Script</VariableType>
+      <AssemblerScript>[ENABLE]
+// 1) CharacterBase.isBattleSkillCooldown:
+// Memaksa fungsi cek cooldown selalu return false (27 = pushfalse alih-alih 26 = pushtrue).
+// Berlaku untuk semua skill reguler, Bloodline, dan Senjutsu.
+aobscan(noCdCheckAOB, D6 D2 D1 46 F1 34 01 24 00 0F 02 00 00 26 48 27 48)
+registersymbol(noCdCheckAOB)
+
+noCdCheckAOB+D:
+  db 27
+
+// 2) CharacterBase.setSkillCooldown:
+// Mencegah game mencatat cooldown ke tabel saat skill dipakai (returnvoid = 47).
+aobscan(noCdSetAOB, D0 30 24 00 D6 24 00 D7 20 85 63 04 5D 02 D1 66 A3 54 46 02)
+registersymbol(noCdSetAOB)
+
+noCdSetAOB:
+  db 47
+
+[DISABLE]
+noCdCheckAOB+D:
+  db 26
+
+noCdSetAOB:
+  db D0
+
+unregistersymbol(noCdCheckAOB)
+unregistersymbol(noCdSetAOB)
+</AssemblerScript>
+    </CheatEntry>
+    <CheatEntry>
+      <ID>12</ID>
+      <Description>"Auto Massive Damage / 1-Hit Kill (A3 -&gt; A9)"</Description>
+      <Color>00AA00</Color>
+      <VariableType>Auto Assembler Script</VariableType>
+      <AssemblerScript>[ENABLE]
+// 1) BattleProcessor.calcSkillDamage:
+// Mengubah operasi bagi (A3 = divide) menjadi bitwise OR (A9 = bitor).
+// Formula FIRE bonus (fire * 4 / 2024) berubah menjadi (fire * 4 | 2024) * base skill damage,
+// menghasilkan damage jutaan (1-hit kill otomatis).
+aobscan(dmgBP, 46 D7 4A 01 46 01 01 24 04 A2 25 E8 07 A3 A2 46)
+registersymbol(dmgBP)
+
+dmgBP+D:
+  db A9
+
+// 2) Main.calcSkillDamage:
+aobscan(dmgMain, 46 BC 35 01 46 01 01 24 04 A2 25 E8 07 A3 A2 46)
+registersymbol(dmgMain)
+
+dmgMain+D:
+  db A9
+
+[DISABLE]
+dmgBP+D:
+  db A3
+
+dmgMain+D:
+  db A3
+
+unregistersymbol(dmgBP)
+unregistersymbol(dmgMain)
+</AssemblerScript>
+    </CheatEntry>
+  </CheatEntries>
+  <UserdefinedSymbols/>
+  <Comments>Ninja Saga Cheat Table:
+1) "Darah Kebal AMAN" = Script auto-heal agar HP langsung terisi kembali tanpa resiko game freeze saat kena jutsu musuh (aktifkan saat di dalam battle ketika HP penuh).
+2) "Always Hit / Anti Dodge" = Menghilangkan dodge total (musuh &amp; player tidak bisa dodge, serangan 100% selalu kena). Aktifkan SEBELUM masuk battle.
+3) "Anti Cooldown / No Cooldown" = Menghapus semua jeda cooldown jutsu reguler, Bloodline, dan Senjutsu. Bisa spam jutsu tiap giliran tanpa timer. Aktifkan SEBELUM masuk battle.
+4) "Auto Massive Damage / 1-Hit Kill" = Otomatis scan dan patch A3 -&gt; A9 pada BattleProcessor dan Main tanpa perlu scan manual. Menghasilkan damage jutaan (sekali serang langsung tamat). Aktifkan saat sudah di battle.
+</Comments>
+</CheatTable>
