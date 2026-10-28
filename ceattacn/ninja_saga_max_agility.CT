@@ -58,24 +58,59 @@ if hpTimer ~= nil then hpTimer.destroy() hpTimer = nil end
     </CheatEntry>
     <CheatEntry>
       <ID>10</ID>
-      <Description>"Always Hit / Anti Dodge (Set action.dodge = false)"</Description>
+      <Description>"Always Hit / Anti Dodge (Musuh Tidak Bisa Dodge)"</Description>
       <Color>00AA00</Color>
       <VariableType>Auto Assembler Script</VariableType>
       <AssemblerScript>[ENABLE]
 // BattleProcessor.checkDodge:
-// Saat syarat dodge tercapai, game mengeksekusi: _loc15_.dodge = true (pushtrue 26)
-// Mengubah 26 (pushtrue) menjadi 27 (pushfalse) sehingga dodge selalu false.
-aobscan(dodgeAOB, 13 06 00 00 62 0F 26 61 BF 4B)
+// Memaksa kedua branch dodge (Path 1 dan Path 2) menjadi pushfalse (27).
+// Musuh tidak bisa dodge sama sekali, serangan player 100% selalu kena.
+aobscan(dodgeAOB, 13 06 00 00 62 0F ?? 61 BF 4B 10 11 00 00 60 FB 07 D0 2C A0 58 4F F6 13 02 62 0F ?? 61 BF 4B)
 registersymbol(dodgeAOB)
 
 dodgeAOB+6:
+  db 27
+
+dodgeAOB+1B:
   db 27
 
 [DISABLE]
 dodgeAOB+6:
   db 26
 
+dodgeAOB+1B:
+  db 27
+
 unregistersymbol(dodgeAOB)
+</AssemblerScript>
+    </CheatEntry>
+    <CheatEntry>
+      <ID>13</ID>
+      <Description>"Always Dodge 100% (Karakter Selalu Dodge - Anti Crash)"</Description>
+      <Color>0000FF</Color>
+      <VariableType>Auto Assembler Script</VariableType>
+      <AssemblerScript>[ENABLE]
+// BattleProcessor.checkDodge:
+// Mengubah kedua branch dodge (Path 1 dan Path 2) menjadi pushtrue (26).
+// Game selalu mengeksekusi _loc15_.dodge = true tanpa mengubah instruksi jump.
+// 100% aman, stack seimbang, dan anti-crash!
+aobscan(alwaysDodgeAOB, 13 06 00 00 62 0F ?? 61 BF 4B 10 11 00 00 60 FB 07 D0 2C A0 58 4F F6 13 02 62 0F ?? 61 BF 4B)
+registersymbol(alwaysDodgeAOB)
+
+alwaysDodgeAOB+6:
+  db 26
+
+alwaysDodgeAOB+1B:
+  db 26
+
+[DISABLE]
+alwaysDodgeAOB+6:
+  db 26
+
+alwaysDodgeAOB+1B:
+  db 27
+
+unregistersymbol(alwaysDodgeAOB)
 </AssemblerScript>
     </CheatEntry>
     <CheatEntry>
@@ -150,8 +185,9 @@ unregistersymbol(dmgMain)
   <UserdefinedSymbols/>
   <Comments>Ninja Saga Cheat Table:
 1) "Darah Kebal AMAN" = Script auto-heal agar HP langsung terisi kembali tanpa resiko game freeze saat kena jutsu musuh (aktifkan saat di dalam battle ketika HP penuh).
-2) "Always Hit / Anti Dodge" = Menghilangkan dodge total (musuh &amp; player tidak bisa dodge, serangan 100% selalu kena). Aktifkan SEBELUM masuk battle.
-3) "Anti Cooldown / No Cooldown" = Menghapus semua jeda cooldown jutsu reguler, Bloodline, dan Senjutsu. Bisa spam jutsu tiap giliran tanpa timer. Aktifkan SEBELUM masuk battle.
-4) "Auto Massive Damage / 1-Hit Kill" = Otomatis scan dan patch A3 -&gt; A9 pada BattleProcessor dan Main tanpa perlu scan manual. Menghasilkan damage jutaan (sekali serang langsung tamat). Aktifkan saat sudah di battle.
+2) "Always Hit / Anti Dodge" = Menghilangkan dodge total (musuh tidak bisa dodge, serangan Anda 100% selalu kena).
+3) "Always Dodge 100%" = Karakter Anda 100% selalu dodge saat diserang (damage 0, overhead "DODGE"). Catatan: Jangan aktifkan bersamaan dengan Always Hit.
+4) "Anti Cooldown / No Cooldown" = Menghapus semua jeda cooldown jutsu reguler, Bloodline, dan Senjutsu. Bisa spam jutsu tiap giliran tanpa timer. Aktifkan SEBELUM masuk battle.
+5) "Auto Massive Damage / 1-Hit Kill" = Otomatis scan dan patch A3 -&gt; A9 pada BattleProcessor dan Main tanpa perlu scan manual. Menghasilkan damage jutaan (sekali serang langsung tamat). Aktifkan saat sudah di battle.
 </Comments>
 </CheatTable>
