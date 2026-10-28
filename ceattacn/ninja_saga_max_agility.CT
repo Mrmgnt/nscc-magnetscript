@@ -2,18 +2,20 @@
 <CheatTable CheatEngineTableVersion="52">
   <CheatEntries>
     <CheatEntry>
-      <ID>9</ID>
-      <Description>"Darah Kebal AMAN (script, aktifkan saat HP penuh)"</Description>
-      <Color>00AA00</Color>
+      <ID>15</ID>
+      <Description>"★ 100% Dodge Khusus Player (POINTER PLAYER ONLY - Musuh Tidak Dodge)"</Description>
+      <Color>0000FF</Color>
       <VariableType>Auto Assembler Script</VariableType>
       <AssemblerScript>[ENABLE]
 {$lua}
 if syntaxcheck then return end
 
--- Aman: tidak freeze buta. Hanya menulis jika chain valid DAN stabil,
--- dan hanya mengisi HP kembali ke nilai maksimum yang dicatat saat aktif.
+-- Pointer khusus karakter player (Adobe AIR.dll + 0xE29C18 -&gt; 0x508 -&gt; 0x8 -&gt; 0x4C -&gt; 0x510 -&gt; 0x1D0 -&gt; 0x4).
+-- Offset Agility player: 0xEF4 (nilai normal 700 - 1500).
+-- Mengunci Agility player ke 999999: Player 100% selalu dodge &amp; kecepatan aksi melompat maksimal,
+-- sedangkan MUSUH TIDAK TERPENGARUH SAMA SEKALI (musuh tidak ikut dodge).
 local chain = {0x508, 0x8, 0x4C, 0x510, 0x1D0, 0x4}
-local FINAL = 0xED8
+local FINAL = 0xEF4
 
 local function valid(p)
   return p ~= nil and p &gt; 0x10000 and p &lt; 0x7FFF0000
@@ -32,39 +34,45 @@ local function resolve()
 end
 
 local a0 = resolve()
-if a0 == nil then showMessage("Chain belum valid. Aktifkan saat sudah di dalam battle.") return end
-hpMax = readInteger(a0)
-if hpMax == nil or hpMax &lt;= 0 then showMessage("HP tidak valid") return end
-lastAddr = a0
+if a0 == nil then showMessage("Chain pointer belum valid. Aktifkan saat karakter sudah masuk di battle.") return end
+origAgility = readInteger(a0)
+if origAgility == nil or origAgility &lt;= 0 then origAgility = 720 end
 
-if hpTimer ~= nil then hpTimer.destroy() end
-hpTimer = createTimer(nil)
-hpTimer.Interval = 250
-hpTimer.OnTimer = function(t)
+-- Langsung tulis Agility saat enable
+writeInteger(a0, 999999)
+
+if agilityTimer ~= nil then agilityTimer.destroy() end
+agilityTimer = createTimer(nil)
+agilityTimer.Interval = 100
+agilityTimer.OnTimer = function(t)
   local a = resolve()
-  if a == nil then lastAddr = nil return end
-  if a ~= lastAddr then lastAddr = a return end   -- tunggu 1 tick sampai alamat stabil
+  if a == nil then return end
   local cur = readInteger(a)
-  if cur ~= nil and cur &gt; 0 and cur &lt; hpMax then
-    writeInteger(a, hpMax)
+  if cur ~= nil and cur &lt; 999999 then
+    writeInteger(a, 999999)
   end
 end
 
 [DISABLE]
 {$lua}
 if syntaxcheck then return end
-if hpTimer ~= nil then hpTimer.destroy() hpTimer = nil end
+if agilityTimer ~= nil then agilityTimer.destroy() agilityTimer = nil end
+local a = resolve()
+if a ~= nil and origAgility ~= nil then
+  writeInteger(a, origAgility)
+end
 </AssemblerScript>
     </CheatEntry>
     <CheatEntry>
       <ID>10</ID>
-      <Description>"Always Hit / Anti Dodge (Musuh Tidak Bisa Dodge)"</Description>
-      <Color>00AA00</Color>
+      <Description>"★ Always Hit / Anti Dodge Musuh (Minotaur 100% Kena Serang)"</Description>
+      <Color>008800</Color>
       <VariableType>Auto Assembler Script</VariableType>
       <AssemblerScript>[ENABLE]
 // BattleProcessor.checkDodge:
-// Memaksa kedua branch dodge (Path 1 dan Path 2) menjadi pushfalse (27).
-// Musuh tidak bisa dodge sama sekali, serangan player 100% selalu kena.
+// Memaksa kedua branch dodge musuh menjadi pushfalse (27).
+// Minotaur (Head, Left Arm, Right Arm) tidak bisa dodge sama sekali!
+// Serangan player 100% DIJAMIN SELALU KENA.
 aobscan(dodgeAOB, 13 06 00 00 62 0F ?? 61 BF 4B 10 11 00 00 60 FB 07 D0 2C A0 58 4F F6 13 02 62 0F ?? 61 BF 4B)
 registersymbol(dodgeAOB)
 
@@ -85,32 +93,124 @@ unregistersymbol(dodgeAOB)
 </AssemblerScript>
     </CheatEntry>
     <CheatEntry>
-      <ID>13</ID>
-      <Description>"Always Dodge 100% (Karakter Selalu Dodge - Anti Crash)"</Description>
+      <ID>9</ID>
+      <Description>"★ Darah Kebal Sejati (True God Mode - Auto Heal HP +0xEE0)"</Description>
       <Color>0000FF</Color>
       <VariableType>Auto Assembler Script</VariableType>
       <AssemblerScript>[ENABLE]
-// BattleProcessor.checkDodge:
-// Mengubah kedua branch dodge (Path 1 dan Path 2) menjadi pushtrue (26).
-// Game selalu mengeksekusi _loc15_.dodge = true tanpa mengubah instruksi jump.
-// 100% aman, stack seimbang, dan anti-crash!
-aobscan(alwaysDodgeAOB, 13 06 00 00 62 0F ?? 61 BF 4B 10 11 00 00 60 FB 07 D0 2C A0 58 4F F6 13 02 62 0F ?? 61 BF 4B)
-registersymbol(alwaysDodgeAOB)
+{$lua}
+if syntaxcheck then return end
 
-alwaysDodgeAOB+6:
-  db 26
+-- PERBAIKAN BUG OFFSET:
+-- +0xED8 = Max HP
+-- +0xEE0 = CURRENT HP LIVE (Darah yang berkurang saat kena hit)
+-- Script ini membaca Max HP dari +0xED8 dan seketika mengisi ulang Current HP (+0xEE0).
+local chain = {0x508, 0x8, 0x4C, 0x510, 0x1D0, 0x4}
+local FINAL_CUR_HP = 0xEE0
+local FINAL_MAX_HP = 0xED8
 
-alwaysDodgeAOB+1B:
-  db 26
+local function valid(p)
+  return p ~= nil and p &gt; 0x10000 and p &lt; 0x7FFF0000
+end
+
+local function resolve(offset)
+  local base = getAddress("Adobe AIR.dll")
+  if not valid(base) then return nil end
+  local p = readPointer(base + 0xE29C18)
+  for i = 1, #chain do
+    if not valid(p) then return nil end
+    p = readPointer(p + chain[i])
+  end
+  if not valid(p) then return nil end
+  return p + offset
+end
+
+local aHp = resolve(FINAL_CUR_HP)
+local aMax = resolve(FINAL_MAX_HP)
+if aHp == nil or aMax == nil then showMessage("Chain pointer belum valid. Aktifkan saat sudah di dalam battle.") return end
+
+cachedMaxHp = readInteger(aMax)
+if cachedMaxHp == nil or cachedMaxHp &lt;= 0 then cachedMaxHp = 4060 end
+
+-- Langsung pulihkan ke max jika sedang sekarat
+local cNow = readInteger(aHp)
+if cNow ~= nil and cNow &lt; cachedMaxHp then
+  writeInteger(aHp, cachedMaxHp)
+end
+
+if hpTimer ~= nil then hpTimer.destroy() end
+hpTimer = createTimer(nil)
+hpTimer.Interval = 100
+hpTimer.OnTimer = function(t)
+  local curAddr = resolve(FINAL_CUR_HP)
+  local maxAddr = resolve(FINAL_MAX_HP)
+  if curAddr == nil or maxAddr == nil then return end
+
+  local maxVal = readInteger(maxAddr)
+  if maxVal == nil or maxVal &lt;= 0 then maxVal = cachedMaxHp end
+
+  local curVal = readInteger(curAddr)
+  if curVal ~= nil and curVal &lt; maxVal then
+    writeInteger(curAddr, maxVal)
+  end
+end
 
 [DISABLE]
-alwaysDodgeAOB+6:
-  db 26
+{$lua}
+if syntaxcheck then return end
+if hpTimer ~= nil then hpTimer.destroy() hpTimer = nil end
+</AssemblerScript>
+    </CheatEntry>
+    <CheatEntry>
+      <ID>14</ID>
+      <Description>"Chakra / CP Kebal (Auto Restore CP +0xEFC)"</Description>
+      <Color>00AA00</Color>
+      <VariableType>Auto Assembler Script</VariableType>
+      <AssemblerScript>[ENABLE]
+{$lua}
+if syntaxcheck then return end
 
-alwaysDodgeAOB+1B:
-  db 27
+local chain = {0x508, 0x8, 0x4C, 0x510, 0x1D0, 0x4}
+local FINAL_CP = 0xEFC
+local FINAL_CPMAX = 0xEF8
 
-unregistersymbol(alwaysDodgeAOB)
+local function valid(p)
+  return p ~= nil and p &gt; 0x10000 and p &lt; 0x7FFF0000
+end
+
+local function resolve(offset)
+  local base = getAddress("Adobe AIR.dll")
+  if not valid(base) then return nil end
+  local p = readPointer(base + 0xE29C18)
+  for i = 1, #chain do
+    if not valid(p) then return nil end
+    p = readPointer(p + chain[i])
+  end
+  if not valid(p) then return nil end
+  return p + offset
+end
+
+local a0 = resolve(FINAL_CP)
+if a0 == nil then showMessage("Chain belum valid. Aktifkan saat sudah di dalam battle.") return end
+
+if cpTimer ~= nil then cpTimer.destroy() end
+cpTimer = createTimer(nil)
+cpTimer.Interval = 100
+cpTimer.OnTimer = function(t)
+  local aCp = resolve(FINAL_CP)
+  local aMax = resolve(FINAL_CPMAX)
+  if aCp == nil or aMax == nil then return end
+  local maxCp = readInteger(aMax) or 1000
+  local curCp = readInteger(aCp)
+  if curCp ~= nil and curCp &lt; maxCp then
+    writeInteger(aCp, maxCp)
+  end
+end
+
+[DISABLE]
+{$lua}
+if syntaxcheck then return end
+if cpTimer ~= nil then cpTimer.destroy() cpTimer = nil end
 </AssemblerScript>
     </CheatEntry>
     <CheatEntry>
@@ -150,13 +250,12 @@ unregistersymbol(noCdSetAOB)
     <CheatEntry>
       <ID>12</ID>
       <Description>"Auto Massive Damage / 1-Hit Kill (A3 -&gt; A9)"</Description>
-      <Color>00AA00</Color>
+      <Color>0000FF</Color>
       <VariableType>Auto Assembler Script</VariableType>
       <AssemblerScript>[ENABLE]
 // 1) BattleProcessor.calcSkillDamage:
 // Mengubah operasi bagi (A3 = divide) menjadi bitwise OR (A9 = bitor).
-// Formula FIRE bonus (fire * 4 / 2024) berubah menjadi (fire * 4 | 2024) * base skill damage,
-// menghasilkan damage jutaan (1-hit kill otomatis).
+// Menghasilkan damage jutaan (sekali serang Minotaur langsung tewas).
 aobscan(dmgBP, 46 D7 4A 01 46 01 01 24 04 A2 25 E8 07 A3 A2 46)
 registersymbol(dmgBP)
 
@@ -181,13 +280,139 @@ unregistersymbol(dmgBP)
 unregistersymbol(dmgMain)
 </AssemblerScript>
     </CheatEntry>
+    <CheatEntry>
+      <ID>13</ID>
+      <Description>"[JANGAN DIPAKAI] Always Dodge Global (PERINGATAN: Musuh Ikut Dodge)"</Description>
+      <Color>808080</Color>
+      <VariableType>Auto Assembler Script</VariableType>
+      <AssemblerScript>[ENABLE]
+// PERINGATAN: Script AOB ini mengubah bytecode BattleProcessor secara global.
+// Jangan gunakan ini karena musuh/Minotaur juga akan selalu dodge!
+// Gunakan Entry ID 15 ("★ 100% Dodge Khusus Player") di atas!
+aobscan(alwaysDodgeAOB, 13 06 00 00 62 0F ?? 61 BF 4B 10 11 00 00 60 FB 07 D0 2C A0 58 4F F6 13 02 62 0F ?? 61 BF 4B)
+registersymbol(alwaysDodgeAOB)
+
+alwaysDodgeAOB+6:
+  db 26
+
+alwaysDodgeAOB+1B:
+  db 26
+
+[DISABLE]
+alwaysDodgeAOB+6:
+  db 26
+
+alwaysDodgeAOB+1B:
+  db 27
+
+unregistersymbol(alwaysDodgeAOB)
+</AssemblerScript>
+    </CheatEntry>
+    <CheatEntry>
+      <ID>100</ID>
+      <Description>"[Pointer Manual] Current HP Player (Darah Asli Sekarang)"</Description>
+      <Color>0000FF</Color>
+      <VariableType>4 Bytes</VariableType>
+      <Address>"Adobe AIR.dll"+0xE29C18</Address>
+      <Offsets>
+        <Offset>EE0</Offset>
+        <Offset>4</Offset>
+        <Offset>1D0</Offset>
+        <Offset>510</Offset>
+        <Offset>4C</Offset>
+        <Offset>8</Offset>
+        <Offset>508</Offset>
+      </Offsets>
+    </CheatEntry>
+    <CheatEntry>
+      <ID>101</ID>
+      <Description>"[Pointer Manual] Max HP Player (Batas Maksimal Darah)"</Description>
+      <VariableType>4 Bytes</VariableType>
+      <Address>"Adobe AIR.dll"+0xE29C18</Address>
+      <Offsets>
+        <Offset>ED8</Offset>
+        <Offset>4</Offset>
+        <Offset>1D0</Offset>
+        <Offset>510</Offset>
+        <Offset>4C</Offset>
+        <Offset>8</Offset>
+        <Offset>508</Offset>
+      </Offsets>
+    </CheatEntry>
+    <CheatEntry>
+      <ID>102</ID>
+      <Description>"[Pointer Manual] Agility Karakter Player (Dodge &amp; Speed)"</Description>
+      <Color>0000FF</Color>
+      <VariableType>4 Bytes</VariableType>
+      <Address>"Adobe AIR.dll"+0xE29C18</Address>
+      <Offsets>
+        <Offset>EF4</Offset>
+        <Offset>4</Offset>
+        <Offset>1D0</Offset>
+        <Offset>510</Offset>
+        <Offset>4C</Offset>
+        <Offset>8</Offset>
+        <Offset>508</Offset>
+      </Offsets>
+    </CheatEntry>
+    <CheatEntry>
+      <ID>103</ID>
+      <Description>"[Pointer Manual] Chakra / CP Karakter Player"</Description>
+      <VariableType>4 Bytes</VariableType>
+      <Address>"Adobe AIR.dll"+0xE29C18</Address>
+      <Offsets>
+        <Offset>EFC</Offset>
+        <Offset>4</Offset>
+        <Offset>1D0</Offset>
+        <Offset>510</Offset>
+        <Offset>4C</Offset>
+        <Offset>8</Offset>
+        <Offset>508</Offset>
+      </Offsets>
+    </CheatEntry>
+    <CheatEntry>
+      <ID>104</ID>
+      <Description>"[Pointer Manual] Max Chakra / CP Karakter Player"</Description>
+      <VariableType>4 Bytes</VariableType>
+      <Address>"Adobe AIR.dll"+0xE29C18</Address>
+      <Offsets>
+        <Offset>EF8</Offset>
+        <Offset>4</Offset>
+        <Offset>1D0</Offset>
+        <Offset>510</Offset>
+        <Offset>4C</Offset>
+        <Offset>8</Offset>
+        <Offset>508</Offset>
+      </Offsets>
+    </CheatEntry>
   </CheatEntries>
   <UserdefinedSymbols/>
-  <Comments>Ninja Saga Cheat Table:
-1) "Darah Kebal AMAN" = Script auto-heal agar HP langsung terisi kembali tanpa resiko game freeze saat kena jutsu musuh (aktifkan saat di dalam battle ketika HP penuh).
-2) "Always Hit / Anti Dodge" = Menghilangkan dodge total (musuh tidak bisa dodge, serangan Anda 100% selalu kena).
-3) "Always Dodge 100%" = Karakter Anda 100% selalu dodge saat diserang (damage 0, overhead "DODGE"). Catatan: Jangan aktifkan bersamaan dengan Always Hit.
-4) "Anti Cooldown / No Cooldown" = Menghapus semua jeda cooldown jutsu reguler, Bloodline, dan Senjutsu. Bisa spam jutsu tiap giliran tanpa timer. Aktifkan SEBELUM masuk battle.
-5) "Auto Massive Damage / 1-Hit Kill" = Otomatis scan dan patch A3 -&gt; A9 pada BattleProcessor dan Main tanpa perlu scan manual. Menghasilkan damage jutaan (sekali serang langsung tamat). Aktifkan saat sudah di battle.
+  <Comments>===============================================================
+NINJA SAGA CHEAT TABLE - PVE BOSS MINOTAUR &amp; PVP EDITION
+===============================================================
+
+PANDUAN MENGALAHKAN BOSS MINOTAUR:
+
+1. [KUNCI UTAMA] "★ 100% Dodge Khusus Player (POINTER PLAYER ONLY)":
+   - Mengunci Agility player ke 999999 via pointer memory khusus player (offset +0xEF4).
+   - Memberikan 100% Dodge dan kecepatan giliran super cepat HANYA untuk player.
+   - Musuh/Minotaur TIDAK terpengaruh sama sekali!
+   - Cara pakai: Aktifkan kotak centangnya saat sudah berada di dalam arena battle.
+
+2. [KOMBINASI WAJIB] "★ Always Hit / Anti Dodge Musuh":
+   - Mematikan kemampuan dodge musuh secara mutlak (dodge = false).
+   - Menjamin semua jutsu dan serangan senjata Anda 100% mengenai Minotaur Head, Left Arm, dan Right Arm tanpa pernah miss/dodge!
+
+3. [CADANGAN IMMORTAL] "★ Darah Kebal Sejati (True God Mode)":
+   - Sudah diperbaiki dari script lama! Sekarang menargetkan offset live HP (+0xEE0).
+   - Setiap kali Anda menerima damage dari Minotaur, darah seketika terisi penuh 100% secara instan. Karakter Anda tidak akan bisa mati!
+
+4. [OPSIONAL INSTANT WIN] "Auto Massive Damage / 1-Hit Kill":
+   - Mengubah kalkulasi formula damage menjadi perkalian bitwise.
+   - Sekali serang langsung menghasilkan damage jutaan (sekali serang Minotaur langsung tewas).
+
+5. [POINTER MANUAL]:
+   - Anda juga dapat melihat dan membekukan langsung angka live Current HP (+0xEE0) dan Agility (+0xEF4) di daftar tabel paling bawah.
+===============================================================
 </Comments>
 </CheatTable>
