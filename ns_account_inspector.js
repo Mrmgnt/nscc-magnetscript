@@ -6,7 +6,7 @@
  * Fitur:
  *   - Memindai seluruh akun di accounts.txt secara otomatis
  *   - Mengumpulkan data: Nama, Level, XP, Gold, Saga Tokens, Rank Ninja,
- *     Bloodline/Talent, Event Currency (Heart/Energy), dan Gear yang terpasang
+ *     Bloodline/Talent, Tiket Hunting Passport (item509), dan Gear yang terpasang
  *   - Menyajikan data dalam tabel ringkas di terminal
  *   - Mendukung ekspor laporan ke format JSON (account_audit.json) dan CSV (account_audit.csv)
  *
@@ -45,21 +45,23 @@ function loadAccounts() {
     }
     const raw = fs.readFileSync(ACCOUNTS_FILE, 'utf8');
     const accounts = [];
+    const seen = new Set();
     const lines = raw.split(/\r?\n/);
     for (const l of lines) {
         const trimmed = l.trim();
         if (!trimmed || trimmed.startsWith('#')) continue;
         let user = '', pass = '';
         if (trimmed.includes(':')) {
-            const idx = trimmed.indexOf(':');
-            user = trimmed.slice(0, idx).trim();
-            pass = trimmed.slice(idx + 1).trim();
+            const parts = trimmed.split(':');
+            user = (parts[0] || '').trim();
+            pass = (parts[1] || '').trim();
         } else if (trimmed.includes(',')) {
-            const idx = trimmed.indexOf(',');
-            user = trimmed.slice(0, idx).trim();
-            pass = trimmed.slice(idx + 1).trim();
+            const parts = trimmed.split(',');
+            user = (parts[0] || '').trim();
+            pass = (parts[1] || '').trim();
         }
-        if (user && pass) {
+        if (user && pass && !seen.has(user.toLowerCase())) {
+            seen.add(user.toLowerCase());
             accounts.push({ user, pass });
         }
     }
@@ -76,7 +78,7 @@ async function inspectAccount(username, password) {
         };
     }
 
-    const tokens = (s.accountFlag !== undefined && s.accountFlag !== null) ? Number(s.accountFlag) : 0;
+    const tokens = Number(s.tokens !== undefined ? s.tokens : (s.raw && s.raw.result && s.raw.result[2]) || 0);
     const rl = await c.amf('CharacterDAO.getCharactersList', [s.sessionKey]);
     const rawList = (rl.body && Array.isArray(rl.body.result)) ? rl.body.result : [];
     if (rawList.length === 0) {
@@ -112,16 +114,10 @@ async function inspectAccount(username, password) {
             continue;
         }
 
-        // Ekstraksi currency event
-        const cur = {};
-        String(charObj.character_common_currency || '').split(',').forEach(p => {
+        let huntingTickets = 0;
+        String(charObj.character_item || '').split(',').forEach(p => {
             const [a, b] = p.split(':');
-            if (a) cur[a] = +b;
-        });
-        const mat = {};
-        String(charObj.character_material || '').split(',').forEach(p => {
-            const [a, b] = p.split(':');
-            if (a) mat[a] = +b;
+            if (a === 'item509' || a === '509') huntingTickets = +b || 0;
         });
 
         const rankNumber = Number(charObj.character_rank) || 0;
@@ -141,7 +137,7 @@ async function inspectAccount(username, password) {
             weapon: charObj.character_equipped_weapon || '(default)',
             backItem: charObj.character_equipped_back_item || '(none)',
             bodySet: charObj.character_body_set || '(default)',
-            halloweenHeart: mat[1027] !== undefined ? mat[1027] : (cur[1027] !== undefined ? cur[1027] : 0),
+            huntingTickets,
             status: 'OK'
         });
     }
@@ -164,7 +160,7 @@ function printTable(rows) {
         'Gold'.padEnd(14),
         'Tokens'.padEnd(9),
         'Bloodline'.padEnd(12),
-        'Heart'.padEnd(6),
+        'Tiket'.padEnd(6),
         'Status'
     ].join(' | ');
 
@@ -180,16 +176,16 @@ function printTable(rows) {
         const gold = (r.gold !== undefined ? r.gold.toLocaleString() : '-').padEnd(14);
         const tok = (r.tokens !== undefined ? r.tokens.toLocaleString() : '-').padEnd(9);
         const bl = String(r.bloodline || '-').slice(0, 12).padEnd(12);
-        const hrt = String(r.halloweenHeart !== undefined ? r.halloweenHeart : '-').padEnd(6);
+        const tkt = String(r.huntingTickets !== undefined ? r.huntingTickets : '-').padEnd(6);
         const st = r.status === 'OK' ? '✓ OK' : ('✗ ' + (r.error || r.status));
 
-        console.log([no, user, charName, lv, rank, gold, tok, bl, hrt, st].join(' | '));
+        console.log([no, user, charName, lv, rank, gold, tok, bl, tkt, st].join(' | '));
     });
     console.log('='.repeat(105) + '\n');
 }
 
 function exportCsv(rows) {
-    const headers = ['No', 'Username', 'PlayerId', 'CharacterName', 'Level', 'XP', 'Gold', 'Tokens', 'Rank', 'Bloodline', 'Weapon', 'BackItem', 'HalloweenHeart', 'Status'];
+    const headers = ['No', 'Username', 'PlayerId', 'CharacterName', 'Level', 'XP', 'Gold', 'Tokens', 'Rank', 'Bloodline', 'Weapon', 'BackItem', 'HuntingTickets', 'Status'];
     const lines = [headers.join(',')];
 
     rows.forEach((r, idx) => {
@@ -206,7 +202,7 @@ function exportCsv(rows) {
             `"${r.bloodline || ''}"`,
             `"${r.weapon || ''}"`,
             `"${r.backItem || ''}"`,
-            r.halloweenHeart || 0,
+            r.huntingTickets || 0,
             `"${r.status || ''}"`
         ];
         lines.push(lineData.join(','));

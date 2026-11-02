@@ -93,94 +93,84 @@ if not "%NS_CHAR_NAME%"=="" (
 )
 echo ======================================================================
 echo.
-echo   [ 1 ] RUTINITAS HARIAN ^& EVENT
-echo         1. Jatah Harian Lengkap (Daily TP/SS + Hunt + Event + Auto Exam)
-echo         2. Event Battle (Halloween Furious Zombie + Tengu / Kage)
-echo         3. TP Training ^& SS Training (Jalur Misi Resmi)
-echo         4. Hunting House / Eudemon Garden (Boss Hunt Auto)
+echo   [ 1 ] RUTINITAS HARIAN ^& HUNTING
+echo         1. Jatah Harian Lengkap (TP + SS + Eudemon Dragon + Claim HH)
+echo         2. TP Training ^& SS Training (Jalur Misi Resmi)
+echo         3. Eudemon Dragon Saja (Auto 3x Emblem / 1x Free Cepat)
+echo         4. Hunting House Saja (Auto Claim 5/10 Tiket + Battle Boss / Claim)
+echo         5. Menu Gabungan Hunting House ^& Eudemon Dragon (Semua Mode)
 echo.
 echo   [ 2 ] MISI ^& GRINDING LEVEL
-echo         5. Misi Grade S (Auto Stamina Runner: Stage 1-5, XP 80k-100k)
-echo         6. Auto Leveling + Ujian Hard (Chunin / Jounin / Sennin)
-echo         7. Murni Grinding Misi Grade Level (C / B / A / S)
-echo         8. Cek Daftar Misi ^& Status Selesai (Per Grade)
+echo         6. Misi Grade S (Auto Stamina Runner: Stage 1-5, XP 80k-100k)
+echo         7. Auto Leveling + Ujian Hard (Chunin / Jounin / Sennin)
+echo         8. Murni Grinding Misi Grade Level (C / B / A / S)
+echo         9. Cek Daftar Misi ^& Status Selesai (Per Grade)
 echo.
-echo   [ 3 ] TOOLS ^& PENGUJIAN
-echo         9. Dummy Farmer (Auto Register/Login Akun ^& Kirim Gift Harian)
-echo        10. Test Local Feed (Multi-Threaded Dev Test)
-echo        11. Multi-Account ^& Multi-Character Runner (accounts.txt)
+echo   [ 3 ] MULTI-ACCOUNT ^& TOOLS
+echo        10. Multi-Account ^& Multi-Character Runner (accounts.txt)
+echo        11. Dummy Farmer (Auto Register/Login Akun ^& Kirim Gift Harian)
+echo        12. Test Local Feed (Multi-Threaded Dev Test)
 echo.
 echo   [ 4 ] INFORMASI ^& KARAKTER
-echo        12. Cek Status Karakter (Level, XP, Gold, Token, Status Ujian, Item)
-echo        13. Ganti Karakter Aktif (Pilih karakter lain di akun ini)
-echo        14. Ganti Akun / Logout
+echo        13. Cek Status Karakter (Level, XP, Gold, Token, Ujian, Hunting)
+echo        14. Ganti Karakter Aktif (Pilih karakter lain di akun ini)
+echo        15. Ganti Akun / Logout
 echo.
 echo         0. Keluar
 echo ======================================================================
 set "PILIH="
-set /p "PILIH=Pilih menu [0-14]: "
+set /p "PILIH=Pilih menu [0-15]: "
 
 if "%PILIH%"=="1" goto DAILY
-if "%PILIH%"=="2" goto EVENT
-if "%PILIH%"=="3" goto TRAIN
-if "%PILIH%"=="4" goto HUNT
-if "%PILIH%"=="5" goto GRADES
-if "%PILIH%"=="6" goto LEVEL
-if "%PILIH%"=="7" goto MISSIONONLY
-if "%PILIH%"=="8" goto MISSIONS
-if "%PILIH%"=="9" goto DUMMYFARMER
-if "%PILIH%"=="10" goto LOCALFEED
-if "%PILIH%"=="11" goto MULTIMANAGER
-if "%PILIH%"=="12" goto STATE
-if "%PILIH%"=="13" goto GANTICHAR
-if "%PILIH%"=="14" goto GANTI
+if "%PILIH%"=="2" goto TRAIN
+if "%PILIH%"=="3" goto EUDEMON
+if "%PILIH%"=="4" goto HUNTINGHOUSE
+if "%PILIH%"=="5" goto HUNT
+if "%PILIH%"=="6" goto GRADES
+if "%PILIH%"=="7" goto LEVEL
+if "%PILIH%"=="8" goto MISSIONONLY
+if "%PILIH%"=="9" goto MISSIONS
+if "%PILIH%"=="10" goto MULTIMANAGER
+if "%PILIH%"=="11" goto DUMMYFARMER
+if "%PILIH%"=="12" goto LOCALFEED
+if "%PILIH%"=="13" goto STATE
+if "%PILIH%"=="14" goto GANTICHAR
+if "%PILIH%"=="15" goto GANTI
 if "%PILIH%"=="0" goto END
 goto MENU
 
 :DAILY
 cls
 echo ======================================================================
-echo              JATAH HARIAN LENGKAP (DAILY + EVENT + HUNT)
+echo       JATAH HARIAN LENGKAP (TP + SS + EUDEMON DRAGON + CLAIM HH)
 echo ======================================================================
-echo   Menjalankan seluruh rutinitas harian otomatis:
-echo     1. Special Event : Kage Apprenticeship ^& Halloween Furious Zombie
-echo     2. Daily Mission : TP Training ^& SS Training
-echo     3. Hunting House : Eudemon Garden
+echo   Pilih paket rutinitas harian yang ingin dijalankan:
+echo     1. Jatah Harian Murni (Claim Tiket HH + TP + SS + Eudemon Dragon)
+echo        [Tanpa battle Hunting House ^& tanpa grinding misi level]
+echo     2. Jatah Harian + Sekalian Battle Boss Hunting House
+echo     3. Jatah Harian + Lanjut Auto Leveling / Ujian / Grade S
 echo.
 echo   Tips: Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti ke menu.
 echo.
-set "TARGET="
-set /p "TARGET=Tambah target naik level? (kosong = hanya jatah harian, misal: 80/100): "
+set "DOPT="
+set /p "DOPT=Pilih mode [1/2/3, Enter = 1]: "
+if "%DOPT%"=="" set "DOPT=1"
 echo.
-if "%TARGET%"=="" (
-  node ns_daily.js
+if "%DOPT%"=="1" (
+  node ns_daily.js --pure
+) else if "%DOPT%"=="2" (
+  node ns_daily.js --pure --with-hh-battle
+) else if "%DOPT%"=="3" (
+  set "TARGET="
+  set /p "TARGET=Target naik level berapa? (kosong = 100, misal: 60/80/100): "
+  echo.
+  if "%TARGET%"=="" (
+    node ns_daily.js
+  ) else (
+    node ns_daily.js --level %TARGET%
+  )
 ) else (
-  node ns_daily.js --level %TARGET%
-)
-echo.
-pause
-goto MENU
-
-:EVENT
-cls
-echo ======================================================================
-echo                       EVENT BATTLE
-echo ======================================================================
-echo   1. Halloween Furious Zombie + Tengu Goblin (Semua)
-echo   2. Tengu Goblin / Kage Apprenticeship saja
-echo   3. Halloween / Furious Zombie saja
-echo.
-echo   Tips: Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti ke menu.
-echo.
-set "EV="
-set /p "EV=Pilih (1/2/3, kosong = 1) : "
-echo.
-if "%EV%"=="2" (
-  node ns_event.js kage 20
-) else if "%EV%"=="3" (
-  node ns_event.js halloween 10
-) else (
-  node ns_event.js all 20
+  node ns_daily.js --pure
 )
 echo.
 pause
@@ -201,23 +191,93 @@ echo.
 pause
 goto MENU
 
+:EUDEMON
+cls
+echo ======================================================================
+echo          EUDEMON DRAGON / GARDEN (AUTO 3X EMBLEM / 1X FREE)
+echo ======================================================================
+echo   - Otomatis mendeteksi kuota harian per room dari server:
+echo       * Akun Emblem     : 3x lawan per boss per hari
+echo       * Akun Non-Emblem : 1x lawan per boss per hari
+echo   - Room yang jatahnya sudah habis (0x) otomatis di-skip instan.
+echo.
+echo   1. Jalankan Farming Eudemon Dragon Sekarang (Cepat)
+echo   2. Lihat Status Room Eudemon Dragon ^& Hunting House
+echo.
+echo   Tips: Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti ke menu.
+echo.
+set "EUD="
+set /p "EUD=Pilih [1/2, Enter = 1] : "
+echo.
+if "%EUD%"=="2" (
+  node ns_hunt.js status
+) else (
+  node ns_hunt.js eudemon 10 4
+)
+echo.
+pause
+goto MENU
+
+:HUNTINGHOUSE
+cls
+echo ======================================================================
+echo        HUNTING HOUSE (AUTO CLAIM DAILY PASSPORT + BATTLE BOSS)
+echo ======================================================================
+echo   - Auto Claim Daily Hunting Passport (item509):
+echo       * Free User   : +5 Tiket Hunting per hari
+echo       * Emblem User : +10 Tiket Hunting per hari
+echo   - Battle Boss Hunting House (Zone 1-6: Ginkaku s/d Tsuchigumo)
+echo     menggunakan tiket Hunting Passport yang dimiliki.
+echo.
+echo   1. Auto Claim Daily Passport + Battle Boss Hunting House
+echo   2. Claim Daily Hunting Passport Saja (Tanpa Battle)
+echo   3. Lihat Status Tiket ^& Boss Hunting House
+echo.
+echo   Tips: Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti ke menu.
+echo.
+set "HHO="
+set /p "HHO=Pilih [1/2/3, Enter = 1] : "
+echo.
+if "%HHO%"=="2" (
+  node ns_hunt.js claim
+) else if "%HHO%"=="3" (
+  node ns_hunt.js status
+) else (
+  node ns_hunt.js house 10 4
+)
+echo.
+pause
+goto MENU
+
 :HUNT
 cls
 echo ======================================================================
-echo                 HUNTING HOUSE / EUDEMON GARDEN
+echo          MENU GABUNGAN HUNTING HOUSE ^& EUDEMON DRAGON
 echo ======================================================================
-echo   1. Lihat daftar room (Status)
-echo   2. Jalankan semua room (Auto Hunt)
+echo   1. Paket Harian: Eudemon Dragon + Claim Hunting House (Tanpa Battle HH)
+echo   2. Keduanya Lengkap: Claim HH + Battle Hunting House + Eudemon Dragon
+echo   3. Eudemon Dragon Saja (Auto 3x Emblem / 1x Free)
+echo   4. Hunting House Saja (Auto Claim + Battle Boss Hunting House)
+echo   5. Claim Daily Hunting House Passport Saja (Tanpa Battle)
+echo   6. Lihat Daftar Room ^& Status Tiket (Status)
 echo.
 echo   Tips: Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti ke menu.
 echo.
 set "HNT="
-set /p "HNT=Pilih (1/2, kosong = 2) : "
+set /p "HNT=Pilih [1-6, Enter = 1] : "
 echo.
-if "%HNT%"=="1" (
+if "%HNT%"=="2" (
+  node ns_hunt.js both 10 4
+) else if "%HNT%"=="3" (
+  node ns_hunt.js eudemon 10 4
+) else if "%HNT%"=="4" (
+  node ns_hunt.js house 10 4
+) else if "%HNT%"=="5" (
+  node ns_hunt.js claim
+) else if "%HNT%"=="6" (
   node ns_hunt.js status
 ) else (
-  node ns_hunt.js run 10 20
+  node ns_hunt.js daily 10 4
 )
 echo.
 pause
@@ -292,7 +352,7 @@ echo.
 echo   Urutan:
 echo     (1) Misi Grade (C/B/A/S) level tertinggi karakter, naik terus
 echo     (2) Ujian Chunin/Jounin/Special Jounin/Sennin SELALU HARD MODE
-echo     (3) Murni misi grade (tanpa Event Kage / Halloween / Hunting)
+echo     (3) Murni misi grade (tanpa Hunting / Daily lain)
 echo   Setiap level 20/40/60/80 ujian diselesaikan dulu sebelum lanjut.
 echo.
 echo   Tips: Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti ke menu.

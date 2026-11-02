@@ -2,7 +2,7 @@
 /** cc: MagnetScript(Razki) */
 /**
  * ns_state.js — Cek Status Lengkap Karakter Ninja Saga
- * (Level, XP, Gold, Token, Rank & Level Cap, Status Ujian, Event Items)
+ * (Level, XP, Gold, Token, Rank & Level Cap, Status Ujian, Hunting House & Eudemon Dragon)
  */
 'use strict';
 
@@ -34,6 +34,18 @@ const RANK_CAPS = {
     9: 100
 };
 
+function countItemInString(rawStr, itemId) {
+    if (!rawStr) return 0;
+    const target = String(itemId).replace(/^item/, '');
+    for (const part of String(rawStr).split(',')) {
+        const [k, v] = part.trim().split(':');
+        if (k === 'item' + target || k === target) {
+            return parseInt(v, 10) || 0;
+        }
+    }
+    return 0;
+}
+
 (async () => {
     c.enableGracefulStop('menu bot');
     const u = process.env.NS_USER;
@@ -59,12 +71,10 @@ const RANK_CAPS = {
 
     const charId = row[0];
     let x = null;
-    let gk = '';
     for (let i = 1; i <= 6; i++) {
         const r = await c.amf('CharacterDAO.getCharacterById', [s.sessionKey, charId]);
         const b = r.body || {};
         if (b.gk) {
-            gk = String(b.gk);
             x = b.result || {};
             break;
         }
@@ -81,6 +91,7 @@ const RANK_CAPS = {
     const xp = Number(x.character_xp) || 0;
     const gold = Number(x.character_gold) || 0;
     const tokens = Number(s.tokens !== undefined ? s.tokens : (s.raw && s.raw.result && s.raw.result[2]) || 0);
+    const isEmblem = Number(s.accountFlag) === 1 || Number(s.raw && s.raw.result && s.raw.result[3]) > 0;
     const rank = Number(x.character_rank || 1);
     const rankName = RANK_NAMES[rank] || ('Rank ' + rank);
     const rankCap = RANK_CAPS[rank] || 100;
@@ -98,7 +109,7 @@ const RANK_CAPS = {
         examStatus = 'PERLU UJIAN CHUNIN (Level 20 Cap)!';
     }
 
-    // Parsing Currency & Item Event
+    // Parsing Currency & Material
     const cur = {};
     String(x.character_common_currency || '').split(',').forEach(p => {
         const [a, b] = p.split(':');
@@ -110,10 +121,12 @@ const RANK_CAPS = {
         if (a) mat[a] = +b;
     });
 
+    const tickets = countItemInString(x.character_item, '509') || countItemInString(x.character_material, '509');
+
     console.log('\n======================================================================');
     console.log('                     INFORMASI STATUS KARAKTER');
     console.log('======================================================================');
-    console.log(` Akun         : ${s.username} (Player ID: ${s.playerId})`);
+    console.log(` Akun         : ${s.username} (Player ID: ${s.playerId}) | Tipe: ${isEmblem ? 'Emblem User' : 'Free User'}`);
     console.log(` Karakter     : ${charName} (ID: ${charId}) | Gender: ${gender}`);
     console.log(` Level        : Lv ${level} (Maks Cap Rank: Lv ${rankCap})`);
     console.log(` Rank         : ${rankName} [Rank ID: ${rank}]`);
@@ -124,14 +137,13 @@ const RANK_CAPS = {
     console.log(` Total XP     : ${xp.toLocaleString('id-ID')}`);
     console.log('----------------------------------------------------------------------');
 
-    // Event Items & Essences
-    console.log(' Event & Material Khusus:');
+    // Hunting Passport & Material
+    console.log(' Item & Material Penting:');
+    console.log(`   - Hunting Passport (item509)   : ${tickets} Tiket`);
     const kariHeart = mat[1027] !== undefined ? mat[1027] : (cur[1027] !== undefined ? cur[1027] : '-');
     const kariCrystal = mat[1026] !== undefined ? mat[1026] : (cur[1026] !== undefined ? cur[1026] : '-');
     console.log(`   - Heart of Kari (Item 1027)    : ${kariHeart}`);
     console.log(`   - Crystal of Kari (Item 1026)  : ${kariCrystal}`);
-    const essences = [1126, 1127, 1128, 1129, 1130].map(id => `${id}:${cur[id] !== undefined ? cur[id] : 0}`).join(' | ');
-    console.log(`   - Kage Essences (1126..1130)   : ${essences}`);
 
     // Senjutsu Missions
     const mis = String(x.character_mission || '');
@@ -141,14 +153,21 @@ const RANK_CAPS = {
     const ssOut = ssMissions.map(m => `msn${m}: ${cariMsn(m)}`).join('  ');
     console.log(`   ${ssOut}`);
 
-    // Kage Mission Status
+    // Hunting House & Eudemon Dragon Status
     try {
-        const st = await c.amf('Anni9th.kageMissionStatus', [s.sessionKey]);
-        const m = (st.body && st.body.mission) || [];
-        if (m.length > 0) {
-            const ready = m.filter(v => Number(v.claim_status) === 0).length;
-            const claimed = m.filter(v => Number(v.claim_status) !== 0).length;
-            console.log(`\n Kage Mission: ${m.length} total (${claimed} diklaim, ${ready} siap klaim)`);
+        const hh = await c.amf('ItemDAO.getCharacterHuntingList', [s.sessionKey]);
+        if (hh.body && Number(hh.body.status) === 1) {
+            const canClaim = Boolean(hh.body.get_hunting_passport);
+            console.log(`\n Hunting House : Klaim Tiket Harian = ${canClaim ? 'SIAP DIKLAIM (+5 Free / +10 Emblem)' : 'Sudah diklaim hari ini'}`);
+        }
+    } catch (_) { }
+
+    try {
+        const eg = await c.amf('EudemonGarden.getHuntingStatus', [s.sessionKey]);
+        if (eg.body && eg.body.result && Array.isArray(eg.body.result.room)) {
+            const rooms = eg.body.result.room;
+            const totalTries = rooms.reduce((acc, r) => acc + (Number(r.time) || 0), 0);
+            console.log(` Eudemon Dragon: Sisa total ${totalTries}x kesempatan battle hari ini dari ${rooms.length} room`);
         }
     } catch (_) { }
 

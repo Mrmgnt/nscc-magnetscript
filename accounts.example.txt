@@ -9,25 +9,34 @@
 #   - username      : Nama login akun Ninja Saga
 #   - password      : Password akun
 #   - targetLevel   : Target level untuk auto-leveling (opsional, default: 60)
-#   - characterSlot : Slot karakter (1, 2, 3...) atau nama karakter (opsional, default: 1)
+#   - characterSlot :
+#       * "all" atau "*" (atau dikosongkan) -> Otomatis deteksi & jalankan SEMUA
+#         karakter yang ada di akun tersebut! Sangat cocok untuk akun Emblem
+#         yang punya lebih dari 1 karakter.
+#       * "1,2" -> Jalankan karakter slot 1 dan slot 2 secara berurutan.
+#       * "1" atau "2" -> Jalankan slot karakter tertentu saja.
 #
 # Catatan penting:
 #   Baris yang diawali '#' adalah komentar dan akan diabaikan.
-#   Jika 1 akun memiliki 2 karakter, masukkan 2 baris terpisah dengan slot berbeda.
-#   Bot akan mengerjakannya secara bergantian (sekuensial) agar sesi tidak bertabrakan!
+#   Bot mengerjakan setiap akun & karakter secara bergantian (sekuensial)
+#   agar sesi login tidak bertabrakan!
+#   Untuk Eudemon Dragon, bot otomatis mendeteksi kuota per karakter:
+#     - Akun Emblem     : Otomatis lawan 3x per room per hari
+#     - Akun Non-Emblem : Otomatis lawan 1x per room per hari
 #
 # ==============================================================================
-# CONTOH PENGGUNAAN:
+# CONTOH SKENARIO:
+#   3 Akun (Akun 1 Emblem & punya >1 karakter, Akun 2 & 3 Non-Emblem 1 karakter)
 # ==============================================================================
 #
-# Akun 1 (Memiliki 2 karakter):
-# - Karakter slot 1 ingin target level 60
-# - Karakter slot 2 ingin target level 40
-# akun1:rahasia123:60:1
-# akun1:rahasia123:40:2
+# Cara 1 (Otomatis deteksi semua karakter di Akun 1):
+# akun1_emblem:rahasia123:80:all
+# akun2_free:password456:80:1
+# akun3_free:password789:100:1
 #
-# Akun 2 (Memiliki 1 karakter, target level 80):
-# akun2:password456:80:1
-#
-# Akun 3 (Memiliki 1 karakter, target level 100):
-# akun3:password789:100:1
+# Cara 2 (Jika tiap karakter di Akun 1 ingin target level berbeda):
+# akun1_emblem:rahasia123:80:1
+# akun1_emblem:rahasia123:60:2
+# akun1_emblem:rahasia123:40:3
+# akun2_free:password456:80:1
+# akun3_free:password789:100:1

@@ -8,31 +8,27 @@
 ## ⚡ Fitur Utama
 
 - **Reliable Networking**: Transport AMF3 & JSON via subprocess `curl.exe` dengan streaming stdin data biner untuk bypass socket timeout di Windows.
-- **Auto Leveling (`ns_level.js`)**:
-  - Misi level tertinggi yang terbuka otomatis.
-  - Exam otomatis: Chunin (Lv 20), Jounin (Lv 40), Special Jounin (Lv 60), Sennin (Lv 80 - 12 mode hard).
-  - Mode retry cerdas: Jika jatah reward XP 0, cooldown otomatis 10-20 menit.
-- **Event Battle (`ns_event.js`)**:
-  - Kage Apprenticeship & Tengu Goblin (otomatis konsumsi Energy).
-  - Halloween Event (otomatis konsumsi Heart).
+- **Eudemon Dragon (`ns_hunt.js eudemon`)**:
+  - 10 Room boss (Rank C sampai Rank S).
+  - Otomatis mendeteksi jatah harian per room: **3x lawan untuk Akun Emblem**, **1x lawan untuk Akun Free**.
+  - Eksekusi dipercepat: otomatis skip room instan jika kuota `0x` atau belum terbuka.
+- **Hunting House (`ns_hunt.js house` / `claim`)**:
+  - Otomatis klaim **Daily Hunting Passport (`item509`)**: +5 Tiket untuk Free User, +10 Tiket untuk Emblem User.
+  - Mode **Claim Saja** (`claim`) atau **Claim + Battle Boss Hunting House** (`house` — Zone 1 s/d 6: Ginkaku & Kinkaku s/d Tsuchigumo).
 - **Training TP & SS (`ns_train.js`)**:
   - TP Missions (`msn170` - `msn174`): 10 TP + 2.000 XP + 2.000 Gold per misi.
   - SS Missions (`msn279` - `msn283`): 30 SS + 10.000 XP + 10.000 Gold per misi.
-- **Hunting House & Boss Room (`ns_hunt.js`)**:
-  - 10 Room boss (Rank C sampai Rank S).
-  - Melewati room jika daily limit server tercapai.
-- **Pengecekan Status (`ns_state.js`)**:
-  - Cek Level, XP, Gold, status misi, dan jatah reward karakter.
-- **Preset Loadout Switcher (`ns_loadout.js`)**:
-  - Simpan dan ganti preset Skill & Gear (PvP / PvE / Hunting).
-  - Kelola preset lokal tersimpan di `loadouts.json`.
-- **Multi-Account Manager (`ns_multi_manager.js`)**:
-  - Eksekusi massal farming akun dari file `accounts.txt`.
-  - Dilengkapi proteksi jeda acak/anti-detection delay antar akun.
+- **Auto Leveling (`ns_level.js`) & Misi Grade S (`ns_grade_s.js`)**:
+  - Misi level tertinggi yang terbuka otomatis.
+  - Exam otomatis: Chunin (Lv 20), Jounin (Lv 40), Special Jounin (Lv 60), Sennin (Lv 80 - 12 mode hard).
+  - Misi Grade S Stage 1-5 (Lv 80+, 82k-100k XP per battle).
+- **Multi-Account & Multi-Character Manager (`ns_multi_manager.js`)**:
+  - Eksekusi massal farming seluruh akun dan karakter dari file `accounts.txt`.
+  - Mendukung akun Emblem dengan banyak karakter (`slot = all` atau `1,2` atau per baris) maupun akun Free 1 karakter.
+  - Paket **Jatah Harian Full Multi-Akun**: TP Training + SS Training + Eudemon Dragon (3x Emblem / 1x Free) + Claim Daily Hunting House (tanpa battle).
   - Menyimpan ringkasan eksekusi ke `multi_manager_report.json`.
-- **Account Inspector & Auditor (`ns_account_inspector.js`)**:
-  - Scan multi-akun untuk memeriksa Level, Gold, Saga Tokens, Ninja Rank, Bloodline, dan Gear.
-  - Ekspor hasil audit ke terminal table, file JSON (`account_audit.json`), atau CSV (`account_audit.csv`).
+- **Pengecekan Status (`ns_state.js`) & Account Inspector (`ns_account_inspector.js`)**:
+  - Cek Level, XP, Gold, Saga Tokens, Ninja Rank, Tiket Hunting Passport (`item509`), status klaim harian, dan sisa kuota Eudemon Dragon.
 
 ---
 
@@ -47,7 +43,6 @@ Jalankan file batch:
 ```cmd
 nscc.bat
 ```
-Masukkan username & password akun Ninja Saga kamu (hanya disimpan di sesi memori, tidak disimpan ke file).
 
 ### 3. Menjalankan Mandiri via Terminal (CLI)
 
@@ -57,97 +52,73 @@ set NS_USER=akun_anda
 set NS_PASS=password_anda
 ```
 
-#### Leveling & Misi:
+#### Hunting House & Eudemon Dragon (`ns_hunt.js`):
 ```cmd
-:: Leveling hingga level 80 dengan jeda 10 detik
-node ns_level.js 80 10
+:: Eudemon Dragon saja (Auto 3x Emblem / 1x Free, cepat)
+node ns_hunt.js eudemon 10 4
 
-:: Hanya misi tanpa event/hunting
-node ns_level.js 60 8 --only-mission
+:: Hunting House saja (Auto Claim 5/10 Tiket + Battle Boss Hunting House)
+node ns_hunt.js house 10 4
+
+:: Claim Daily Hunting House Passport saja (Tanpa Battle)
+node ns_hunt.js claim
+
+:: Paket Harian (Claim Daily Hunting House + Battle Eudemon Dragon, tanpa battle HH)
+node ns_hunt.js daily 10 4
+
+:: Keduanya Lengkap (Claim HH + Battle HH + Battle Eudemon Dragon)
+node ns_hunt.js both 10 4
+
+:: Cek Status Tiket, Boss Hunting House, dan Kuota Eudemon Dragon
+node ns_hunt.js status
 ```
 
-#### Event, Training & Hunting:
+#### Jatah Harian (`ns_daily.js`) & Training (`ns_train.js`):
 ```cmd
-:: Jalankan event kage & halloween
-node ns_event.js all 15
+:: Jatah Harian Murni (Claim HH + TP + SS + Eudemon Dragon, tanpa battle HH & tanpa leveling)
+node ns_daily.js --pure
 
-:: Training TP & SS
+:: Jatah Harian + Sekalian Battle Boss Hunting House
+node ns_daily.js --pure --with-hh-battle
+
+:: Jatah Harian Lengkap + Auto Leveling hingga level 80
+node ns_daily.js --level 80
+
+:: Training TP & SS saja
 node ns_train.js tp 5 15
 node ns_train.js ss 5 15
-
-:: Hunting House semua room
-node ns_hunt.js run 10 20
-
-:: Cek Status Akun Aktif
-node ns_state.js
 ```
 
-#### Loadout & Preset Switcher (`ns_loadout.js`):
-```cmd
-:: Tampilkan menu interaktif loadout
-node ns_loadout.js
-
-:: Lihat daftar preset tersimpan
-node ns_loadout.js list
-
-:: Cek loadout aktif karakter saat ini di server
-node ns_loadout.js current
-
-:: Simpan loadout aktif saat ini sebagai preset baru (misal: pvp)
-node ns_loadout.js save pvp
-
-:: Pasang preset ke karakter di server
-node ns_loadout.js apply pvp
-
-:: Hapus preset tersimpan
-node ns_loadout.js delete pvp
-```
-
-#### Multi-Account Farming Runner (`ns_multi_manager.js`):
-Siapkan file `accounts.txt` (contoh format ada di `accounts.example.txt`):
+#### Multi-Account & Multi-Character Farming (`ns_multi_manager.js`):
+Siapkan file `accounts.txt` (contoh ada di `accounts.example.txt`):
 ```text
-username1:password123
-username2:password456
+# Akun 1 (Emblem, punya >1 karakter -> gunakan "all" agar semua karakter otomatis dijalankan)
+akun1_emblem:password123:80:all
+
+# Akun 2 & 3 (Non-Emblem, 1 karakter)
+akun2_free:password456:80:1
+akun3_free:password789:100:1
 ```
 Jalankan aksi farming massal:
 ```cmd
-:: Jalankan jatah harian untuk seluruh akun di accounts.txt (jeda 15s antar akun)
-node ns_multi_manager.js daily --delay 15
+:: Menu interaktif Multi-Account
+node ns_multi_manager.js
 
-:: Jalankan hunting house untuk seluruh akun
-node ns_multi_manager.js hunt --delay 10
+:: Jatah Harian Full Multi-Akun (TP + SS + Eudemon Dragon + Claim HH Tanpa Battle)
+node ns_multi_manager.js daily --delay 6
 
-:: Jalankan training TP & SS untuk seluruh akun
-node ns_multi_manager.js train --delay 10
+:: Jatah Harian Full + Battle Hunting House
+node ns_multi_manager.js daily_hh --delay 6
 
-:: Jalankan event battle untuk seluruh akun
-node ns_multi_manager.js event --delay 12
+:: Eudemon Dragon saja untuk semua akun/karakter
+node ns_multi_manager.js eudemon --delay 6
 
-:: Leveling hingga level 60 untuk seluruh akun
-node ns_multi_manager.js level 60
+:: Hunting House saja (Claim + Battle) untuk semua akun/karakter
+node ns_multi_manager.js house --delay 6
+
+:: Claim Daily Hunting House saja (Tanpa Battle) untuk semua akun/karakter
+node ns_multi_manager.js claim --delay 5
 ```
-
-#### Multi-Account Inspector & Audit (`ns_account_inspector.js`):
-```cmd
-:: Pindai seluruh akun di accounts.txt dan tampilkan tabel
-node ns_account_inspector.js
-
-:: Pindai dan simpan laporan ke file CSV
-node ns_account_inspector.js --csv
-
-:: Pindai dan simpan laporan ke file JSON
-node ns_account_inspector.js --json
-
-:: Pindai hanya akun aktif saat ini (NS_USER & NS_PASS)
-node ns_account_inspector.js --me
-```
-
----
-
-## 🛡️ Catatan & Keamanan
-- Gunakan dengan bijak. Otomasi game memiliki risiko pemblokiran akun.
-- Disarankan menggunakan akun sekunder / farming.
-- Jangan mengunggah file `accounts.txt` atau kredensial akun ke repository publik.
 
 ---
 

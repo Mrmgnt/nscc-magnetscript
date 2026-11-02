@@ -123,6 +123,34 @@ const fd = s => hexOf(bytes(s));
 // _frk = _fd(_fb(_fc(_fa(s, sk), sk), sk))  (jalur SS Training / grade lain)
 const frk = (s, sk) => fd(fb(fc(fa(s, sk), sk), sk));
 
+// ---- _zra (token Hunting House startHunting: _zd(_zc(_zb(_za(p,k),k),k))) ----
+// Main._za : x = c ^ k[(2i+1)%len], rotl 1
+function za(s, sk) {
+    if (!sk.length) return s;
+    const a = bytes(s), k = bytes(sk);
+    return str(a.map((c, i) => rotl((c ^ k[(i * 2 + 1) % k.length]) & 0xFF, 1)));
+}
+// NinjaSaga._zb : balik urutan lalu (c + k[(i+7)%len] - i) & 0xFF
+function zb(s, sk) {
+    const rev = bytes(s).reverse();
+    if (!sk.length) return str(rev);
+    const k = bytes(sk);
+    return str(rev.map((c, i) => (c + k[(i + 7) % k.length] - i) & 0xFF));
+}
+// Main._zc : L = (len+1)&0xFF; x = (c ^ k[len-1-i%len] ^ ((L+i)&0xFF)) & 0xFF; ror 2; L = x
+function zc(s, sk) {
+    if (!sk.length) return s;
+    const a = bytes(s), k = bytes(sk);
+    let L = (a.length + 1) & 0xFF;
+    return str(a.map((c, i) => {
+        let x = (c ^ k[k.length - 1 - (i % k.length)] ^ ((L + i) & 0xFF)) & 0xFF;
+        x = ((x >> 2) | (x << 6)) & 0xFF;
+        L = x;
+        return x;
+    }));
+}
+const zra = (p, sk) => (!p || !sk) ? '' : hexOf(bytes(zc(zb(za(String(p), String(sk)), String(sk)), String(sk))));
+
 // ---- _zrb (token event: _zd(_zc2(_zb2(_za2(p,k),k),k))) ----
 // Main._za2 : x = (c + k[i%len]) & 0xFF ; rot kanan 3  ((x>>3)|(x<<5))
 function za2(s, sk) {
@@ -236,7 +264,7 @@ function qd(s) {
 function tokenBoss(v, key) { return qd(qc(qb(qa(v, key), key), key)); }
 function tokenLog(v, key) { return qd(qc2(qb2(qa2(v, key), key), key)); }
 
-module.exports = { SALT, sha1, msa, msc, msb, msd, msk, ua, uc, ub, ud, urk, fa, fc, fb, fd, frk, mk, rotl, bytes, str, za2, zb2, zc2, zrb, br, qa, qa2, qb, qb2, qc, qc2, qd, tokenBoss, tokenLog };
+module.exports = { SALT, sha1, msa, msc, msb, msd, msk, ua, uc, ub, ud, urk, fa, fc, fb, fd, frk, mk, rotl, bytes, str, za, zb, zc, zra, za2, zb2, zc2, zrb, br, qa, qa2, qb, qb2, qc, qc2, qd, tokenBoss, tokenLog };
 
 if (require.main === module && process.argv.includes('--test')) {
     let fail = 0;

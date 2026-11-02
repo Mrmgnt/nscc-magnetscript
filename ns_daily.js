@@ -2,22 +2,23 @@
 /**
  * cc: MagnetScript(Razki)
  *
- * ns_daily.js — satu script untuk semua jatah harian NinjaSaga.
+ * ns_daily.js — Satu script untuk semua jatah harian NinjaSaga.
  *
- *   NS_USER=... NS_PASS=... node ns_daily.js            # event + daily + hunting
- *   NS_USER=... NS_PASS=... node ns_daily.js --level 80 # tambah auto misi/ujian ke 80
+ * Penggunaan:
+ *   NS_USER=... NS_PASS=... node ns_daily.js                   # Claim HH + TP + SS + Eudemon Dragon (+ Grade S jika Lv>=80)
+ *   NS_USER=... NS_PASS=... node ns_daily.js --pure            # Murni: TP + SS + Eudemon Dragon + Claim Hunting House (tanpa battle HH)
+ *   NS_USER=... NS_PASS=... node ns_daily.js --with-hh-battle  # Tambah battle Boss Hunting House juga
+ *   NS_USER=... NS_PASS=... node ns_daily.js --level 85        # Tambah auto misi/ujian ke target level
  *
- * Urutan (sesuai permintaan user):
- *   1. Special event  : Kage Apprenticeship (sampai energy habis) -> Halloween (sampai heart habis)
- *   2. Daily mission  : TP Training -> SS Training -> Hunting House
- *   3. Auto misi      : misi level tertinggi + ujian (kalau --level diisi)
- *
- * Tiap tahap jalan sebagai proses terpisah supaya satu gagal tidak mematikan yang lain.
- * Output anak ditangkap lalu dicetak, sehingga ringkasan bisa menunjukkan berapa reward
- * yang BENAR-BENAR masuk (bukan cuma "exit 0").
+ * Urutan Jatah Harian:
+ *   1. Daily Claim Hunting House : Klaim 5 tiket (Free) / 10 tiket (Emblem) tanpa battle
+ *   2. Daily TP Training         : Klaim TP harian
+ *   3. Daily SS Training         : Klaim XP/SS Training harian
+ *   4. Daily Eudemon Dragon      : Lawan semua room (3x per room untuk Emblem, 1x untuk Free)
+ *   5. Opsional                  : Battle Hunting House / Grade S / Auto Leveling
  */
 'use strict';
-const { spawn, spawnSync } = require('child_process');
+const { spawn } = require('child_process');
 const line = s => console.log(s);
 const dir = __dirname;
 const c = require('./nsclient.js');
@@ -25,17 +26,26 @@ const c = require('./nsclient.js');
 const argv = process.argv.slice(2);
 const iLv = argv.indexOf('--level');
 const targetLevel = iLv >= 0 ? Number(argv[iLv + 1] || 0) : (process.env.NS_TARGET_LEVEL ? Number(process.env.NS_TARGET_LEVEL) : 0);
+const isPureDaily = argv.includes('--pure');
+const withHhBattle = argv.includes('--with-hh-battle');
 
 if (!process.env.NS_USER || !process.env.NS_PASS) { line('Butuh NS_USER dan NS_PASS.'); process.exit(1); }
 
 async function bangunDaftarTahap() {
     const list = [
-        ['Special Event: Kage', ['node', 'ns_event.js', 'kage', '20']],
-        ['Special Event: Halloween', ['node', 'ns_event.js', 'halloween', '10']],
+        ['Daily: Claim Hunting House', ['node', 'ns_hunt.js', 'claim']],
         ['Daily: TP Training', ['node', 'ns_train.js', 'tp', '5', '20']],
         ['Daily: SS Training', ['node', 'ns_train.js', 'ss', '5', '20']],
-        ['Daily: Hunting House', ['node', 'ns_hunt.js', 'run', '10', '20']]
+        ['Daily: Eudemon Dragon', ['node', 'ns_hunt.js', 'eudemon', '10', '4']]
     ];
+
+    if (withHhBattle) {
+        list.push(['Daily: Hunting House Battle', ['node', 'ns_hunt.js', 'house', '10', '4']]);
+    }
+
+    if (isPureDaily) {
+        return list;
+    }
 
     // Cek profil karakter untuk evaluasi Ujian (Lv 20, 40, 60, 80) & Grade S
     let charLevel = 1;
@@ -44,16 +54,15 @@ async function bangunDaftarTahap() {
         const u = process.env.NS_USER, p = process.env.NS_PASS;
         const s = await c.login(u, p);
         if (s && s.sessionKey) {
-            const charId = process.env.NS_CHAR_ID || (s.characters && s.characters[0] && (s.characters[0].id || s.characters[0].character_id));
-            if (charId) {
-                const sc = await c.selectCharacter(s.sessionKey, charId);
-                const rawChar = (sc && sc.character) || (s.characters && s.characters.find(x => String(x.id || x.character_id) === String(charId))) || {};
-                charLevel = Number(rawChar.character_level || rawChar.level || 1);
-                charRank = Number(rawChar.character_rank || 1);
+            const rl = await c.amf('CharacterDAO.getCharactersList', [s.sessionKey]);
+            const chars = (rl && rl.body && Array.isArray(rl.body.result)) ? rl.body.result : [];
+            const row = c.getSelectedChar(chars, process.env.NS_CHAR_ID || process.env.NS_CHAR_SLOT);
+            if (row) {
+                charLevel = Number(row[2] || 1);
+                charRank = Number(row[3] || 1);
             }
         }
     } catch (e) {
-        // Jika gagal pre-check, fallback ke variabel env
         charLevel = Number(process.env.NS_CHAR_LEVEL || 1);
     }
 
@@ -113,19 +122,20 @@ function runTahap(cmd) {
 }
 
 function angka(out) {
-    // "RINGKASAN hunting: 10 room dicoba, 4 benar-benar dikreditkan"
-    let m = out.match(/(\d+)\s+benar-benar dikreditkan/);
+    let m = out.match(/(\d+)\/(\d+)\s+battle sukses/);
     if (m) return Number(m[1]);
-    // "RINGKASAN  battle sukses 2 | masuk ke karakter 2"
+    m = out.match(/(\d+)\s+benar-benar dikreditkan/);
+    if (m) return Number(m[1]);
     m = out.match(/masuk ke karakter\s+(\d+)/);
     if (m) return Number(m[1]);
-    // hitung baris KREDIT
-    const k = out.match(/KREDIT/g);
+    if (/Berhasil klaim Daily Hunting Passport/i.test(out)) return 1;
+    const k = out.match(/KREDIT|MENANG!/g);
     return k ? k.length : 0;
 }
+
 function sebab(out) {
     const baris = out.split(/\r?\n/).filter(Boolean);
-    const penting = baris.filter(b => /^(Catatan|STOP|RINGKASAN|PERINGATAN|SS Training sudah|semua misi|mode misi-saja|LOGIN GAGAL)/.test(b.trim()));
+    const penting = baris.filter(b => /^(Catatan|STOP|RINGKASAN|Ringkasan|\[OK\]|\[INFO\]|PERINGATAN|SS Training sudah|semua misi|mode misi-saja|LOGIN GAGAL)/.test(b.trim()));
     return penting.length ? penting[penting.length - 1].trim().slice(0, 120) : '';
 }
 
@@ -143,13 +153,10 @@ function sebab(out) {
     line('');
     line('################ RINGKASAN HARIAN ################');
     for (const [nama, kode, kredit, alasan] of hasil) {
-        line('  ' + nama.padEnd(26) + '| ' + (kode === 0 ? 'exit 0' : 'exit ' + kode) + ' | reward masuk: ' + kredit + (alasan ? ' | ' + alasan : ''));
+        line('  ' + nama.padEnd(28) + '| ' + (kode === 0 ? 'exit 0' : 'exit ' + kode) + ' | sukses/reward: ' + kredit + (alasan ? ' | ' + alasan : ''));
     }
-    const totalMasuk = hasil.reduce((a, h) => a + h[2], 0);
     line('');
-    line('');
-    line('Catatan: TP/SS dibatasi server 1x per hari, hunting 1x per room per hari,');
-    line('Kage berhenti sendiri saat energy habis, Halloween berhenti saat heart habis.');
+    line('Catatan: TP/SS dibatasi server 1x per hari, Eudemon Dragon 3x/room (Emblem) atau 1x/room (Free).');
     process.exit(hasil.every(h => h[1] === 0) ? 0 : 1);
 })().catch(e => {
     line('FATAL ' + (e.message || e));

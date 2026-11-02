@@ -361,7 +361,7 @@ function butuhUjian(st) {
     const jedaTunggu = Math.max(10, Number(process.env.NS_WAIT_SEC || 20)) * 1000; // 20 detik
     let sudahHunting = false;
 
-    // Mode auto-grind murni misi grade level (tanpa event Kage/Halloween)
+    // Mode auto-grind murni misi grade level
     const ujianSkip = new Set();
 
     if (oneMid) {
