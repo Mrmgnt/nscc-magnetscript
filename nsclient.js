@@ -196,14 +196,11 @@ function amf(service, params) {
     });
 }
 
-async function login(username, password, webData) {
+async function login(username, password) {
     username = String(username || '').trim();
     password = String(password || '');
-    let r = { status: 200, body: '' }, j = webData || null;
-    if (!j) {
-        r = await httpJson(API_HOST, '/login', { username, password, type: 'web' });
-        try { j = JSON.parse(r.body); } catch (_) { }
-    }
+    const r = await httpJson(API_HOST, '/login', { username, password, type: 'web' });
+    let j = null; try { j = JSON.parse(r.body); } catch (_) { }
     if (!j || j.success !== true) {
         const errMsg = (j && (j.message || j.error)) || r.body.slice(0, 300) || ('HTTP ' + r.status);
         return { ok: false, stage: 'web-login', http: r.status, message: errMsg, body: r.body.slice(0, 400) };
@@ -290,7 +287,7 @@ function enableGracefulStop(label = 'menu') {
                     handleStop('Ctrl+C');
                 }
             });
-        } catch (_) {}
+        } catch (_) { }
     }
 }
 

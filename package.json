@@ -6,7 +6,10 @@
   "license": "UNLICENSED",
   "scripts": {
     "selftest": "node lib/pve_crypto.js --test && node lib/ns_pve_socket.js --selftest && node lib/ns_captcha_solver.js --selftest && node lib/ns_pve_battle.js --selftest",
-    "coop": "node ns_coop_minotaur.js"
+    "coop": "node ns_coop_minotaur.js",
+    "captcha:test": "node tools/captcha_runner.js",
+    "captcha:review": "node tools/captcha_review_server.js",
+    "captcha:cli": "node tools/captcha_cli_review.js"
   },
   "dependencies": {
     "playwright-core": "^1.48.0"

@@ -1,6 +1,6 @@
 # Prompt Chat Baru - Rapikan Solver Captcha Offline
 
-Salin seluruh prompt di bawah ke chat Codex baru.
+Salin seluruh prompt di bawah ke chat baru.
 
 ---
 
@@ -175,9 +175,9 @@ Setelah tahap offline selesai, jangan langsung menjalankan live test. Laporkan k
 
 ## Cara Menggunakan Prompt Ini
 
-1. Buka chat Codex baru dengan workspace `E:\game\Ninja Saga`.
+1. Buka  workspace `E:\game\Ninja Saga`.
 2. Salin bagian prompt di antara garis `---`.
-3. Minta Codex membaca file ini bila konteks tambahan dibutuhkan:
+3. Minta untuk membaca file ini bila konteks tambahan dibutuhkan:
 
    ```text
    nscc-magnetscript\logs\captcha_fail\CAPTCHA_OFFLINE_REVIEW_PROMPT.md

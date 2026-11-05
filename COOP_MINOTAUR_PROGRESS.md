@@ -16,7 +16,7 @@ Dokumen ini menjadi sumber konteks utama untuk melanjutkan pekerjaan di chat bar
 | Captcha queue tunggal | **SELESAI** | Captcha diproses berurutan, tidak membuka beberapa challenge bersamaan. |
 | Rotate captcha | **BERHASIL LIVE** | Beberapa challenge rotate diterima server. |
 | Drag-shape captcha | **BERHASIL LIVE** | Beberapa challenge drag diterima server. |
-| Slider captcha | **PERBAIKAN SIAP, BELUM TERBUKTI LIVE TERBARU** | Artefak gagal lama kini menunjuk kotak checker valid; akun terkunci sebelum retest. |
+| Slider captcha | **OFFLINE 100% LULUS (8/8)** | Seluruh 8 artefak slider gagal berlabel ground truth lulus uji 0px diff; siap uji live 1 akun setelah unlock. |
 | Create/join/ready room | **BERHASIL LIVE** | Tiga akun pernah masuk room dan ready. |
 | Battle `start_atb` | **FIX SIAP, BELUM TERBUKTI LIVE** | Join sintetis dihapus; sekarang state `join` hanya membalas `start_atb`. |
 | Auto-kill server | **BELUM SELESAI** | Belum ada `battle_win` atau `battle_finish` setelah fix battle. |
@@ -63,6 +63,23 @@ Perbaikan terbaru:
 - simpan semua kandidat dan skor ke artefak diagnostic.
 
 Perbaikan tersebut lolos terhadap seluruh artefak slider gagal yang tersimpan. Namun hasil terbaru belum sempat dibuktikan live karena akun terkena captcha lock.
+
+### Overhaul dan Validasi Offline Captcha (5 November 2026)
+
+- **Total artefak**: 26 artefak ditemukan dan dipasangkan 100% (8 slider, 7 drag_shape, 11 rotate).
+- **Dataset ground truth**: 8 artefak slider diberi label manual di `logs/captcha_fail/captcha_labels.json`.
+- **Alat review visual offline**:
+  - `tools/captcha_gallery.html`: Web gallery lokal dengan canvas overlay, scrubbing, kontrol opacity, dan tombol pemilihan kandidat checker 1-klik.
+  - `tools/captcha_review_server.js`: Server HTTP lokal port 3333 (`npm run captcha:review`).
+  - `tools/captcha_cli_review.js`: CLI review & selection tool (`npm run captcha:cli`).
+  - `tools/captcha_runner.js`: Regression test runner (`npm run captcha:test`).
+  - `lib/png_decoder.js`: Native PNG decoder murni Node.js (0 external npm dependencies).
+- **Perubahan algoritma slider**:
+  - Ambang batas filter boundary dilonggarkan ke `0.40 * strongestBoundary` agar tidak membuang target valid.
+  - Penambahan pengukuran kontinuitas tepi (`borderMismatch`) pada 4 sisi piece vs background sekitarnya.
+  - Skor komposit terbobot: `Score = borderMismatch + 75 * histScore`.
+- **Akurasi Regression Test**: **100.0% (8/8 LULUS)** dengan selisih `0px` pada seluruh sampel.
+- **Dokumentasi detail**: lihat `CAPTCHA_OFFLINE_PROGRESS.md`.
 
 ### Bottleneck kedua: captcha lock server
 

@@ -1,0 +1,59 @@
+{
+  "1793837343880": {
+    "type": "slider",
+    "targetIndex": 4,
+    "expectedX": 302,
+    "confidence": "high",
+    "notes": "Kotak kanan x=302, garis lantai dan wallpaper menyambung (mismatch 29.73). Jawaban lama x=297 ditolak karena meleset 5px."
+  },
+  "1793837430930": {
+    "type": "slider",
+    "targetIndex": 2,
+    "expectedX": 251,
+    "confidence": "high",
+    "notes": "Kotak kanan x=251, garis dinding menyambung (mismatch 49.48 vs 80.28). Jawaban lama x=38 kandidat kiri ditolak."
+  },
+  "1793838403966": {
+    "type": "slider",
+    "targetIndex": 3,
+    "expectedX": 140,
+    "confidence": "medium",
+    "notes": "Kotak tengah x=140, batas bawah dan dinding menyambung (mismatch 82.57). Jawaban lama x=175 ditolak."
+  },
+  "1793838738878": {
+    "type": "slider",
+    "targetIndex": 3,
+    "expectedX": 231,
+    "confidence": "high",
+    "notes": "Kotak kanan x=231, checker sangat jelas (0.92) dan border mismatch sangat rendah (36.99). Jawaban lama x=17 ditolak."
+  },
+  "1793839415453": {
+    "type": "slider",
+    "targetIndex": 1,
+    "expectedX": 194,
+    "confidence": "medium",
+    "notes": "Kotak tengah x=194, garis lantai menyambung. Jawaban lama x=313 di kotak kanan ditolak server."
+  },
+  "1793839882897": {
+    "type": "slider",
+    "targetIndex": 1,
+    "expectedX": 102,
+    "confidence": "high",
+    "notes": "Kotak kiri x=102, border mismatch terendah 40.30 vs 80.42 dan 63.97. Jawaban lama x=43 ditolak."
+  },
+  "1793840024554": {
+    "type": "slider",
+    "targetIndex": 2,
+    "expectedX": 174,
+    "confidence": "high",
+    "notes": "Kotak tengah x=174, kontinuitas tepi atas sangat kuat (diff 24.16) dan mismatch terendah 37.19. Jawaban lama x=95 ditolak."
+  },
+  "1793852615709": {
+    "type": "slider",
+    "targetIndex": 3,
+    "expectedX": 193,
+    "confidence": "high",
+    "notes": "Garis lantai dan rak menyambung di checker tengah (x=193, mismatch terendah 86.75). Jawaban lama x=108 ditolak."
+  }
+}
+
