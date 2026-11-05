@@ -96,7 +96,7 @@ echo.
 echo   [ 1 ] RUTINITAS HARIAN ^& HUNTING
 echo         1. Jatah Harian Lengkap (TP + SS + Eudemon Dragon + Claim HH)
 echo         2. TP Training ^& SS Training (Jalur Misi Resmi)
-echo         3. Eudemon Dragon Saja (Auto 3x Emblem / 1x Free Cepat)
+echo         3. Eudemon Dragon Saja (Auto 3x Emblem / 1x Free Sampai Habis)
 echo         4. Hunting House Saja (Auto Claim 5/10 Tiket + Battle Boss / Claim)
 echo         5. Menu Gabungan Hunting House ^& Eudemon Dragon (Semua Mode)
 echo.
@@ -186,9 +186,7 @@ echo ======================================================================
 echo.
 echo   Tips: Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti ke menu.
 echo.
-node ns_train.js tp 5 20
-echo.
-node ns_train.js ss 5 20
+node ns_train.js all 5 15
 echo.
 pause
 goto MENU
@@ -202,8 +200,9 @@ echo   - Otomatis mendeteksi kuota harian per room dari server:
 echo       * Akun Emblem     : 3x lawan per boss per hari
 echo       * Akun Non-Emblem : 1x lawan per boss per hari
 echo   - Room yang jatahnya sudah habis (0x) otomatis di-skip instan.
+echo   - Menyelesaikan seluruh sisa jatah di semua room sampai tuntas (0x).
 echo.
-echo   1. Jalankan Farming Eudemon Dragon Sekarang (Cepat)
+echo   1. Jalankan Farming Eudemon Dragon Sekarang (Sampai Habis)
 echo   2. Lihat Status Room Eudemon Dragon ^& Hunting House
 echo.
 echo   Tips: Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti ke menu.
@@ -214,7 +213,7 @@ echo.
 if "%EUD%"=="2" (
   node ns_hunt.js status
 ) else (
-  node ns_hunt.js eudemon 10 4
+  node ns_hunt.js eudemon 10 11
 )
 echo.
 pause
@@ -245,7 +244,7 @@ if "%HHO%"=="2" (
 ) else if "%HHO%"=="3" (
   node ns_hunt.js status
 ) else (
-  node ns_hunt.js house 10 4
+  node ns_hunt.js house 10 11
 )
 echo.
 pause
@@ -269,17 +268,17 @@ set "HNT="
 set /p "HNT=Pilih [1-6, Enter = 1] : "
 echo.
 if "%HNT%"=="2" (
-  node ns_hunt.js both 10 4
+  node ns_hunt.js both 10 11
 ) else if "%HNT%"=="3" (
-  node ns_hunt.js eudemon 10 4
+  node ns_hunt.js eudemon 10 11
 ) else if "%HNT%"=="4" (
-  node ns_hunt.js house 10 4
+  node ns_hunt.js house 10 11
 ) else if "%HNT%"=="5" (
   node ns_hunt.js claim
 ) else if "%HNT%"=="6" (
   node ns_hunt.js status
 ) else (
-  node ns_hunt.js daily 10 4
+  node ns_hunt.js daily 10 11
 )
 echo.
 pause

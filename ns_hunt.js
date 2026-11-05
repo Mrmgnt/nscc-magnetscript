@@ -14,7 +14,7 @@
  *   3. node ns_hunt.js eudemon [jumlahRoom] [jedaDetik] [mulaiRoom]
  *      -> Farming Eudemon Dragon / Eudemon Garden saja.
  *         Otomatis deteksi Emblem (3x lawan per room) & Free User (1x lawan per room).
- *         Cepat: skip instan room yang jatahnya 0/terkunci, jeda battle singkat (default 4 detik).
+ *         Menyelesaikan seluruh sisa kuota di semua room sampai habis (0x).
  *
  *   4. node ns_hunt.js house [maksBattle] [jedaDetik]
  *      -> Auto Claim Daily Hunting House Passport + Battle Boss Hunting House (selama tiket cukup).
@@ -32,6 +32,10 @@ const crypto = require('crypto');
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const line = s => console.log(s);
+
+// Server amf.ninjasaga.cc menolak finishHunting jika durasi battle < 10 detik ("Battle completed too quickly")
+// dan langsung menghanguskan sesi startHunting tersebut. Gunakan minimal 10.5 detik agar 100% commit ke DB.
+const MIN_BATTLE_WAIT_MS = 10500;
 
 function kv(s) {
     let o = '';
@@ -70,30 +74,36 @@ function countTickets(essenceStr) {
 }
 
 function parseRewardInfo(fb) {
-    const rewards = Array.isArray(fb.reward_get) && fb.reward_get.length
-        ? fb.reward_get
-        : (Array.isArray(fb.reward) ? fb.reward : []);
+    const rewardAll = Array.isArray(fb.reward) ? fb.reward : [];
+    const rewardGet = Array.isArray(fb.reward_get) ? fb.reward_get : [];
     let xpGain = 0;
     let goldGain = 0;
     const items = [];
-    for (const r of rewards) {
+    for (const r of rewardAll) {
         const str = String(r || '');
         if (str.startsWith('xp_') || str.startsWith('xp')) {
             xpGain += Number(str.replace(/^xp_?/, '')) || 0;
         } else if (str.startsWith('gold_') || str.startsWith('gold')) {
             goldGain += Number(str.replace(/^gold_?/, '')) || 0;
-        } else if (!str.startsWith('petxp')) {
+        }
+    }
+    const itemSource = rewardGet.length ? rewardGet : rewardAll;
+    for (const r of itemSource) {
+        const str = String(r || '');
+        if (!str.startsWith('xp') && !str.startsWith('gold') && !str.startsWith('petxp')) {
             items.push(str);
         }
     }
-    return { xpGain, goldGain, items, raw: rewards };
+    return { xpGain, goldGain, items, raw: rewardAll };
 }
 
 (async () => {
     const rawMode = (process.argv[2] || 'status').toLowerCase();
     const maks = Number(process.argv[3] || 10);
-    const defaultJeda = Number(process.env.NS_HUNT_DELAY || 4);
-    const jeda = Math.max(2, Number(process.argv[4] || defaultJeda));
+    const defaultJeda = Number(process.env.NS_HUNT_DELAY || 10.5);
+    const reqJeda = Number(process.argv[4] || defaultJeda);
+    const battleWaitMs = Math.max(MIN_BATTLE_WAIT_MS, Math.round(reqJeda * 1000));
+    const battleWaitSecLabel = (battleWaitMs / 1000).toFixed(1).replace(/\.0$/, '');
     const mulaiRoom = Math.max(0, Number(process.argv[5] || 0));
 
     c.enableGracefulStop('menu bot');
@@ -111,11 +121,12 @@ function parseRewardInfo(fb) {
     const row = c.getSelectedChar(chars, process.env.NS_CHAR_ID || process.env.NS_CHAR_SLOT);
     if (!row) { line('Gagal ambil karakter.'); process.exit(3); }
     const charId = row[0];
-    const isEmblem = Number(s.userType) === 1;
+    // Di Account.as: FREE = 1, PREMIUM (EMBLEM) = 2
+    const isEmblem = Boolean(s.isEmblem || Number(s.accountType) === 2);
     line('Karakter aktif : ' + charId + ' "' + row[1] + '" (Lv ' + (row[2] || '?') + ') [' + (isEmblem ? 'EMBLEM' : 'FREE') + ']');
 
-    async function baca() {
-        for (let i = 0; i < 4; i++) {
+    async function baca(maxRetries = 10) {
+        for (let i = 0; i < maxRetries; i++) {
             const b = (await c.amf('CharacterDAO.getCharacterById', [s.sessionKey, charId])).body || {};
             if (b.gk) {
                 const x = b.result || {};
@@ -131,13 +142,14 @@ function parseRewardInfo(fb) {
                     tickets: countTickets(essenceRaw),
                 };
             }
-            await sleep(2000);
+            // Server memberlakukan cooldown ~12-15s jika getCharacterById baru saja dipanggil
+            await sleep(3000);
         }
         return null;
     }
 
-    let st = await baca();
-    if (!st) { line('Gagal membaca data karakter.'); process.exit(3); }
+    let st = await baca(10);
+    if (!st) { line('Gagal membaca data karakter (server cooldown). Coba beberapa detik lagi.'); process.exit(3); }
 
     const exRes = await c.amf('CharacterDAO.getExtraData', [s.sessionKey, charId, s.token, st.gk]);
     const ex = (exRes && exRes.body && exRes.body.result) ? exRes.body.result : {};
@@ -188,8 +200,7 @@ function parseRewardInfo(fb) {
 
         if (Number(cb.status) === 1) {
             const dapat = Number(cb.reward || (isEmblem ? 10 : 5));
-            st = (await baca()) || st;
-            const totalTiket = Math.max(st.tickets, tiketAwal + dapat);
+            const totalTiket = tiketAwal + dapat;
             st.tickets = totalTiket;
             line('  [OK] Berhasil klaim Daily Hunting Passport: +' + dapat + ' tiket (item509) | Total tiket: ' + totalTiket);
             return { claimed: true, reward: dapat, totalTickets: totalTiket };
@@ -250,9 +261,9 @@ function parseRewardInfo(fb) {
             tried++;
             const sbid = String(mb.startBattleId || mb.sbid || '1');
             st.tickets = Math.max(0, st.tickets - hh.cost);
-            line('  [#' + (bIdx + 1) + ' ' + pick.zone + ' (' + pick.mode + ')] Lawan ' + bosssid + ' (biaya ' + hh.cost + ' tiket, sisa ~' + st.tickets + ') -> tunggu ' + jeda + 's...');
+            line('  [#' + (bIdx + 1) + ' ' + pick.zone + ' (' + pick.mode + ')] Lawan ' + bosssid + ' (biaya ' + hh.cost + ' tiket, sisa ~' + st.tickets + ') -> battle ' + battleWaitSecLabel + 's...');
 
-            await sleep(jeda * 1000);
+            await sleep(battleWaitMs);
 
             const ver = '1';
             const jsonStr2 = '{"battles":[]}';
@@ -263,16 +274,10 @@ function parseRewardInfo(fb) {
             const br2 = k.br(String(bosssid) + '~0~' + sbid);
             const k8 = (ivg && hh.ivn) ? k.zrb(ivg, hh.ivn) : '';
 
-            let fin = null;
-            for (let retry = 1; retry <= 3; retry++) {
-                fin = await c.amf('ItemDAO.getBossReward', [
-                    s.sessionKey, sig, bosssid, 0, eventArray,
-                    battleLog, ver, sbid, jsonStr2, hash, br2, k8
-                ]);
-                const fb = (fin && fin.body) || {};
-                if (Number(fb.status) === 1) break;
-                if (retry < 3) await sleep(2000);
-            }
+            const fin = await c.amf('ItemDAO.getBossReward', [
+                s.sessionKey, sig, bosssid, 0, eventArray,
+                battleLog, ver, sbid, jsonStr2, hash, br2, k8
+            ]);
 
             const fb = (fin && fin.body) || {};
             if (Number(fb.status) === 1) {
@@ -287,16 +292,14 @@ function parseRewardInfo(fb) {
                 line('    -> GAGAL klaim reward boss: ' + JSON.stringify(fb).slice(0, 200));
             }
 
-            await sleep(1200);
+            await sleep(1000);
         }
 
-        const stAfter = await baca();
-        if (stAfter) st = stAfter;
         line('  Ringkasan Hunting House: ' + won + '/' + tried + ' battle sukses | Sisa tiket (item509): ' + st.tickets);
         return { tried, won };
     }
 
-    // Helper: Farming Eudemon Dragon / Eudemon Garden (Fix 3x Emblem / 1x Free + Cepat)
+    // Helper: Farming Eudemon Dragon / Eudemon Garden (Full Auto 3x Emblem / 1x Free)
     async function runEudemonGarden(maxRooms) {
         line('== Farming Eudemon Dragon (Eudemon Garden) ==');
         const hsInit = await c.amf('EudemonGarden.getHuntingStatus', [s.sessionKey]);
@@ -312,84 +315,80 @@ function parseRewardInfo(fb) {
         }
 
         let tried = 0, won = 0, skippedDone = 0, skippedLock = 0;
+        let totalXpGained = 0, totalGoldGained = 0;
         let cachedHs = hbInit; // gunakan respons awal untuk battle pertama agar hemat 1 request
+        const lockedRooms = new Set();
 
         const endRoom = Math.min(mulaiRoom + maxRooms, roomsInit.length);
-        for (let i = mulaiRoom; i < endRoom; i++) {
-            const rInfo = roomsInit[i];
-            if (!rInfo) continue;
+
+        async function clearRoom(roomIdx) {
+            const rInfo = roomsInit[roomIdx];
+            if (!rInfo) return;
             const initialTime = Number(rInfo.time || 0);
             const namaBoss = Array.isArray(rInfo.boss) ? rInfo.boss.join('+') : String(rInfo.boss || '');
 
-            // Skip instan tanpa delay jika jatah harian room sudah 0
             if (initialTime <= 0) {
-                if (Number(rInfo.status) === 0) {
-                    skippedLock++;
-                    line('  [Room ' + i + '] ' + namaBoss + ' (Rank ' + rInfo.rank + ') -> SKIP (Level belum cukup / terkunci)');
-                } else {
-                    skippedDone++;
-                    line('  [Room ' + i + '] ' + namaBoss + ' (Rank ' + rInfo.rank + ') -> SKIP (Jatah harian sudah habis: 0x)');
-                }
-                continue;
+                skippedDone++;
+                line('  [Room ' + roomIdx + '] ' + namaBoss + ' (Rank ' + rInfo.rank + ') -> SKIP (Jatah: 0x)');
+                return;
             }
 
-            // Loop sejumlah jatah harian room (3x untuk Emblem, 1x untuk Free)
-            const maxAttempts = Math.max(1, initialTime);
-            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            const kuotaLabel = Math.max(initialTime, isEmblem ? 3 : 1);
+            let safetyTries = 0;
+            const maxSafetyTries = initialTime + 3;
+
+            while (safetyTries < maxSafetyTries) {
+                safetyTries++;
                 const hb2 = cachedHs || ((await c.amf('EudemonGarden.getHuntingStatus', [s.sessionKey])).body || {});
-                cachedHs = null; // hanya pakai sekali, battle berikutnya wajib ambil token q7/q7f baru
+                cachedHs = null;
 
                 const q7b = String(hb2.q7 || '');
                 const q7fb = String(hb2.q7f || '');
-                const rooms2 = ((hb2.result || {}).room) || roomsInit;
-                const room = rooms2[i] || rInfo;
-                const sisaTime = Number(room.time != null ? room.time : (maxAttempts - attempt + 1));
+                const rooms2 = ((hb2.result || {}).room) || [];
+                const room = rooms2[roomIdx] || rInfo;
+                const sisaTime = Number(room.time != null ? room.time : 0);
 
                 if (sisaTime <= 0) {
-                    line('  [Room ' + i + '] Jatah room ini sudah habis (0x).');
                     break;
                 }
 
+                const keBerapa = kuotaLabel - sisaTime + 1;
                 const enemyStr = Array.isArray(room.boss) ? room.boss.join(',') : String(room.boss || '');
                 const currBoss = k.tokenBoss(gk3, q7b);
                 const egvTok = egv ? k.tokenBoss(egv, q7b) : '';
                 const battleLog = q7fb ? k.tokenLog(gk3, q7fb) : '';
-                const loc4 = h.getHash(String(i) + enemyStr);
+                const loc4 = h.getHash(String(roomIdx) + enemyStr);
 
-                const mulai = await c.amf('EudemonGarden.startHunting', [s.sessionKey, i, currBoss, loc4, egvTok, enemyStr]);
+                const mulai = await c.amf('EudemonGarden.startHunting', [s.sessionKey, roomIdx, currBoss, loc4, egvTok, enemyStr]);
                 const mb = (mulai && mulai.body) || {};
 
                 if (Number(mb.status) !== 1) {
                     const err = String(mb.error || '');
                     if (/daily limit/i.test(err)) {
                         skippedDone++;
-                        line('  [Room ' + i + '] ' + enemyStr + ' -> Limit harian room ini sudah habis.');
+                        line('  [Room ' + roomIdx + '] ' + enemyStr + ' -> Limit harian room ini sudah habis.');
                     } else if (/level is too low/i.test(err)) {
                         skippedLock++;
-                        line('  [Room ' + i + '] ' + enemyStr + ' -> Level karakter belum cukup untuk room ini.');
+                        lockedRooms.add(roomIdx);
+                        line('  [Room ' + roomIdx + '] ' + enemyStr + ' -> Level karakter belum cukup untuk room ini.');
                     } else {
-                        line('  [Room ' + i + '] ' + enemyStr + ' startHunting ditolak: ' + (err || JSON.stringify(mb).slice(0, 140)));
+                        line('  [Room ' + roomIdx + '] ' + enemyStr + ' startHunting ditolak: ' + (err || JSON.stringify(mb).slice(0, 140)));
                     }
-                    break; // langsung pindah ke room berikutnya tanpa perlu lawan ulang room ini
+                    break;
                 }
 
                 tried++;
-                const sbid = String(mb.startBattleId || mb.sbid || '');
-                line('  [Room ' + i + ' | Lawan ' + attempt + '/' + maxAttempts + '] ' + enemyStr + ' (Sisa jatah: ' + sisaTime + 'x) -> battle ' + jeda + 's...');
-                await sleep(jeda * 1000);
+                // Penting: di Main.as:1140, Central.main.startBattleId bernilai default "1"
+                const sbid = String(mb.startBattleId || mb.sbid || '1');
+                line('  [Room ' + roomIdx + ' | Lawan ' + Math.max(1, keBerapa) + '/' + kuotaLabel + '] ' + enemyStr + ' (Sisa jatah: ' + sisaTime + 'x) -> battle ' + battleWaitSecLabel + 's...');
+                await sleep(battleWaitMs);
 
                 const json = '{"battles":[]}';
-                let fin = null;
-                for (let retry = 1; retry <= 3; retry++) {
-                    fin = await c.amf('EudemonGarden.finishHunting', [
-                        s.sessionKey, i, [], 0, h.getHash(String(i) + 0), '1',
-                        battleLog, sbid, json, h.getHash('1' + sbid + json),
-                        eh(String(i) + '|0|' + sbid), egv
-                    ]);
-                    const fb = (fin && fin.body) || {};
-                    if (Number(fb.status) === 1) break;
-                    if (retry < 3) await sleep(2000);
-                }
+                const fin = await c.amf('EudemonGarden.finishHunting', [
+                    s.sessionKey, roomIdx, [], 0, h.getHash(String(roomIdx) + 0), '1',
+                    battleLog, sbid, json, h.getHash('1' + sbid + json),
+                    eh(String(roomIdx) + '|0|' + sbid), egv
+                ]);
 
                 const fb = (fin && fin.body) || {};
                 if (Number(fb.status) === 1) {
@@ -397,27 +396,54 @@ function parseRewardInfo(fb) {
                     const rw = parseRewardInfo(fb);
                     const xpDapat = rw.xpGain || Number(room.xp || 0);
                     const goldDapat = rw.goldGain || Number(room.gold || 0);
+                    totalXpGained += xpDapat;
+                    totalGoldGained += goldDapat;
                     const itemKet = rw.items.length ? ' | Drop: ' + rw.items.join(', ') : '';
                     line('    -> MENANG! XP +' + xpDapat.toLocaleString('id-ID') + ' | Gold +' + goldDapat.toLocaleString('id-ID') + itemKet);
                 } else {
-                    line('    -> finishHunting gagal: ' + JSON.stringify(fb).slice(0, 200));
+                    const fErr = String(fb.error || JSON.stringify(fb).slice(0, 160));
+                    line('    -> finishHunting gagal (' + fErr + '), akan diulang dari startHunting...');
                 }
 
-                await sleep(1200);
+                await sleep(1000);
             }
         }
 
-        const stAfter = await baca();
-        if (stAfter) {
-            const dxp = stAfter.xp - st.xp;
-            const dgold = stAfter.gold - st.gold;
-            line('');
-            line('  Ringkasan Eudemon Dragon: ' + won + '/' + tried + ' battle sukses | Total XP +' + dxp.toLocaleString('id-ID') + ' | Total Gold +' + dgold.toLocaleString('id-ID') +
-                (skippedDone ? ' | ' + skippedDone + ' room sudah selesai' : '') +
-                (skippedLock ? ' | ' + skippedLock + ' room terkunci level' : ''));
-            st = stAfter;
+        // Pass 1: Bersihkan seluruh room dari mulaiRoom s/d endRoom
+        for (let i = mulaiRoom; i < endRoom; i++) {
+            await clearRoom(i);
         }
-        return { tried, won, skippedDone, skippedLock };
+
+        // Pass 2 (Verifikasi Akhir): Pastikan tidak ada room terbuka yang masih menyisakan jatah > 0
+        const hsVerify = await c.amf('EudemonGarden.getHuntingStatus', [s.sessionKey]);
+        const hbVerify = (hsVerify && hsVerify.body) || {};
+        const roomsVerify = ((hbVerify.result || {}).room) || [];
+        let sisaBelumSelesai = 0;
+        for (let i = mulaiRoom; i < Math.min(endRoom, roomsVerify.length); i++) {
+            const rem = Number((roomsVerify[i] && roomsVerify[i].time) || 0);
+            if (rem > 0 && !lockedRooms.has(i)) {
+                sisaBelumSelesai += rem;
+                roomsInit[i] = roomsVerify[i];
+            }
+        }
+
+        if (sisaBelumSelesai > 0) {
+            line('');
+            line('  [VERIFIKASI] Masih ada ' + sisaBelumSelesai + 'x sisa jatah Eudemon Dragon, menyelesaikan otomatis...');
+            cachedHs = hbVerify;
+            for (let i = mulaiRoom; i < Math.min(endRoom, roomsVerify.length); i++) {
+                const rem = Number((roomsVerify[i] && roomsVerify[i].time) || 0);
+                if (rem > 0 && !lockedRooms.has(i)) {
+                    await clearRoom(i);
+                }
+            }
+        }
+
+        line('');
+        line('  Ringkasan Eudemon Dragon: ' + won + '/' + tried + ' battle sukses | Total Reward XP +' + totalXpGained.toLocaleString('id-ID') + ' | Total Gold +' + totalGoldGained.toLocaleString('id-ID') +
+            (skippedDone ? ' | ' + skippedDone + ' room sudah 0x' : '') +
+            (skippedLock ? ' | ' + skippedLock + ' room terkunci level' : ''));
+        return { tried, won, skippedDone, skippedLock, totalXpGained, totalGoldGained };
     }
 
     // ─────────────────────────────────────────────────────────

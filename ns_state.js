@@ -71,14 +71,14 @@ function countItemInString(rawStr, itemId) {
 
     const charId = row[0];
     let x = null;
-    for (let i = 1; i <= 6; i++) {
+    for (let i = 1; i <= 12; i++) {
         const r = await c.amf('CharacterDAO.getCharacterById', [s.sessionKey, charId]);
         const b = r.body || {};
         if (b.gk) {
             x = b.result || {};
             break;
         }
-        await sleep(1500);
+        await sleep(3000);
     }
 
     if (!x) {
@@ -91,7 +91,7 @@ function countItemInString(rawStr, itemId) {
     const xp = Number(x.character_xp) || 0;
     const gold = Number(x.character_gold) || 0;
     const tokens = Number(s.tokens !== undefined ? s.tokens : (s.raw && s.raw.result && s.raw.result[2]) || 0);
-    const isEmblem = Number(s.accountFlag) === 1 || Number(s.raw && s.raw.result && s.raw.result[3]) > 0;
+    const isEmblem = Boolean(s.isEmblem || Number(s.accountType) === 2);
     const rank = Number(x.character_rank || 1);
     const rankName = RANK_NAMES[rank] || ('Rank ' + rank);
     const rankCap = RANK_CAPS[rank] || 100;
