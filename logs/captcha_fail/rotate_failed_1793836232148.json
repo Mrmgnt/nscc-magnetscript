@@ -1,0 +1,44 @@
+{
+  "type": "rotate",
+  "start_angle": 260,
+  "step": 10,
+  "dom": {
+    "rotate_img": {
+      "x": 471.0465087890625,
+      "y": 304.7464904785156,
+      "width": 157.906982421875,
+      "height": 157.90701293945312,
+      "transform": "matrix(0.939693, -0.34202, 0.34202, 0.939693, 0, 0)",
+      "left": "0px",
+      "top": "0px"
+    },
+    "rotate_left": {
+      "x": 438.0000305175781,
+      "y": 366.54998779296875,
+      "width": 40.600006103515625,
+      "height": 34.29998779296875,
+      "transform": "none",
+      "left": "auto",
+      "top": "auto"
+    },
+    "rotate_right": {
+      "x": 621.4000244140625,
+      "y": 366.54998779296875,
+      "width": 40.5999755859375,
+      "height": 34.29998779296875,
+      "transform": "none",
+      "left": "auto",
+      "top": "auto"
+    }
+  },
+  "details": {
+    "rotation": {
+      "angle": 340,
+      "score": 25.64441627939727
+    },
+    "start": 260,
+    "target": 340,
+    "clicks": 8,
+    "useRight": true
+  }
+}

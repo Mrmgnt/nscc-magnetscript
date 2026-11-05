@@ -1,5 +1,7 @@
 # Logs and temporary files
-logs/
+logs/*
+!logs/captcha_fail/
+!logs/captcha_fail/**
 *.log
 *.tmp
 *.temp
