@@ -93,8 +93,8 @@ async function expandAccountsIfNeeded(rawAccounts) {
                     line(`  [!] Tidak ada karakter ditemukan di ${acc.user}.`);
                     continue;
                 }
-                const isEmblem = Number(s.accountFlag) === 1 || Number(s.raw && s.raw.result && s.raw.result[3]) > 0;
-                line(`  -> Ditemukan ${chars.length} karakter di akun ${acc.user}${isEmblem ? ' (Emblem)' : ''}:`);
+                const isEmblem = Boolean(s.isEmblem || Number(s.accountType) === 2);
+                line(`  -> Ditemukan ${chars.length} karakter di akun ${acc.user}${isEmblem ? ' [EMBLEM]' : ' [FREE]'}:`);
                 chars.forEach((ch, idx) => {
                     const cName = ch[1] || ('Char_' + ch[0]);
                     const cLv = ch[2] || 1;
@@ -244,15 +244,15 @@ async function runBulk(action, extraArgs = [], delaySec = 6) {
         } else if (action === 'daily_level' || action === 'full') {
             scriptArgs = acc.targetLevel ? ['--level', String(acc.targetLevel)] : [];
         } else if (action === 'eudemon' || action === 'dragon') {
-            scriptArgs = ['eudemon', '10', '4'];
+            scriptArgs = ['eudemon', '10', '11'];
         } else if (action === 'house' || action === 'hunting') {
-            scriptArgs = ['house', '10', '4'];
+            scriptArgs = ['house', '10', '11'];
         } else if (action === 'claim') {
             scriptArgs = ['claim'];
         } else if (action === 'hunt_daily') {
-            scriptArgs = ['daily', '10', '4'];
+            scriptArgs = ['daily', '10', '11'];
         } else if (action === 'hunt' || action === 'both') {
-            scriptArgs = ['both', '10', '4'];
+            scriptArgs = ['both', '10', '11'];
         } else if (action === 'train') {
             scriptArgs = ['all', '5', '15'];
         } else if (action === 'grades') {

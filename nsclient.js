@@ -222,6 +222,8 @@ async function login(username, password) {
         return { ok: false, stage: 'snsLogin', body: b, fault: r3.fault, message: msg };
     }
     const arr = Array.isArray(b.result) ? b.result : [];
+    // Account.as: param1[0]=account_id, param1[1]=account_type (1=FREE, 2=PREMIUM/EMBLEM), param1[2]=account_balance (tokens), param1[3]=sessionKey
+    const accType = Number(arr[1] || 1);
     return {
         ok: true,
         playerId: pid,
@@ -229,7 +231,9 @@ async function login(username, password) {
         token,
         signature,
         hashTime,
-        accountType: arr[1],
+        accountType: accType,
+        userType: accType,
+        isEmblem: accType === 2,
         tokens: arr[2] !== undefined ? Number(arr[2]) : 0,
         accountFlag: arr[2],
         sessionKey: arr[3],           // "gs_..." — dipakai semua service
