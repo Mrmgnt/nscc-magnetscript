@@ -1,0 +1,14 @@
+{
+  "name": "nscc-magnetscript",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Ninja Saga bot - NSCC MagnetScript (co-op minotaur feature)",
+  "license": "UNLICENSED",
+  "scripts": {
+    "selftest": "node lib/pve_crypto.js --test && node lib/ns_pve_socket.js --selftest && node lib/ns_captcha_solver.js --selftest && node lib/ns_pve_battle.js --selftest",
+    "coop": "node ns_coop_minotaur.js"
+  },
+  "dependencies": {
+    "playwright-core": "^1.48.0"
+  }
+}

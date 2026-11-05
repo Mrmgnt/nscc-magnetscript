@@ -1,0 +1,253 @@
+# Auto Co-op Minotaur - Progress Handoff
+
+Terakhir diperbarui: 5 November 2026, UTC+7.
+
+Dokumen ini menjadi sumber konteks utama untuk melanjutkan pekerjaan di chat baru.
+
+## Ringkasan Progress
+
+**Posisi sekarang: captcha dan room flow sebagian besar sudah bekerja. Battle auto-kill belum terbukti.**
+
+| Gate | Status | Bukti |
+|---|---|---|
+| Parser tiga akun unik | **SELESAI** | Username duplikat digabung menjadi satu identitas. |
+| Scheduler round-robin | **SELESAI LOKAL** | Dry-run menghasilkan tiga host bergilir. |
+| Sesi browser dan AMF sama | **SELESAI LIVE** | Tiga captcha pernah diterima dalam satu sesi tanpa `session web expired`. |
+| Captcha queue tunggal | **SELESAI** | Captcha diproses berurutan, tidak membuka beberapa challenge bersamaan. |
+| Rotate captcha | **BERHASIL LIVE** | Beberapa challenge rotate diterima server. |
+| Drag-shape captcha | **BERHASIL LIVE** | Beberapa challenge drag diterima server. |
+| Slider captcha | **PERBAIKAN SIAP, BELUM TERBUKTI LIVE TERBARU** | Artefak gagal lama kini menunjuk kotak checker valid; akun terkunci sebelum retest. |
+| Create/join/ready room | **BERHASIL LIVE** | Tiga akun pernah masuk room dan ready. |
+| Battle `start_atb` | **FIX SIAP, BELUM TERBUKTI LIVE** | Join sintetis dihapus; sekarang state `join` hanya membalas `start_atb`. |
+| Auto-kill server | **BELUM SELESAI** | Belum ada `battle_win` atau `battle_finish` setelah fix battle. |
+| Energy `25/5/5` | **BELUM SELESAI** | Belum ada kemenangan server valid untuk memicu pengurangan energy. |
+| Tiga match round-robin | **BELUM SELESAI** | Menunggu satu match valid lebih dulu. |
+| Loop penuh/menu 16 | **BELUM DIAKTIFKAN** | Gate satu dan tiga match belum lulus. |
+
+## Target Akhir
+
+1. Tiga akun unik memainkan Minotaur Extreme.
+2. Host bergilir round-robin; dua akun lain menjadi joiner.
+3. Captcha selesai otomatis dan command tertunda dikirim ulang.
+4. Auto-kill hanya dianggap berhasil jika server mengirim `battle_win` atau `battle_finish`.
+5. Energy server terbukti berkurang `25/5/5` untuk host/joiner/joiner.
+6. Tiga match berturut-turut selesai tanpa timeout atau kemenangan palsu.
+7. Loop penuh/menu 16 baru diaktifkan setelah semua gate lulus.
+
+## Kenapa Captcha Sering Gagal?
+
+### Bottleneck utama: deteksi target slider
+
+Rotate dan drag sudah beberapa kali diterima server. Kegagalan berulang paling banyak berasal dari slider.
+
+Slider menampilkan beberapa kotak checker dalam satu background. Piece hanya cocok dengan satu kotak. Detector lama melakukan dua kesalahan:
+
+- memilih objek gelap biasa, seperti gedung atau lantai, bukan kotak checker;
+- menemukan kotak checker yang benar, tetapi koordinat berhenti di tengah kotak, bukan batas kirinya.
+
+Server lalu membalas:
+
+```text
+Incorrect. Please try again.
+```
+
+Ini berarti submit sampai ke server dan sesi web masih valid, tetapi jawaban koordinat salah.
+
+Perbaikan terbaru:
+
+- scan persegi panjang sesuai ukuran opaque piece;
+- ukur boundary kiri, kanan, atas, dan bawah;
+- buang kandidat dengan boundary lemah;
+- bandingkan histogram warna piece dengan area sekitar kandidat;
+- refine koordinat ke batas kiri checker;
+- simpan semua kandidat dan skor ke artefak diagnostic.
+
+Perbaikan tersebut lolos terhadap seluruh artefak slider gagal yang tersimpan. Namun hasil terbaru belum sempat dibuktikan live karena akun terkena captcha lock.
+
+### Bottleneck kedua: captcha lock server
+
+Setiap jawaban salah mengurangi jatah percobaan. Retry live berulang untuk mengembangkan detector akhirnya memicu:
+
+```text
+Too many failed captchas
+```
+
+Pada 5 November 2026:
+
+- `dummymagnet` terkunci sekitar 24 jam;
+- `Mrmgnt1` terkunci sekitar 24 jam;
+- `Mrmgnt3` terkunci sekitar 24 jam.
+
+Perkiraan unlock: **6 November 2026 sekitar 11:24 UTC+7**.
+
+Saat lock aktif, server tidak mengirim challenge. Retry tidak dapat menguji detector dan hanya membuang waktu.
+
+### Masalah sesi web: sudah diperbaiki
+
+Sebelumnya browser captcha dan AMF/socket melakukan login API terpisah. Akibatnya token dan `PHPSESSID` berbeda, sehingga submit dapat ditolak sebagai sesi web kedaluwarsa.
+
+Flow sekarang:
+
+1. Browser login satu kali.
+2. Browser menyimpan cookie web.
+3. Response login browser dipakai oleh `nsclient.login()`.
+4. AMF/socket dan captcha memakai token/sesi yang sama.
+
+Bukti live: satu run berhasil menyelesaikan tiga captcha berurutan dalam sesi sama. Jadi `session web expired` bukan bottleneck aktif utama sekarang.
+
+### Keterbatasan pengembangan
+
+Server tidak memberi label posisi target yang benar saat challenge dibuat. Ground truth baru diketahui setelah submit diterima atau ditolak. Karena itu pengembangan awal membutuhkan live retry, sedangkan live retry memiliki batas kegagalan dan lock 24 jam.
+
+Solusi yang sudah diterapkan: setiap kegagalan menyimpan background, piece, koordinat, kandidat, skor, screenshot, dan response server. Detector kemudian diuji ulang secara offline memakai artefak tersebut sebelum live retry berikutnya.
+
+## Bukti Live Terbaik
+
+Satu run sebelumnya menghasilkan:
+
+- `dummymagnet`: drag-shape sukses;
+- `Mrmgnt3`: slider sukses;
+- `Mrmgnt1`: rotate sukses;
+- ketiga akun masuk room;
+- ketiga akun ready;
+- server mengirim `battle_msg` state `join` ke ketiga akun.
+
+Run berhenti pada `battle outcome timeout`. Saat itu script masih mengirim `battleJoin()` sintetis setelah menerima state `join`.
+
+Bug tersebut sudah diperbaiki. Client network asli tidak mengirim join ulang; client hanya masuk battle lalu mengirim `start_atb`.
+
+## Akun Uji Tambahan
+
+`Mrmgnt2` diuji melalui mode satu akun:
+
+- login berhasil;
+- karakter terbaca level 60;
+- slot 1 dan slot 2 diuji;
+- `SystemData.getPvEServerInit` mengembalikan `status=0`;
+- server tidak memberi `pvp_server` atau handoff PVE;
+- captcha PVE tidak dapat dipicu memakai akun ini.
+
+Kredensial tidak disimpan ke repository. File akun sementara di `%TEMP%` dihapus otomatis.
+
+## Perubahan Kode Utama
+
+### `nsclient.js`
+
+- Menerima payload login web dari browser.
+- AMF memakai token dan sesi web yang sama dengan captcha.
+
+### `lib/ns_captcha_solver.js`
+
+- Menangkap response login web.
+- Solver rotate, drag-shape, dan slider.
+- Slider boundary scan, candidate filter, histogram selection, dan coordinate refinement.
+- Menyimpan screenshot dan JSON diagnostic.
+- Mendeteksi captcha lock beserta sisa waktu unlock.
+
+### `ns_coop_minotaur.js`
+
+- Login tiga akun dengan sesi browser masing-masing.
+- Captcha queue tunggal dan retry command tertunda.
+- Scheduler, room flow, battle flow, dan report.
+- State `join` sekarang hanya mengirim `start_atb`.
+- Mode uji satu akun:
+
+  ```powershell
+  node ns_coop_minotaur.js --captcha-test USERNAME --headful
+  ```
+
+- Mode captcha test menerima file berisi satu akun. Mode co-op normal tetap mewajibkan tepat tiga akun unik.
+
+### `lib/ns_pve_battle.js`
+
+- State machine battle.
+- Penanganan `join`, `start_atb`, command, win, dan finish.
+
+### `README.md`
+
+- Contoh command captcha test.
+
+## Test Lokal
+
+Command berikut sudah lulus:
+
+```powershell
+node --check nsclient.js
+node --check ns_coop_minotaur.js
+node --check lib\ns_captcha_solver.js
+node --check lib\ns_pve_battle.js
+node lib\ns_captcha_solver.js --selftest
+node lib\ns_pve_battle.js --selftest
+node ns_coop_minotaur.js --selftest
+node ns_coop_minotaur.test.js
+```
+
+Test lokal membuktikan syntax, parser, scheduler gate, captcha queue, timeout, loss handling, energy proof guard, dan cleanup. Test lokal belum membuktikan server menerima auto-kill.
+
+## Langkah Lanjut Setelah Unlock
+
+### Gate 1 - Buktikan captcha terbaru
+
+Uji satu akun saja:
+
+```powershell
+node ns_coop_minotaur.js --captcha-test Mrmgnt1 --headful
+```
+
+Aturan:
+
+- jika server menerima captcha dan room terbentuk, leave otomatis;
+- jika server membalas `Incorrect`, hentikan retry;
+- analisis artefak terbaru di `logs\captcha_fail\` secara offline;
+- jangan retry akun sama berkali-kali.
+
+### Gate 2 - Buktikan satu match
+
+```powershell
+$env:NS_COOP_START_HOST='dummymagnet'
+$env:NS_COOP_BATTLE_TIMEOUT='60000'
+node ns_coop_minotaur.js --auto-kill --max-matches 1 --headful
+```
+
+Syarat lulus:
+
+- tiga captcha diterima;
+- room ID tersedia;
+- tiga akun join dan ready;
+- server mengirim `start_atb`;
+- server mengirim `battle_win` atau `battle_finish`;
+- hadiah/score terlihat;
+- energy server berubah tepat `25/5/5`.
+
+### Gate 3 - Buktikan round-robin
+
+```powershell
+node ns_coop_minotaur.js --auto-kill --max-matches 3 --headful
+```
+
+Syarat lulus:
+
+- tiga match terkonfirmasi server;
+- host bergilir ke tiga akun;
+- tidak ada timeout;
+- tidak ada kemenangan atau pengurangan energy palsu.
+
+### Gate 4 - Aktifkan loop penuh
+
+Menu 16/loop penuh hanya diaktifkan setelah Gate 1-3 lulus.
+
+## Task Belum Selesai
+
+- [ ] Buktikan slider detector terbaru berhasil live.
+- [ ] Buktikan fix `start_atb` menghasilkan progression battle.
+- [ ] Buktikan auto-kill diterima server.
+- [ ] Terima `battle_win` atau `battle_finish` dari server.
+- [ ] Verifikasi hadiah/score pada akun.
+- [ ] Verifikasi energy server berkurang `25/5/5`.
+- [ ] Selesaikan tiga match round-robin.
+- [ ] Aktifkan loop penuh/menu 16.
+
+## Catatan Keamanan
+
+- Jangan menulis password, token, session key, handoff token, atau cookie ke file progres/log publik.
+- `coop_accounts.txt` tetap menjadi sumber kredensial lokal dan tidak boleh dicommit.

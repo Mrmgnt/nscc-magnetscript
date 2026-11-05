@@ -1,10 +1,14 @@
 # Logs and temporary files
+logs/
 *.log
 *.tmp
 *.temp
 scratch/
 
 # Sensitive account and credential files
+coop_accounts.txt
+coop_report.json
+coop_validation.json
 accounts.txt
 dummy_accounts.txt
 dummy_accounts.json

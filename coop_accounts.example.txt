@@ -1,0 +1,12 @@
+# Tiga akun unik; host bergilir, dua akun lain selalu menjadi joiner.
+# Format: role:username:password[:slot] atau role:username:password:targetLevel:slot
+# Role host hanya menentukan prioritas awal; semua akun boleh menjadi host.
+# Akun yang sama boleh dicantumkan sebagai host dan main, tetapi digabung.
+# Password dan slot pada duplikat harus sama. Satu akun hanya satu socket.
+# Host membutuhkan 25 energy, joiner 5; nilai aktual dibaca dari server.
+# Tidak ada pembelian energy otomatis.
+# Salin ke coop_accounts.txt. Jangan commit file kredensial.
+# Uji: node ns_coop_minotaur.js --auto-kill --max-matches 1 --headful
+host:dummy1:GANTI_PASSWORD:1
+host:dummy2:GANTI_PASSWORD:1
+main:akunUtama1:GANTI_PASSWORD:1

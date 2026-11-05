@@ -22,6 +22,10 @@
   - Misi level tertinggi yang terbuka otomatis.
   - Exam otomatis: Chunin (Lv 20), Jounin (Lv 40), Special Jounin (Lv 60), Sennin (Lv 80 - 12 mode hard).
   - Misi Grade S Stage 1-5 (Lv 80+, 82k-100k XP per battle).
+- **Auto Co-op Hunting Minotaur Extreme (`ns_coop_minotaur.js`)**:
+  - Tiga akun unik: host round-robin, dua akun lain join; duplikat host/main digabung.
+  - Captcha slider/drag melalui Edge masih eksperimental; rotate/grid berhenti tanpa menebak.
+  - Hasil dan energy server dicatat ke `coop_report.json`; tidak ada pembelian energy.
 - **Multi-Account & Multi-Character Manager (`ns_multi_manager.js`)**:
   - Eksekusi massal farming seluruh akun dan karakter dari file `accounts.txt`.
   - Mendukung akun Emblem dengan banyak karakter (`slot = all` atau `1,2` atau per baris) maupun akun Free 1 karakter.
@@ -120,6 +124,37 @@ node ns_multi_manager.js house --delay 6
 node ns_multi_manager.js claim --delay 5
 ```
 
+
+#### Auto Co-op Hunting Minotaur Extreme (`ns_coop_minotaur.js`):
+```cmd
+:: Cek dulu rencana rotasi host & energy (tanpa buat room)
+node ns_coop_minotaur.js --dry-run
+
+# Uji satu captcha/create-room tanpa memulai battle
+node ns_coop_minotaur.js --captcha-test USERNAME --headful
+
+:: Uji satu match; auto-kill belum terbukti sampai server mengonfirmasi
+node ns_coop_minotaur.js --auto-kill --max-matches 1 --headful
+
+:: Setelah satu match berhasil, uji tiga host bergilir
+node ns_coop_minotaur.js --auto-kill --max-matches 3 --headful
+
+:: Loop penuh hanya dibuka setelah tiga match valid dengan host berbeda
+node ns_coop_minotaur.js --auto-kill --boss minotaur --level extreme --password 1111
+```
+Isi file `coop_accounts.txt` (contoh: `coop_accounts.example.txt`):
+```text
+host:dummy1:pass:1
+host:dummy2:pass:1
+main:akunUtama1:pass:1
+```
+
+Menu 16 memakai auto-kill dan batas validasi otomatis: 1 match, lalu 3, lalu loop penuh.
+`coop_validation.json` terikat tiga karakter dan quest; jangan mengeditnya untuk melewati uji.
+Kegagalan captcha, socket, ready, atau battle menghentikan sesi dengan exit code 1.
+Energy lokal tidak dikurangi ketika hasil belum terkonfirmasi. Pengurangan server harus cocok biaya quest.
+`battle_win` bukan bukti hadiah masuk: periksa score/inventory di game sebelum menjalankan sesi berikutnya.
+Jika captcha rotate/grid muncul atau verifikasi slider/drag gagal, sesi berhenti; full-auto belum terjamin.
 ---
 
 *Copyright &copy; 2026 MagnetScript (Razki)*

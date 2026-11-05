@@ -110,6 +110,7 @@ echo   [ 3 ] MULTI-ACCOUNT ^& TOOLS
 echo        10. Multi-Account ^& Multi-Character Runner (accounts.txt)
 echo        11. Dummy Farmer (Auto Register/Login Akun ^& Kirim Gift Harian)
 echo        12. Test Local Feed (Multi-Threaded Dev Test)
+echo        16. Auto Co-op Hunting Minotaur Extreme (coop_accounts.txt)
 echo.
 echo   [ 4 ] INFORMASI ^& KARAKTER
 echo        13. Cek Status Karakter (Level, XP, Gold, Token, Ujian, Hunting)
@@ -119,7 +120,7 @@ echo.
 echo         0. Keluar
 echo ======================================================================
 set "PILIH="
-set /p "PILIH=Pilih menu [0-15]: "
+set /p "PILIH=Pilih menu [0-16]: "
 
 if "%PILIH%"=="1" goto DAILY
 if "%PILIH%"=="2" goto TRAIN
@@ -136,6 +137,7 @@ if "%PILIH%"=="12" goto LOCALFEED
 if "%PILIH%"=="13" goto STATE
 if "%PILIH%"=="14" goto GANTICHAR
 if "%PILIH%"=="15" goto GANTI
+if "%PILIH%"=="16" goto COOPMINO
 if "%PILIH%"=="0" goto END
 goto MENU
 
@@ -446,6 +448,34 @@ echo.
 pause
 goto MENU
 
+:COOPMINO
+cls
+echo ======================================================================
+echo          AUTO CO-OP HUNTING - MINOTAUR EXTREME (coop_accounts.txt)
+echo ======================================================================
+echo   Menjalankan room Minotaur Extreme otomatis:
+echo     - 3 akun unik: host bergilir, dua akun lain join + ready
+echo     - Room private password 1111; tidak membeli energy
+echo     - Batas validasi otomatis: 1 match, lalu 3, baru loop penuh
+echo   Isi dulu file coop_accounts.txt (contoh: coop_accounts.example.txt).
+echo   Tips: mulai dengan  node ns_coop_minotaur.js --dry-run
+echo         lalu  node ns_coop_minotaur.js --auto-kill --max-matches 1 --headful
+echo.
+if not exist "coop_accounts.txt" (
+  echo   [!] coop_accounts.txt tidak ditemukan.
+  echo       Salin coop_accounts.example.txt menjadi coop_accounts.txt lalu isi akun.
+  echo.
+  pause
+  goto MENU
+)
+if not exist "node_modules\playwright-core" (
+  echo   [i] Memasang dependency co-op ^(playwright-core^) sekali saja...
+  call npm install --silent
+)
+node ns_coop_minotaur.js --boss minotaur --level extreme --password 1111 --auto-kill
+echo.
+pause
+goto MENU
 :END
 if exist ".char_env.bat" del ".char_env.bat" >nul 2>nul
 exit /b 99
