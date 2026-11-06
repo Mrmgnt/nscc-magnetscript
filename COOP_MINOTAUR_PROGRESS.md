@@ -6,7 +6,7 @@ Dokumen ini menjadi sumber konteks utama untuk melanjutkan pekerjaan di chat bar
 
 ## Ringkasan Progress
 
-**Posisi sekarang: captcha dan room flow sebagian besar sudah bekerja. Battle auto-kill belum terbukti.**
+**Posisi sekarang: seluruh CAPTCHA dan room/battle-start berhasil live. Auto-kill masih berhenti setelah `start_atb`; loop energy belum aman dijalankan.**
 
 | Gate | Status | Bukti |
 |---|---|---|
@@ -16,9 +16,9 @@ Dokumen ini menjadi sumber konteks utama untuk melanjutkan pekerjaan di chat bar
 | Captcha queue tunggal | **SELESAI** | Captcha diproses berurutan, tidak membuka beberapa challenge bersamaan. |
 | Rotate captcha | **BERHASIL LIVE** | Beberapa challenge rotate diterima server. |
 | Drag-shape captcha | **BERHASIL LIVE** | Beberapa challenge drag diterima server. |
-| Slider captcha | **OFFLINE 100% LULUS (8/8), GATE CAPTCHA LIVE LULUS** | Seluruh 8 artefak slider gagal berlabel ground truth lulus uji 0px diff; siap uji live 1 akun setelah unlock. |
+| Slider captcha | **OFFLINE 100% LULUS (9/9), BERHASIL LIVE** | Sampel terbaru `1793957288909` terdeteksi `x=289`; live slider berikutnya diterima pada percobaan pertama. |
 | Create/join/ready room | **BERHASIL LIVE** | Tiga akun pernah masuk room dan ready. |
-| Battle `start_atb` | **FIX SIAP, BELUM TERBUKTI LIVE** | Join sintetis dihapus; sekarang state `join` hanya membalas `start_atb`. |
+| Battle `start_atb` | **BERHASIL LIVE** | Tiga socket mencapai `join -> start -> start_atb` pada dua validasi live. |
 | Auto-kill server | **BELUM SELESAI** | Belum ada `battle_win` atau `battle_finish` setelah fix battle. |
 | Energy `25/5/5` | **BELUM SELESAI** | Belum ada kemenangan server valid untuk memicu pengurangan energy. |
 | Tiga match round-robin | **BELUM SELESAI** | Menunggu satu match valid lebih dulu. |
@@ -312,3 +312,20 @@ Menu 16/loop penuh hanya diaktifkan setelah Gate 1-3 lulus.
 - Target benar dilabeli `x=289`: potongan alat musik dan garis lantai cocok dengan kotak kanan; `pattern/checker` nyaris nol.
 - Pilihan lama `x=115` merupakan false target dan sudah ditolak server.
 - Tahap berikutnya: masukkan sampel ke regression, perbaiki scoring minimal, lalu jalankan seluruh test offline sebelum live.
+
+### Regression offline slider diperbaiki - 6 November 2026
+
+- Label slider `1793957288909` ditambahkan dengan target `x=289`.
+- Scoring kini menangani kandidat gap datar (`pattern/checker` nyaris nol) hanya ketika histogram lingkungan lebih baik dengan margin aman.
+- Regression slider lulus **9/9 (100%)**, termasuk seluruh 8 sampel lama.
+- Regression drag-shape lulus pada target lingkaran `135,59`.
+- Syntax check, self-test solver, self-test battle, dan test Co-op seluruhnya lulus.
+- Gate offline lulus. Berikutnya hanya satu live match untuk validasi pengiriman `battle_win` dari ketiga socket.
+
+### Gate live satu match - 6 November 2026
+
+- Tiga akun login dan masing-masing CAPTCHA berhasil pada percobaan pertama: slider, drag-shape, dan rotate.
+- Tiga socket mencapai `join -> start -> start_atb`.
+- Perubahan pengiriman `battle_win` dari setiap socket belum menghasilkan `battle_win` atau `battle_finish` dari server.
+- Run berhenti aman pada `battle outcome timeout`; tidak ada retry CAPTCHA dan loop energy tidak dijalankan.
+- Gate battle tetap **belum lulus**. Investigasi berikutnya dilakukan offline pada payload/protokol battle sebelum live berikutnya.
