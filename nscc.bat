@@ -229,17 +229,20 @@ echo   - Battle Boss Hunting House (Zone 1-6: Ginkaku s/d Tsuchigumo)
 echo     menggunakan tiket Hunting Passport yang dimiliki.
 echo.
 echo   1. Auto Claim Daily Passport + Battle Boss Hunting House
-echo   2. Claim Daily Hunting Passport Saja (Tanpa Battle)
-echo   3. Lihat Status Tiket ^& Boss Hunting House
+echo   2. Auto Fight Boss Hunting House Saja (Tanpa Claim Daily)
+echo   3. Claim Daily Hunting Passport Saja (Tanpa Battle)
+echo   4. Lihat Status Tiket ^& Boss Hunting House
 echo.
 echo   Tips: Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti ke menu.
 echo.
 set "HHO="
-set /p "HHO=Pilih [1/2/3, Enter = 1] : "
+set /p "HHO=Pilih [1/2/3/4, Enter = 1] : "
 echo.
 if "%HHO%"=="2" (
-  node ns_hunt.js claim
+  node ns_hunt.js fight 10 11
 ) else if "%HHO%"=="3" (
+  node ns_hunt.js claim
+) else if "%HHO%"=="4" (
   node ns_hunt.js status
 ) else (
   node ns_hunt.js house 10 11

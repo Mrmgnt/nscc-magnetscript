@@ -46,7 +46,7 @@ function makeCaptchaQueue() {
 const LEVEL_INDEX = { 0: 1, 1: 1, 2: 2, 3: 3 }; // display level by digit
 
 function parseArgs(argv) {
-    const a = { boss: 'minotaur', level: 'extreme', password: '1111', maxMatches: Infinity, headful: false, buyEnergy: false, dryRun: false, accounts: 'coop_accounts.txt', strategy: 'auto', captchaTest: null };
+    const a = { boss: 'minotaur', level: 'extreme', password: '1111', maxMatches: Infinity, headful: false, buyEnergy: false, dryRun: false, accounts: 'coop_accounts.txt', strategy: 'auto', captchaTest: null, preflight: null };
     for (let i = 0; i < argv.length; i++) {
         const k = argv[i];
         if (k === '--boss') a.boss = argv[++i];
@@ -62,12 +62,31 @@ function parseArgs(argv) {
         else if (k === '--buy-energy') a.buyEnergy = true;
         else if (k === '--dry-run') a.dryRun = true;
         else if (k === '--captcha-test') a.captchaTest = argv[++i];
+        else if (k === '--preflight') a.preflight = argv[++i];
         else if (k === '--auto-kill') a.strategy = 'A';
         else if (k === '--safe-play') a.strategy = 'B';
     }
     return a;
 }
 
+async function runPreflight(args, accounts) {
+    const wanted = String(args.preflight || '').trim().toLowerCase();
+    const account = accounts.find(item => item.username.toLowerCase() === wanted);
+    if (!account) throw new Error('Akun preflight tidak ditemukan: ' + args.preflight);
+    const { CaptchaSolver } = require('./lib/ns_captcha_solver.js');
+    const solver = new CaptchaSolver({ headful: true, log: line, username: account.username, password: account.password });
+    try {
+        await solver.open();
+        const result = await loginAccount(account, solver.webLoginData);
+        if (!result.ok || !result.charId) throw new Error('Login/karakter tidak tersedia: ' + account.username + ' (' + String(result.error || 'karakter kosong') + ')');
+        const pve = await readPveInit(result.session);
+        const available = Boolean(pve && pve.pvpServer && pve.pvpServer[0]);
+        line('  PREFLIGHT ' + account.username + ': char=' + result.charName + ' Lv ' + result.level + ' | PVE=' + (available ? 'READY' : 'TIDAK TERSEDIA') + ' | status=' + String(pve && (pve.pveStatus ?? pve.status)));
+        if (!available) process.exitCode = 2;
+    } finally {
+        await solver.close();
+    }
+}
 async function runCaptchaTest(args, accounts) {
     const wanted = String(args.captchaTest || '').trim().toLowerCase();
     const account = accounts.find(item => item.username.toLowerCase() === wanted);
@@ -78,7 +97,7 @@ async function runCaptchaTest(args, accounts) {
     try {
         await solver.open();
         const result = await loginAccount(account, solver.webLoginData);
-        if (!result.ok || !result.charId) throw new Error('Login/karakter tidak tersedia: ' + account.username);
+        if (!result.ok || !result.charId) throw new Error('Login/karakter tidak tersedia: ' + account.username + ' (' + String(result.error || 'karakter kosong') + ')');
         line('  karakter: ' + result.charName + ' (Lv ' + result.level + ', slot ' + (account.slot || '1') + ')');
         const pve = await readPveInit(result.session);
         if (!pve || !pve.pvpServer || !pve.pvpServer[0]) throw new Error('PVE server tidak tersedia: ' + account.username + ' (status=' + String(pve && (pve.pveStatus ?? pve.status)) + ', level=' + result.level + ', message=' + String(pve && pve.serverMessage) + ')');
@@ -91,7 +110,7 @@ async function runCaptchaTest(args, accounts) {
         socket.on('si_error', () => { failure = failure || new Error('Socket.IO error'); });
         socket.on('captcha_required', () => {
             if (solving || failure) return;
-            if (++attempts > 2) { failure = new Error('Batas retry captcha tercapai'); return; }
+            if (++attempts > 1) { failure = new Error('Captcha test dihentikan setelah satu percobaan'); return; }
             solving = true;
             line('  captcha_required (' + account.username + ')');
             solver.solve('pve').then(ok => {
@@ -297,6 +316,14 @@ async function runDryRun(args, accounts) {
     line('  Rencana selesai (dry-run).');
 }
 
+function characterIds(list) {
+    if (!Array.isArray(list)) return [];
+    return list.map(item => {
+        if (Array.isArray(item)) return item[0];
+        if (item && typeof item === 'object') return item.characterId ?? item.charId ?? item.character_id ?? item.id;
+        return item;
+    }).filter(item => item != null).map(String);
+}
 async function runLive(args, accounts) {
     if (args.buyEnergy) throw new Error('--buy-energy tidak didukung; tidak ada pembelian otomatis.');
     const uniqueAccounts = [...new Map(accounts.map(account => [account.username.toLowerCase(), account])).values()];
@@ -364,8 +391,9 @@ async function runLive(args, accounts) {
             let pending = null;
             let outcome = null;
             let battleStarted = false;
-            let winSent = false;
+            const winSent = new Set();
             let roomReady = [];
+            const readyConfirmed = new Set();
             const fail = message => { matchError = matchError || new Error(message); };
             const waitUntil = async (predicate, timeoutMs, label) => {
                 const deadline = Date.now() + timeoutMs;
@@ -376,10 +404,23 @@ async function runLive(args, accounts) {
                 }
                 if (matchError) throw matchError;
             };
-            const command = async (socket, send, accepted, label) => {
-                pending = { socket, send, active: true, solving: false, attempts: 0 };
-                try { send(); await waitUntil(accepted, 120000, label); }
-                finally { pending.active = false; pending = null; }
+            const command = async (socket, send, accepted, label, retrySilent = false) => {
+                pending = { socket, send, label, active: true, solving: false, attempts: 0 };
+                try {
+                    send();
+                    if (retrySilent) {
+                        const retryAt = Date.now() + 10000;
+                        while (!accepted() && Date.now() < retryAt) {
+                            if (matchError) throw matchError;
+                            await sleep(100);
+                        }
+                        if (!accepted() && !pending.solving && !pending.captchaRequested) {
+                            line('  ' + label + ' belum dijawab, kirim ulang sekali');
+                            send();
+                        }
+                    }
+                    await waitUntil(accepted, 120000, label);
+                } finally { pending.active = false; pending = null; }
             };
             try {
                 const server = host.pve.pvpServer && host.pve.pvpServer[0];
@@ -404,7 +445,7 @@ async function runLive(args, accounts) {
                         if (!current || current.socket !== socket) { fail('Captcha tanpa command aktif: ' + player.username); return; }
                         current.captchaRequested = true;
                         if (current.solving) return;
-                        if (++current.attempts > 2) { fail('Batas retry captcha tercapai: ' + player.username); return; }
+                        if (++current.attempts > 1) { fail('Captcha dihentikan setelah satu percobaan: ' + player.username); return; }
                         current.solving = true;
                         captchaQueue(solvers.get(player.username.toLowerCase()), player.username, () => {
                             if (!stopped && current.active && !matchError) current.send();
@@ -415,13 +456,13 @@ async function runLive(args, accounts) {
                             if (pending && pending.socket === socket && pending.captchaRequested && Number(data && data.status) === 0) return;
                             fail('join_room ditolak: ' + player.username); return;
                         }
-                        if (data.characterId != null && String(data.characterId) !== String(player.charId)) return;
                         socket.joinedRoom = String(data.room_name || data.roomId || '');
                         if (!socket.joinedRoom) fail('Room ID kosong: ' + player.username);
                     });
                     socket.on('ready', data => {
                         const ready = Array.isArray(data) ? data : data && data.character_array;
-                        if (Array.isArray(ready)) roomReady = ready.map(String);
+                        if (Array.isArray(ready)) roomReady = characterIds(ready);
+                        if (pending && pending.socket === socket && pending.label === 'ready') readyConfirmed.add(String(player.charId));
                     });
                     const battle = new PveBattle({ charId: player.charId, strategy: args.strategy, skills: [] });
                     const finish = (event, data) => {
@@ -447,9 +488,9 @@ async function runLive(args, accounts) {
                         if (message.state === 'battle_lose') { fail('Battle kalah'); return; }
                         if (['battle_win', 'battle_finish'].includes(message.state)) { finish(message.state, message); return; }
                         const step = battle.nextStep(message);
-                        if (step.type === 'join') socket.startAtb();
-                        else if (step.type === 'start') socket.startAtb();
-                        else if (step.type === 'win' && player === host && !winSent) { winSent = true; socket.battleWin(player.charId); }
+                        if (step.type === 'ready') socket.battleReady();
+                        else if (step.type === 'startAtb') socket.startAtb();
+                        else if (step.type === 'win' && !winSent.has(String(player.charId))) { winSent.add(String(player.charId)); socket.battleWin(player.charId); }
                         else if (step.type === 'turn' && args.strategy === 'B') socket.battleCommand(player.charId, step.battleAction.action, step.battleAction.skillId);
                     });
                     socket.auth();
@@ -461,10 +502,10 @@ async function runLive(args, accounts) {
                 row.roomId = hostSocket.joinedRoom;
                 for (let index = 1; index < sockets.length; index++) {
                     const socket = sockets[index];
-                    await command(socket, () => socket.joinRoom(row.roomId, args.password, host.pve.ver), () => socket.joinedRoom === row.roomId, 'join_room');
-                    await command(socket, () => socket.ready(socket.charId), () => roomReady.includes(String(socket.charId)), 'ready');
+                    await command(socket, () => socket.joinRoom(row.roomId, args.password, host.pve.ver), () => socket.joinedRoom === row.roomId, 'join_room', true);
+                    await command(socket, () => socket.ready(socket.charId), () => readyConfirmed.has(String(socket.charId)), 'ready');
                 }
-                await waitUntil(() => joiners.every(player => roomReady.includes(String(player.charId))), 15000, 'semua joiner ready');
+                await waitUntil(() => joiners.every(player => readyConfirmed.has(String(player.charId))), 15000, 'semua joiner ready');
                 await command(hostSocket, () => hostSocket.startGame(), () => battleStarted, 'battle_start');
                 const battleTimeout = Number((process.env && process.env.NS_COOP_BATTLE_TIMEOUT) || 180000);
                 await waitUntil(() => Boolean(outcome), battleTimeout, 'battle outcome');
@@ -542,10 +583,11 @@ async function runLive(args, accounts) {
     const args = parseArgs(process.argv.slice(2));
     c.enableGracefulStop('menu');
     let accounts;
-    try { accounts = parseAccountsFile(args.accounts, args.captchaTest ? null : 3); }
+    try { accounts = parseAccountsFile(args.accounts, (args.captchaTest || args.preflight) ? null : 3); }
     catch (e) { line(e.message); process.exit(1); }
     if (!accounts.length) { line('Tidak ada akun valid di ' + args.accounts); process.exit(1); }
-    if (args.captchaTest) await runCaptchaTest(args, accounts);
+    if (args.preflight) await runPreflight(args, accounts);
+    else if (args.captchaTest) await runCaptchaTest(args, accounts);
     else if (args.dryRun) await runDryRun(args, accounts);
     else await runLive(args, accounts);
     process.exit(process.exitCode || 0);

@@ -54,6 +54,12 @@
     "expectedX": 193,
     "confidence": "high",
     "notes": "Garis lantai dan rak menyambung di checker tengah (x=193, mismatch terendah 86.75). Jawaban lama x=108 ditolak."
+  },
+  "1793957288909": {
+    "type": "slider",
+    "targetIndex": 5,
+    "expectedX": 289,
+    "confidence": "high",
+    "notes": "Kotak kanan x=289 cocok dengan potongan alat musik dan garis lantai; pattern/checker nyaris nol. Jawaban lama x=115 ditolak server."
   }
 }
-

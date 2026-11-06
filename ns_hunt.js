@@ -19,10 +19,13 @@
  *   4. node ns_hunt.js house [maksBattle] [jedaDetik]
  *      -> Auto Claim Daily Hunting House Passport + Battle Boss Hunting House (selama tiket cukup).
  *
- *   5. node ns_hunt.js daily [jumlahRoom] [jedaDetik]
+ *   5. node ns_hunt.js fight [maksBattle] [jedaDetik]
+ *      -> Battle Boss Hunting House memakai tiket tersedia tanpa klaim passport harian.
+ *
+ *   6. node ns_hunt.js daily [jumlahRoom] [jedaDetik]
  *      -> Paket Harian: Auto Claim Daily Hunting House (tanpa battle HH) + Farming Eudemon Dragon Full (3x/1x).
  *
- *   6. node ns_hunt.js both [jumlahRoom] [jedaDetik]
+ *   7. node ns_hunt.js both [jumlahRoom] [jedaDetik]
  *      -> Jalankan Keduanya: Auto Claim & Battle Hunting House + Farming Eudemon Dragon Full.
  */
 'use strict';
@@ -212,9 +215,11 @@ function parseRewardInfo(fb) {
     }
 
     // Helper: Battle Hunting House (ItemDAO.startHunting -> ItemDAO.getBossReward)
-    async function runHuntingHouseBattles(maxBattles) {
-        await claimDailyPassport();
-        line('');
+    async function runHuntingHouseBattles(maxBattles, claimFirst = true) {
+        if (claimFirst) {
+            await claimDailyPassport();
+            line('');
+        }
         line('== Farming Hunting House Boss ==');
         if (st.level < 5) {
             line('  [SKIP] Hunting House terbuka mulai Level 5 (Level saat ini: ' + st.level + ').');
@@ -488,6 +493,11 @@ function parseRewardInfo(fb) {
         process.exit(0);
     }
 
+    if (rawMode === 'fight' || rawMode === 'battle') {
+        await runHuntingHouseBattles(maks, false);
+        process.exit(0);
+    }
+
     if (rawMode === 'eudemon' || rawMode === 'dragon') {
         await runEudemonGarden(maks);
         process.exit(0);
@@ -508,7 +518,7 @@ function parseRewardInfo(fb) {
     }
 
     line('Mode tidak dikenal: ' + rawMode);
-    line('Gunakan: status | claim | eudemon | house | daily | both');
+    line('Gunakan: status | claim | eudemon | house | fight | daily | both');
     process.exit(1);
 })().catch(e => {
     line('FATAL ' + e.message);

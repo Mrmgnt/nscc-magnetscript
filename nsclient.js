@@ -196,14 +196,19 @@ function amf(service, params) {
     });
 }
 
-async function login(username, password) {
+async function login(username, password, webData) {
     username = String(username || '').trim();
     password = String(password || '');
-    const r = await httpJson(API_HOST, '/login', { username, password, type: 'web' });
-    let j = null; try { j = JSON.parse(r.body); } catch (_) { }
+    let j = webData && webData.success === true ? webData : null;
+    let r = null;
+    if (!j) {
+        r = await httpJson(API_HOST, '/login', { username, password, type: 'web' });
+        try { j = JSON.parse(r.body); } catch (_) { }
+    }
     if (!j || j.success !== true) {
-        const errMsg = (j && (j.message || j.error)) || r.body.slice(0, 300) || ('HTTP ' + r.status);
-        return { ok: false, stage: 'web-login', http: r.status, message: errMsg, body: r.body.slice(0, 400) };
+        const body = r && typeof r.body === 'string' ? r.body : '';
+        const errMsg = (j && (j.message || j.error)) || body.slice(0, 300) || ('HTTP ' + (r ? r.status : 'unknown'));
+        return { ok: false, stage: 'web-login', http: r && r.status, message: errMsg, body: body.slice(0, 400) };
     }
     const pid = j.player_id, token = j.token, signature = j.signature, hashTime = j.hash_time;
     const ts = Math.floor(Date.now() / 1000);

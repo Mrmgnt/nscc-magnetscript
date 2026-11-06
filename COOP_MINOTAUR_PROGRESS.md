@@ -1,6 +1,6 @@
 # Auto Co-op Minotaur - Progress Handoff
 
-Terakhir diperbarui: 5 November 2026, UTC+7.
+Terakhir diperbarui: 6 November 2026, UTC+7.
 
 Dokumen ini menjadi sumber konteks utama untuk melanjutkan pekerjaan di chat baru.
 
@@ -16,7 +16,7 @@ Dokumen ini menjadi sumber konteks utama untuk melanjutkan pekerjaan di chat bar
 | Captcha queue tunggal | **SELESAI** | Captcha diproses berurutan, tidak membuka beberapa challenge bersamaan. |
 | Rotate captcha | **BERHASIL LIVE** | Beberapa challenge rotate diterima server. |
 | Drag-shape captcha | **BERHASIL LIVE** | Beberapa challenge drag diterima server. |
-| Slider captcha | **OFFLINE 100% LULUS (8/8)** | Seluruh 8 artefak slider gagal berlabel ground truth lulus uji 0px diff; siap uji live 1 akun setelah unlock. |
+| Slider captcha | **OFFLINE 100% LULUS (8/8), GATE CAPTCHA LIVE LULUS** | Seluruh 8 artefak slider gagal berlabel ground truth lulus uji 0px diff; siap uji live 1 akun setelah unlock. |
 | Create/join/ready room | **BERHASIL LIVE** | Tiga akun pernah masuk room dan ready. |
 | Battle `start_atb` | **FIX SIAP, BELUM TERBUKTI LIVE** | Join sintetis dihapus; sekarang state `join` hanya membalas `start_atb`. |
 | Auto-kill server | **BELUM SELESAI** | Belum ada `battle_win` atau `battle_finish` setelah fix battle. |
@@ -253,9 +253,25 @@ Syarat lulus:
 
 Menu 16/loop penuh hanya diaktifkan setelah Gate 1-3 lulus.
 
+## Update Aman Gate 1 - 6 November 2026
+
+- Semua test offline lulus, termasuk regression slider **8/8 (100%)**.
+- Retry `--captcha-test` dibatasi menjadi satu percobaan untuk mencegah akumulasi kegagalan.
+- Gate 1 berhenti sebelum CAPTCHA karena response login web belum tertangkap.
+- Tidak ada submit CAPTCHA dan tidak ada artefak `verify_rejected_*` baru.
+- Live test dihentikan sampai capture sesi browser diperbaiki secara offline.
+## Gate Live Terbaru - 6 November 2026
+
+- **Gate 1 LULUS**: `Mrmgnt1`, challenge `drag_shape`, `verify success`, room `8541` berhasil dibuat dan ditinggalkan otomatis.
+- Capture login browser sekarang mendukung payload terenkripsi `_cc_unseal` dan memakai sesi browser yang sama untuk AMF.
+- Retry CAPTCHA dibatasi satu percobaan per akun untuk mencegah lock.
+- Gate 2 belum dapat dimulai karena hanya dua akun lokal memiliki PVE aktif: `Mrmgnt` dan `Mrmgnt1`.
+- `dummymagnet` dan `Mrmgnt3` membalas `401 Invalid credentials` sebelum CAPTCHA.
+- `Mrmgnt2` login valid tetapi `SystemData.getPvEServerInit` tetap status `0` / PVE tidak tersedia.
+- Dibutuhkan satu akun unik tambahan dengan PVE status `1` untuk membuktikan match tiga pemain.
 ## Task Belum Selesai
 
-- [ ] Buktikan slider detector terbaru berhasil live.
+- [x] Buktikan solver CAPTCHA terbaru berhasil live (drag-shape; slider tetap 8/8 offline).
 - [ ] Buktikan fix `start_atb` menghasilkan progression battle.
 - [ ] Buktikan auto-kill diterima server.
 - [ ] Terima `battle_win` atau `battle_finish` dari server.
@@ -268,3 +284,31 @@ Menu 16/loop penuh hanya diaktifkan setelah Gate 1-3 lulus.
 
 - Jangan menulis password, token, session key, handoff token, atau cookie ke file progres/log publik.
 - `coop_accounts.txt` tetap menjadi sumber kredensial lokal dan tidak boleh dicommit.
+
+## Gate Battle Live - 6 November 2026
+
+- Tiga akun valid: `Mrmgnt3`, `dummymagnet`, dan `Mrmgnt`.
+- Tiga CAPTCHA berhasil dan tiga pemain mencapai battle state `join`, `start`, lalu `start_atb`.
+- Join/ready flow diperbaiki dengan acknowledgment per socket.
+- Urutan battle diperbaiki: `join -> ready`, `start -> start_atb`, `start_atb -> battle_win`.
+- Server belum membalas `battle_win` atau `battle_finish`; run berhenti pada `battle outcome timeout`.
+- Loop sampai energy habis belum diaktifkan karena kemenangan, reward, dan pengurangan energy belum terkonfirmasi server.
+- Satu artefak drag-shape gagal telah diperbaiki offline; regression baru memilih target lingkaran `135,59`.
+### Audit battle_win lanjutan - 6 November 2026
+
+- Live flow sudah mencapai `join -> ready -> start -> start_atb` untuk tiga pemain.
+- Pengiriman `battle_win` hanya dari host tidak menghasilkan `battle_finish`.
+- Implementasi diubah agar setiap socket pemain mengirim `battle_win` satu kali setelah menerima `start_atb`, sesuai model client-side battle yang berjalan pada semua client.
+- Perubahan lulus syntax check dan test lokal; menunggu satu validasi live sebelum loop energy dibuka.
+### Live dihentikan karena slider baru - 6 November 2026
+
+- Validasi attle_win tiga socket belum tercapai karena CAPTCHA pertama (Mrmgnt3) ditolak.
+- Server melaporkan ails_left=34; script berhenti tanpa retry dan akun lain tidak mengirim CAPTCHA.
+- Artefak terbaru: $(verify_rejected_1793957288909.json.Name) beserta background, piece, dan screenshot.
+- Wajib tambah label/regression slider baru dan perbaiki detector offline sebelum live berikutnya.
+### Review offline slider terbaru - 6 November 2026
+
+- Artefak `verify_rejected_1793957288909` diperiksa manual tanpa submit live baru.
+- Target benar dilabeli `x=289`: potongan alat musik dan garis lantai cocok dengan kotak kanan; `pattern/checker` nyaris nol.
+- Pilihan lama `x=115` merupakan false target dan sudah ditolak server.
+- Tahap berikutnya: masukkan sampel ke regression, perbaiki scoring minimal, lalu jalankan seluruh test offline sebelum live.

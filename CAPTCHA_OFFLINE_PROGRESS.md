@@ -183,3 +183,20 @@ Setelah unlock:
 2. **Gate 2 - Uji 1 Match Co-op Penuh**:
    Setelah Gate 1 terbukti live, lanjutkan ke validasi battle outcome & pengurangan energy `25/5/5`.
 
+
+## 7. Percobaan Gate 1 - 6 November 2026
+
+- Seluruh syntax check, self-test, dan regression test offline kembali lulus; slider tetap **8/8 (100%)**.
+- `playwright-core` dipasang dari dependency yang sudah tercantum di `package.json`.
+- Mode `--captcha-test` dibatasi menjadi **satu percobaan penuh**. Event captcha kedua langsung menghentikan test.
+- Capture login diperluas agar tidak bergantung pada URL endpoint dan `nsclient.login()` kini dapat memakai payload sesi browser.
+- Gate 1 belum mencapai challenge CAPTCHA karena login browser berhenti pada `Response login web tidak tersedia`.
+- Tidak ada file `verify_rejected_*` baru, tidak ada jawaban CAPTCHA dikirim, dan jatah gagal CAPTCHA tidak terpakai.
+- Percobaan live dihentikan. Langkah berikut: audit response login browser secara lokal tanpa mencetak payload/token, lalu ulang Gate 1 hanya setelah capture sesi terbukti.
+## 8. Gate 1 Live Berhasil - 6 November 2026
+
+- Capture response login browser diperbaiki dengan decoding `_cc_unseal`; payload sesi browser dipakai oleh `nsclient.login()`.
+- Gate 1 berhasil pada `Mrmgnt1` dengan challenge `drag_shape`.
+- Server membalas `verify success`, room `8541` terbentuk, lalu script meninggalkan room otomatis.
+- Hanya satu jawaban CAPTCHA dikirim. Tidak terjadi retry atau penolakan.
+- Mode Co-op normal dan `--captcha-test` sama-sama dibatasi satu percobaan CAPTCHA per akun.
