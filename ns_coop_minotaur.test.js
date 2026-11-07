@@ -19,6 +19,7 @@ async function simulate(scenario, stage = 0, limit = 1) {
     let ready = [];
     let hostId = null;
     let charged = false;
+    let actionReady = new Set();
     const fakeProcess = { cwd: () => '/fixture', exitCode: 0 };
     if (stage) files.set('coop_validation.json', JSON.stringify({ roster: 'alpha,beta,gamma', quest: 3, stage }));
     class FakeSocket extends EventEmitter {
@@ -33,7 +34,7 @@ async function simulate(scenario, stage = 0, limit = 1) {
                 this.emit('captcha_required'); this.emit('captcha_required'); return;
             }
             if (scenario === 'timeout') return;
-            ready = []; hostId = this.charId; charged = false;
+            ready = []; hostId = this.charId; charged = false; actionReady = new Set();
             this.emit('join_room', { status: 1, room_name: 'room-' + createCalls });
         }
         joinRoom(room) { this.emit('join_room', { status: 1, room_name: room, characterId: this.charId }); }
@@ -44,9 +45,15 @@ async function simulate(scenario, stage = 0, limit = 1) {
         startGame() {
             const active = sockets.filter(socket => !socket.closed);
             for (const socket of active) socket.emit('battle_start');
+            for (const socket of active) socket.emit('battle_msg', { message: { event: 'info', state: 'join', ta: active.map(item => item.charId), tb: ['ene_501'] } });
             for (const socket of active) socket.emit('battle_msg', { message: { event: 'info', state: 'start_atb' } });
         }
-        battleWin() {
+        battleWin() {}
+        battleCommand(charId, action, skillId, targetId) {
+            assert.equal(String(charId), String(hostId));
+            assert.equal(action, 'skill');
+            assert.equal(skillId, 'skill345');
+            assert.equal(targetId, 'ene_501');
             if (scenario === 'lose') {
                 this.emit('battle_msg', { message: { state: 'battle_finish', winnerIDs: ['enemy501'] } }); return;
             }
@@ -54,11 +61,19 @@ async function simulate(scenario, stage = 0, limit = 1) {
                 for (const account of accounts) energies[account.username] -= account.username === hostId ? 25 : 5;
                 charged = true;
             }
-            this.emit('battle_msg', { message: { state: 'battle_win', charId: this.charId } });
+            this.emit('battle_msg', { message: { event: 'info', state: 'battle_finish', winnerIDs: sockets.filter(socket => !socket.closed).map(socket => String(socket.charId)) } });
         }
         battleJoin() {}
+        battleReady() {}
         startAtb() {}
-        battleCommand() {}
+        actionReady() {
+            actionReady.add(String(this.charId));
+            const active = sockets.filter(socket => !socket.closed);
+            if (actionReady.size === active.length) {
+                for (const socket of active) socket.emit('battle_msg', { message: { event: 'command', state: 'action', charId: hostId, charType: 'player' } });
+            }
+        }
+        actionFinish() {}
         leaveRoom() {}
         close() { this.closed = true; }
     }
@@ -71,7 +86,9 @@ async function simulate(scenario, stage = 0, limit = 1) {
         getSelectedChar: rows => rows[0],
         amf: async (method, args) => method === 'CharacterDAO.getCharactersList'
             ? { body: { result: [[args[0], args[0], 100]] } }
-            : { body: { character_energy: energies[args[0]], pvp_server: [{}], handoff_token: 'fixture', handoff_nonce: 'fixture', pveServerVersion: 'fixture', quest_list: [{ display_boss: ['enemy501'], quest_obj: [{ quest: 3, energy: [25, 5] }] }] } },
+            : method === 'CharacterDAO.getCharacterById'
+                ? { body: { gk: true, result: { character_skills: ['345', '854'], character_equipped_skills: ['345', '854', '3000'] } } }
+                : { body: { character_energy: energies[args[0]], pvp_server: [{}], handoff_token: 'fixture', handoff_nonce: 'fixture', pveServerVersion: 'fixture', quest_list: [{ display_boss: ['enemy501'], quest_obj: [{ quest: 3, energy: [25, 5] }] }] } },
     };
     const context = {
         module: { exports: {} },
@@ -104,7 +121,7 @@ async function simulate(scenario, stage = 0, limit = 1) {
 (async () => {
     const success = await simulate('success', 0, Infinity);
     assert.equal(success.report.matches.length, 1);
-    assert.equal(success.report.matches[0].confirmed, true);
+    assert.equal(success.report.matches[0].confirmed, true, JSON.stringify(success.report.matches[0]));
     assert.equal(success.validation.stage, 1);
     assert.equal(success.exitCode, 0);
     const rotation = await simulate('success', 1, 3);

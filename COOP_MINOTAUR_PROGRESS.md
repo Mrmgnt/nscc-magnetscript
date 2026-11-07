@@ -329,3 +329,68 @@ Menu 16/loop penuh hanya diaktifkan setelah Gate 1-3 lulus.
 - Perubahan pengiriman `battle_win` dari setiap socket belum menghasilkan `battle_win` atau `battle_finish` dari server.
 - Run berhenti aman pada `battle outcome timeout`; tidak ada retry CAPTCHA dan loop energy tidak dijalankan.
 - Gate battle tetap **belum lulus**. Investigasi berikutnya dilakukan offline pada payload/protokol battle sebelum live berikutnya.
+
+### Koreksi protokol giliran - 6 November 2026
+
+- Decompile `Client.as`, `Socket.as`, dan `Battle.as` diperiksa ulang.
+- Asumsi lama salah: `start_atb` hanya memulai animasi/siklus ATB, bukan prompt aksi dan bukan waktu mengirim `battle_win`.
+- Prompt giliran yang benar adalah `{event:"command", state:"action", charId, charType}` dari server.
+- Hanya socket dengan `charId` cocok yang sekarang mengirim `battle_command`.
+- Payload aksi sekarang selalu menyertakan `targetId` musuh pertama dari `join.tb`.
+- `action_finish`, prompt pemain lain, dan `start_atb` tidak lagi memicu aksi tambahan.
+- Pengiriman `battle_win` mentah dinonaktifkan dari orchestrator karena dua validasi live membuktikan server mengabaikannya.
+- Syntax check, self-test battle, dan simulasi Co-op lulus.
+- Gate live berikut: satu match untuk membuktikan urutan `start_atb -> command/action -> battle_command -> battle_action/action_finish`.
+
+### Validasi live protokol giliran - 6 November 2026
+
+- Gate live pertama setelah koreksi mencapai `start_atb`, tetapi server mengulang state tersebut karena client belum mengirim acknowledgment tween.
+- Decompile `Battle.tweenATBFinish()` membuktikan semua client wajib mengirim `{event:"info", state:"action", charId}` setelah setiap `start_atb`.
+- Setelah acknowledgment ditambahkan, live berikut mencapai `command/action` dan `command/battle_action` berulang.
+- Decompile `Battle.actionFinish_CB()` membuktikan semua client juga wajib mengirim `{event:"info", state:"action_finish", charId, char_dead}` setelah `battle_action`.
+- Setelah acknowledgment kedua ditambahkan, live terbaru berhasil menjalankan loop lengkap `start_atb -> action -> battle_command -> battle_action -> action_finish -> continue` berkali-kali.
+- Tidak ada `battle_finish` sebelum timeout karena bot masih memakai `weapon_attack`; masalah sekarang bergeser dari handshake ke damage/strategi skill.
+- Seluruh CAPTCHA pada live terbaru berhasil pada percobaan pertama, termasuk drag-shape setelah edge matcher diperbaiki.
+- Artefak drag-shape `1793973126549` kini terdeteksi `x=101,y=51`; regression drag lulus 2/2 dan slider tetap 9/9.
+- Energy sebelum run terbaru: `Mrmgnt3=10`, `dummymagnet=20`, `Mrmgnt1=40`. Run battle kemungkinan memakai `5/5/25`; host gate berikut menunggu energy pulih atau akun host valid tambahan.
+- Tugas offline berikut: muat skill karakter dan pilih skill damage tinggi agar Minotaur selesai sebelum battle timeout.
+
+### Main Uchiha Razq dan strategi skill - 6 November 2026
+
+- Main Co-op diganti dari `Mrmgnt1` ke akun `Mrmgnt`, karakter slot 1 `Uchiha Razq` level 100.
+- Dry-run terbaru: `Mrmgnt3=5`, `dummymagnet=15`, `Mrmgnt=100`; hanya `Mrmgnt` cukup energy untuk menjadi host.
+- Data karakter sekarang dibaca melalui `CharacterDAO.getCharacterById` saat login Co-op.
+- Uchiha Razq memuat 8 skill reguler equipped: `345, 854, 632, 623, 151, 638, 39, 728`.
+- Battle sekarang merotasi skill equipped tersebut dan tidak lagi memakai `weapon_attack` selama skill tersedia.
+- Skill khusus ID `3000+` tidak dikirim sebagai action `skill` karena memakai jalur action berbeda.
+- Syntax check, self-test battle, simulasi Co-op, dan dry-run lulus.
+- Validasi live skill belum mencapai room: CAPTCHA drag-shape akun `Mrmgnt` ditolak sekali dengan `fails_left=32`; run berhenti tanpa retry dan tanpa battle.
+- Auto-kill yang dianggap sah tetap harus berakhir pada `battle_finish`; memalsukan `battle_win` atau hanya menghabiskan energy tidak menghasilkan score/reward.
+
+### Validasi live skill Uchiha Razq - 6 November 2026
+
+- CAPTCHA slider, rotate, dan drag-shape berhasil pada percobaan pertama.
+- Battle masuk loop penuh dan server menerima `battle_command` berbasis skill dari roster baru.
+- `battle_finish` belum muncul sebelum timeout default `180000ms`; score/reward belum terbukti.
+- Script operasional untuk login, CAPTCHA, room, dan battle loop, tetapi belum siap disebut farming score selesai.
+- Timeout dapat dinaikkan lewat `NS_COOP_BATTLE_TIMEOUT=600000` untuk validasi match panjang.
+- Logging battle sekarang menampilkan `action` dan `skillId` dari `battle_action` agar damage path dapat diaudit pada run berikutnya.
+
+### Eksperimen auto-win setelah aksi valid - 6 November 2026
+
+- Percobaan lama mengirim `battle_win` saat `start_atb`; server mengabaikannya karena battle belum menjalankan aksi valid.
+- Strategi A kini menunggu `battle_action`, mengirim `action_finish`, lalu mengirim `battle_win` satu kali.
+- Varian pertama hanya mengirim dari socket penyerang; live tidak menghasilkan `battle_finish`.
+- Varian kedua disiapkan agar semua socket mengirim `battle_win` setelah aksi valid pertama.
+- Varian kedua belum dapat diuji karena energy roster tidak lagi memenuhi `25/5/5`; `dummymagnet` habis setelah run sebelumnya.
+- Script sekarang gagal eksplisit jika scheduler menghasilkan nol match, bukan keluar sukses dengan report kosong.
+- Status tetap: auto-kill dan score belum terbukti sampai server mengirim `battle_finish` dengan `winnerIDs`, `score`, dan reward.
+
+### Koreksi format skill ID - 6 November 2026
+
+- Logging live menunjukkan seluruh `battle_action` menjadi `action=attack`, walau bot meminta action `skill`.
+- Decompile `DataParser.as` dan `Skill.as` membuktikan key runtime berbentuk `skill345`, bukan angka mentah `345`.
+- Skill Co-op sekarang dikirim sebagai `skill345`, `skill854`, dan seterusnya agar ditemukan dalam `Central.main.SKILL_DATA`.
+- Ini menjelaskan kenapa strategi skill sebelumnya tidak menaikkan damage: server fallback ke serangan biasa.
+- Auto-win mentah setelah aksi valid tetap diabaikan server, termasuk saat dikirim semua tiga socket.
+- Validasi live format skill baru menunggu tiga akun kembali memiliki energy minimal `25/5/5`.

@@ -204,6 +204,7 @@ function levelSuffix(level) {
 const BOSS_ENEMY_ID = {
     minotaur: 'enemy501',
 };
+const AUTO_KILL_SKILL_PRIORITY = ['2004', '345', '632', '638', '623', '728'];
 
 function bossMatches(group, bossLc, bossEnemy) {
     const bosses = (group.display_boss || []).map(String).join(' ').toLowerCase();
@@ -234,14 +235,29 @@ function findQuestId(questList, boss, level) {
 async function loginAccount(acc, webData) {
     const s = await c.login(acc.username, acc.password, webData);
     if (!s.ok) return { ok: false, account: acc, error: s.message || s.stage };
-    let charId = null, charName = null, level = null;
+    let charId = null, charName = null, level = null, skills = [];
     try {
         const rl = await c.amf('CharacterDAO.getCharactersList', [s.sessionKey]);
         const chars = (rl && rl.body && Array.isArray(rl.body.result)) ? rl.body.result : [];
         const row = c.getSelectedChar(chars, acc.slot || undefined);
         if (row) { charId = row[0]; charName = row[1]; level = Number(row[2]) || null; }
+        if (charId) {
+            for (let attempt = 0; attempt < 4; attempt++) {
+                const detail = await c.amf('CharacterDAO.getCharacterById', [s.sessionKey, charId]);
+                if (detail && detail.body && detail.body.gk) {
+                    const data = detail.body.result || {};
+                    const owned = new Set((data.character_skills || data.character_skill || []).map(String));
+                    const equipped = (data.character_equipped_skills || []).map(String);
+                    const priority = AUTO_KILL_SKILL_PRIORITY.filter(id => owned.has(id));
+                    const fallback = equipped.filter(id => owned.has(id) && Number(id) > 0 && Number(id) < 3000 && !priority.includes(id));
+                    skills = [...priority, ...fallback].map((id, index) => ({ skillId: 'skill' + id, damage: 1000 - index, cooldown: 8, once: id === '2004' }));
+                    break;
+                }
+                await sleep(1000);
+            }
+        }
     } catch (_) {}
-    return { ok: true, account: acc, session: s, charId, charName, level };
+    return { ok: true, account: acc, session: s, charId, charName, level, skills };
 }
 
 async function readPveInit(session) {
@@ -281,7 +297,7 @@ async function loginAll(accounts, log, webLogins) {
     for (const [u, res] of sessions) {
         const roles = byUser.get(u).join('+');
         if (!res.ok) log(`  [X] ${roles} ${u}: LOGIN GAGAL (${res.error})`);
-        else log(`  [OK] ${roles.padEnd(9)} ${u.padEnd(14)} char=${res.charName}(Lv ${res.level})`);
+        else log(`  [OK] ${roles.padEnd(9)} ${u.padEnd(14)} char=${res.charName}(Lv ${res.level}) skills=${res.skills.length}`);
     }
     return sessions;
 }
@@ -348,7 +364,7 @@ async function runLive(args, accounts) {
         if (!result || !result.ok || !result.charId) throw new Error('Login/karakter tidak tersedia: ' + account.username);
         const pve = await readPveInit(result.session);
         if (!pve || !Number.isFinite(pve.energy)) throw new Error('Energy server tidak valid: ' + account.username);
-        players.push({ account, username: account.username, role: account.role, session: result.session, charId: result.charId, charName: result.charName, pve, energy: pve.energy });
+        players.push({ account, username: account.username, role: account.role, session: result.session, charId: result.charId, charName: result.charName, skills: result.skills || [], pve, energy: pve.energy });
     }
     if (players.length !== 3 || new Set(players.map(player => String(player.charId))).size !== 3) throw new Error('Butuh tepat 3 akun dan karakter unik.');
     const quest = findQuestId(players[0].pve.questList, args.boss, args.level);
@@ -391,7 +407,6 @@ async function runLive(args, accounts) {
             let pending = null;
             let outcome = null;
             let battleStarted = false;
-            const winSent = new Set();
             let roomReady = [];
             const readyConfirmed = new Set();
             const fail = message => { matchError = matchError || new Error(message); };
@@ -464,7 +479,7 @@ async function runLive(args, accounts) {
                         if (Array.isArray(ready)) roomReady = characterIds(ready);
                         if (pending && pending.socket === socket && pending.label === 'ready') readyConfirmed.add(String(player.charId));
                     });
-                    const battle = new PveBattle({ charId: player.charId, strategy: args.strategy, skills: [] });
+                    const battle = new PveBattle({ charId: player.charId, strategy: args.strategy, skills: player.skills || [] });
                     const finish = (event, data) => {
                         if (!battleStarted) return;
                         if (data && (data.success === false || data.status === 0)) { fail(event + ' ditolak server'); return; }
@@ -483,15 +498,24 @@ async function runLive(args, accounts) {
                         let message = raw && raw.message ? raw.message : raw;
                         if (typeof message === 'string') { try { message = JSON.parse(message); } catch (_) { fail('battle_msg bukan JSON'); return; } }
                         if (!message) return;
-                        line('  battle_msg ' + player.username + ': event=' + String(message.event || '') + ' state=' + String(message.state || ''));
+                        const action = message.battleAction && message.battleAction.action;
+                        const skillId = message.battleAction && (message.battleAction.skillId || message.battleAction.SENSKILLID || message.battleAction.BLSKILLID);
+                        line('  battle_msg ' + player.username + ': event=' + String(message.event || '') + ' state=' + String(message.state || '') + (action ? ' action=' + action : '') + (skillId ? ' skill=' + skillId : ''));
                         if (['join', 'start', 'start_atb'].includes(message.state)) battleStarted = true;
                         if (message.state === 'battle_lose') { fail('Battle kalah'); return; }
                         if (['battle_win', 'battle_finish'].includes(message.state)) { finish(message.state, message); return; }
                         const step = battle.nextStep(message);
                         if (step.type === 'ready') socket.battleReady();
                         else if (step.type === 'startAtb') socket.startAtb();
-                        else if (step.type === 'win' && !winSent.has(String(player.charId))) { winSent.add(String(player.charId)); socket.battleWin(player.charId); }
-                        else if (step.type === 'turn' && args.strategy === 'B') socket.battleCommand(player.charId, step.battleAction.action, step.battleAction.skillId);
+                        else if (step.type === 'actionReady') socket.actionReady();
+                        else if (step.type === 'actionFinish') {
+                            socket.actionFinish(step.charDead);
+                            if (step.autoWin) {
+                                line('  auto_win ' + player.username + ': after valid battle_action');
+                                socket.battleWin(player.charId);
+                            }
+                        }
+                        else if (step.type === 'turn') socket.battleCommand(player.charId, step.battleAction.action, step.battleAction.skillId, step.targetId);
                     });
                     socket.auth();
                     await socket.waitAuth(15000);
@@ -546,6 +570,7 @@ async function runLive(args, accounts) {
                 saveReport();
             }
         }
+        if (report.length === 0) throw new Error('Tidak ada match: butuh tiga akun dengan energy minimal host/join/join = 25/5/5');
         const successful = report.length > 0 && report.every(row => row.confirmed && !row.error);
         if (successful && args.strategy !== 'B') {
             validation = { roster, quest: quest.quest, stage: report.length >= 3 && new Set(report.map(row => row.host)).size === 3 ? 3 : Math.max(validation.stage, 1), verifiedAt: new Date().toISOString() };

@@ -186,19 +186,17 @@ Temuan kunci dari decompile (Battle.as / BattleProcessor.as / Client.as):
 - `godModeHackCheck()` hanya memvalidasi total poin atribut (wind+fire+lightning+water+earth
   <= level) ? BUKAN damage battle. Tidak menghalangi auto-kill.
 
-### Kesimpulan auto-kill
+### Kesimpulan alur battle
 
-- **Jalur A (auto-kill)** ? kirim `battle_win` segera setelah menerima broadcast `start_atb`.
-  Sangat mungkin berhasil karena server meneruskan sinyal menang; reward dihitung server.
-  Ada kemungkinan server menunggu state relay; karena itu disediakan **fallback**.
-- **Jalur B (safe-play)** ? jalankan giliran: tiap prompt giliran kirim
-  `battle_command` `{charId,targetId,battleAction:{action:'weapon_attack'|'skill',skillId}}`.
-  Pasti sah, lebih lambat.
-- Mode `--strategy auto` (default) mencoba A lalu otomatis B bila tak ada `battle_finish`.
-- Durasi battle Jalur A: ~detik; Jalur B: bergantung jumlah giliran.
-
-Catatan: perilaku pasti server (menerima `battle_win` mentah atau menunggu relay) hanya bisa
-dipastikan dengan 1 capture traffic hidup; implementasi sudah menangani kedua kemungkinan.
+- `start_atb` hanya memulai siklus ATB; bukan prompt untuk mengirim aksi atau kemenangan.
+- Setelah setiap `start_atb`, semua client mengirim `{event:"info",state:"action",charId}` dari `Battle.tweenATBFinish()`.
+- Client harus menunggu `{event:"command",state:"action",charId,...}`.
+- Hanya socket dengan `charId` yang cocok mengirim `battle_command` lengkap dengan `targetId`.
+- Setelah menerima `battle_action`, semua client mengirim `{event:"info",state:"action_finish",charId,char_dead}`.
+- Server dapat mengirim `continue`, lalu client memulai siklus ATB berikutnya.
+- `action_finish` bukan prompt aksi baru.
+- Pengiriman `battle_win` mentah setelah `start_atb` sudah gagal pada validasi live dan tidak lagi dipakai.
+- Mode lama `A`, `B`, dan `auto` kini memakai alur giliran server yang sama sampai strategi damage lengkap tersedia.
 
 ## 7. Captcha
 
@@ -209,7 +207,6 @@ browser. Verification payload includes challenge id, answer, hash, and `cc_mouse
 
 ## 8. Open items (still need user input)
 
-1. Live traffic capture (1 manual match) to finalize battle Jalur A vs B + exact
-   `battle_win` payload.
+1. Validasi live bahwa server mengirim `command/action` dan menerima `battle_command` bertarget.
 2. Number of verified dummies & energy-regen policy (stop vs wait).
 3. ToS/ban risk (user already accepted).

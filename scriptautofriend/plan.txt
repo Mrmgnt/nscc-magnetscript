@@ -1,0 +1,22 @@
+requirement
+
+1.akun untuk referal link nya https://ninjasaga.cc/?ref=DV4U5L93
+2.email bulk : https://www.emailnator.com/bulk-emails
+3.register ns account (email filled with email bulk, expected 1000 akun and all account got verify)
+4. every account ns must be 
+-.verify email (via inbox dari bulk emailnya ) 
+-must reach lvl 20 (use nscc.bat for leveling, use multi thread for levelling, every 20-30 account running
+-they must sign up from a different device and ip than you (must be plan, is it need proxy or something we can use?)
+-
+plan :  target 1000 akun 
+
+
+1.buat 1000 akun ninjasaga (harus pakai proxy/apapun itu, karna kalo dari requirementnya harus beda ip)
+2.setiap akun emailnya harus terisi dari emailnator.com(karna butuh verify akunya)
+3.harus bisa menyelesaikan/bypass captcha im not robotnya ,bisa cari banyak library atau tools untuk ini
+4.setellah berhasil step selanjutnya adalah verify semua akunya(ada captcha lagi) dan hit send code  dan berhasil (menggunakan inbox yg ada di email bulk), jika ga bisa langsung 1000 akun kita cicil per beberapa akun, kamu riset dulu saja 
+5.jika sudah verify leveling menggunakan nscc.bat max sampai lvl 20, kira kira bisa berapa banyak akun di multithreadnya 
+
+
+
+
