@@ -213,6 +213,16 @@ async function runBulk(action, extraArgs = [], delaySec = 6) {
             targetScript = 'ns_level.js';
             actionLabel = 'AUTO GRINDING LEVEL + UJIAN HARD';
             break;
+        case 'halloween':
+        case 'event':
+            targetScript = 'ns_halloween.js';
+            actionLabel = 'HALLOWEEN EVENT BATTLE (AUTO-FARM HEART OF KARI + REWARD)';
+            break;
+        case 'halloween_loop':
+        case 'scheduler':
+            targetScript = 'ns_halloween.js';
+            actionLabel = 'HALLOWEEN AUTO MATCH SCHEDULER LOOP';
+            break;
         default:
             targetScript = 'ns_daily.js';
             actionLabel = 'JATAH HARIAN FULL (TP + SS + EUDEMON DRAGON + CLAIM HH TANPA BATTLE)';
@@ -259,6 +269,10 @@ async function runBulk(action, extraArgs = [], delaySec = 6) {
             scriptArgs = ['auto', '8'];
         } else if (action === 'level') {
             scriptArgs = [String(acc.targetLevel || 60), '8'];
+        } else if (action === 'halloween' || action === 'event') {
+            scriptArgs = ['run', '99'];
+        } else if (action === 'halloween_loop' || action === 'scheduler') {
+            scriptArgs = ['loop'];
         } else {
             scriptArgs = ['--pure'];
         }
@@ -349,12 +363,17 @@ async function interactiveMenu() {
     console.log('  5. Hunting House Saja (Auto Claim Daily Passport + Battle Boss)');
     console.log('  6. Claim Daily Hunting House Saja (Tanpa Battle - Ambil 5/10 Tiket)');
     console.log('  7. Training TP & SS Saja');
-    console.log('  8. Misi Grade S Saja (Auto Stamina Runner - Stage 1-5)');
-    console.log('  9. Auto Grinding Level + Ujian Saja (Target level di accounts.txt)');
+    console.log('  [ EVENT KHUSUS (HALLOWEEN) ]');
+    console.log('  8. Auto Halloween Battle Multi-Akun (Cepat & Claim Reward Heart of Kari)');
+    console.log('  9. Halloween Scheduler Loop Multi-Akun (Standby Auto Match saat Heart Terisi)');
+    console.log('');
+    console.log('  [ MISI & LEVELING MULTI-AKUN ]');
+    console.log(' 10. Misi Grade S Saja (Auto Stamina Runner - Stage 1-5)');
+    console.log(' 11. Auto Grinding Level + Ujian Saja (Target level di accounts.txt)');
     console.log('  0. Kembali ke Menu Utama');
     console.log('======================================================================');
 
-    const choice = (await ask('Pilih menu [0-9, Enter = 1] : ')).trim() || '1';
+    const choice = (await ask('Pilih menu [0-11, Enter = 1] : ')).trim() || '1';
     if (choice === '0') {
         rl.close();
         return;
@@ -388,9 +407,17 @@ async function interactiveMenu() {
             await runBulk('train', [], delay);
             break;
         case '8':
-            await runBulk('grades', [], delay);
+            await runBulk('halloween', [], delay);
             break;
         case '9':
+            // Scheduler loop multi-akun langsung panggil runner halloween scheduler
+            const hwMod = require('./ns_halloween.js');
+            await hwMod.runSchedulerLoop(true, { accountDelay: delay });
+            break;
+        case '10':
+            await runBulk('grades', [], delay);
+            break;
+        case '11':
             await runBulk('level', [], delay);
             break;
         default:

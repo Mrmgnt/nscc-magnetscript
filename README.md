@@ -22,6 +22,12 @@
   - Misi level tertinggi yang terbuka otomatis.
   - Exam otomatis: Chunin (Lv 20), Jounin (Lv 40), Special Jounin (Lv 60), Sennin (Lv 80 - 12 mode hard).
   - Misi Grade S Stage 1-5 (Lv 80+, 82k-100k XP per battle).
+- **Auto Halloween Event (`ns_halloween.js` & Scheduler)**:
+  - Panel Halloween_battle_2016 (Furious Zombie `enemy535` & 4 musuh lainnya).
+  - Eksekusi ultra cepat (~1-1.5 detik per match) dengan verifikasi token boss AMF langsung ke server.
+  - 100% Mengklaim Boss Reward: Heart of Kari (`item1027`), XP (+30.000), Gold (+30.000).
+  - Dukungan **Multiple Akun & Multi-Character** secara sekuensial dari `accounts.txt`.
+  - **Halloween Auto Match Scheduler**: berjalan terus di background, otomatis membaca timer refill server (`heart_refill_remain`), dan seketika Heart terisi langsung otomatis mulai match kembali!
 - **Auto Co-op Hunting Minotaur Extreme (`ns_coop_minotaur.js`)**:
   - Tiga akun unik: host round-robin, dua akun lain join; duplikat host/main digabung.
   - Captcha slider/drag melalui Edge masih eksperimental; rotate/grid berhenti tanpa menebak.
@@ -122,6 +128,24 @@ node ns_multi_manager.js house --delay 6
 
 :: Claim Daily Hunting House saja (Tanpa Battle) untuk semua akun/karakter
 node ns_multi_manager.js claim --delay 5
+```
+
+#### Event Halloween Battle & Scheduler (`ns_halloween.js`):
+```cmd
+:: Jalankan akun aktif hingga Heart habis (Cepat & Claim Reward)
+node ns_halloween.js run
+
+:: Jalankan untuk SEMUA akun di accounts.txt
+node ns_halloween.js multi
+
+:: Scheduler Loop Akun Aktif (Auto-Match terus tiap Heart terisi)
+node ns_halloween.js loop
+
+:: Scheduler Loop Multi-Akun (Auto-Match terus untuk semua akun di accounts.txt)
+node ns_halloween.js multi_loop
+
+:: Cek Status Heart & Waktu Refill Saja
+node ns_halloween.js status
 ```
 
 

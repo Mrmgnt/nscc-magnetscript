@@ -39,8 +39,8 @@ goto WRAPPER_LOOP
 
 :MENU_CORE
 :: Muat sesi login & karakter aktif jika sudah ada
-if exist ".char_env.bat" (
-  call ".char_env.bat"
+if exist "%~dp0.char_env.bat" (
+  call "%~dp0.char_env.bat"
 )
 
 if not "%NS_USER%"=="" if not "%NS_PASS%"=="" if not "%NS_CHAR_ID%"=="" (
@@ -76,8 +76,8 @@ if errorlevel 1 (
   pause >nul
   goto LOGIN
 )
-if exist ".char_env.bat" (
-  call ".char_env.bat"
+if exist "%~dp0.char_env.bat" (
+  call "%~dp0.char_env.bat"
 )
 timeout /t 1 >nul
 
@@ -100,42 +100,48 @@ echo         3. Eudemon Dragon Saja (Auto 3x Emblem / 1x Free Sampai Habis)
 echo         4. Hunting House Saja (Auto Claim 5/10 Tiket + Battle Boss / Claim)
 echo         5. Menu Gabungan Hunting House ^& Eudemon Dragon (Semua Mode)
 echo.
-echo   [ 2 ] MISI ^& GRINDING LEVEL
-echo         6. Misi Grade S (Auto Stamina Runner: Stage 1-5, XP 80k-100k)
-echo         7. Auto Leveling + Ujian Hard (Chunin / Jounin / Sennin)
-echo         8. Murni Grinding Misi Grade Level (C / B / A / S)
-echo         9. Cek Daftar Misi ^& Status Selesai (Per Grade)
+echo   [ 2 ] EVENT HALLOWEEN (FAST BATTLE ^& SCHEDULER)
+echo         6. Auto Halloween Battle (Cepat, Claim Reward, Single/Multi-Akun)
+echo         7. Halloween Scheduler Loop (Auto Match Tiap Heart Terisi)
 echo.
-echo   [ 3 ] MULTI-ACCOUNT ^& TOOLS
-echo        10. Multi-Account ^& Multi-Character Runner (accounts.txt)
-echo        11. Dummy Farmer (Auto Register/Login Akun ^& Kirim Gift Harian)
-echo        12. Test Local Feed (Multi-Threaded Dev Test)
+echo   [ 3 ] MISI ^& GRINDING LEVEL
+echo         8. Misi Grade S (Auto Stamina Runner: Stage 1-5, XP 80k-100k)
+echo         9. Auto Leveling + Ujian Hard (Chunin / Jounin / Sennin)
+echo        10. Murni Grinding Misi Grade Level (C / B / A / S)
+echo        11. Cek Daftar Misi ^& Status Selesai (Per Grade)
 echo.
-echo   [ 4 ] INFORMASI ^& KARAKTER
-echo        13. Cek Status Karakter (Level, XP, Gold, Token, Ujian, Hunting)
-echo        14. Ganti Karakter Aktif (Pilih karakter lain di akun ini)
-echo        15. Ganti Akun / Logout
+echo   [ 4 ] MULTI-ACCOUNT ^& TOOLS
+echo        12. Multi-Account ^& Multi-Character Runner (accounts.txt)
+echo        13. Dummy Farmer (Auto Register/Login Akun ^& Kirim Gift Harian)
+echo        14. Test Local Feed (Multi-Threaded Dev Test)
+echo.
+echo   [ 5 ] INFORMASI ^& KARAKTER
+echo        15. Cek Status Karakter (Level, XP, Gold, Token, Ujian, Hunting, Heart)
+echo        16. Ganti Karakter Aktif (Pilih karakter lain di akun ini)
+echo        17. Ganti Akun / Logout
 echo.
 echo         0. Keluar
 echo ======================================================================
 set "PILIH="
-set /p "PILIH=Pilih menu [0-15]: "
+set /p "PILIH=Pilih menu [0-17]: "
 
 if "%PILIH%"=="1" goto DAILY
 if "%PILIH%"=="2" goto TRAIN
 if "%PILIH%"=="3" goto EUDEMON
 if "%PILIH%"=="4" goto HUNTINGHOUSE
 if "%PILIH%"=="5" goto HUNT
-if "%PILIH%"=="6" goto GRADES
-if "%PILIH%"=="7" goto LEVEL
-if "%PILIH%"=="8" goto MISSIONONLY
-if "%PILIH%"=="9" goto MISSIONS
-if "%PILIH%"=="10" goto MULTIMANAGER
-if "%PILIH%"=="11" goto DUMMYFARMER
-if "%PILIH%"=="12" goto LOCALFEED
-if "%PILIH%"=="13" goto STATE
-if "%PILIH%"=="14" goto GANTICHAR
-if "%PILIH%"=="15" goto GANTI
+if "%PILIH%"=="6" goto HALLOWEEN
+if "%PILIH%"=="7" goto HALLOWEEN_SCHED
+if "%PILIH%"=="8" goto GRADES
+if "%PILIH%"=="9" goto LEVEL
+if "%PILIH%"=="10" goto MISSIONONLY
+if "%PILIH%"=="11" goto MISSIONS
+if "%PILIH%"=="12" goto MULTIMANAGER
+if "%PILIH%"=="13" goto DUMMYFARMER
+if "%PILIH%"=="14" goto LOCALFEED
+if "%PILIH%"=="15" goto STATE
+if "%PILIH%"=="16" goto GANTICHAR
+if "%PILIH%"=="17" goto GANTI
 if "%PILIH%"=="0" goto END
 goto MENU
 
@@ -285,6 +291,85 @@ echo.
 pause
 goto MENU
 
+:HALLOWEEN
+cls
+echo ======================================================================
+echo           AUTO HALLOWEEN BATTLE (ULTRA FAST + CLAIM REWARD)
+echo                     cc: MagnetScript(Razki)
+echo ======================================================================
+echo   - Menjalankan battle Halloween secara cepat (~1-1.5 detik per match)
+echo   - 100%% Mengklaim Reward Boss (Heart of Kari item1027, XP +30k, Gold +30k)
+echo   - Otomatis berhenti ketika Heart habis (atau sesuai batas battle)
+echo.
+echo   Pilih target akun yang ingin dijalankan:
+echo     1. Akun Aktif Saat Ini (%NS_USER% - %NS_CHAR_NAME%)
+echo     2. Multiple Akun (Semua akun ^& karakter di accounts.txt)
+echo     3. Cek Status Heart of Kari ^& Waktu Refill Saja
+echo     0. Kembali ke Menu Utama
+echo.
+echo   Tips: Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti ke menu.
+echo.
+set "HW_OPT="
+set /p "HW_OPT=Pilih mode [0-3, default: 1]: "
+if "%HW_OPT%"=="" set "HW_OPT=1"
+if "%HW_OPT%"=="0" goto MENU
+if "%HW_OPT%"=="3" (
+  echo.
+  node ns_halloween.js status
+  echo.
+  pause
+  goto MENU
+)
+if "%HW_OPT%"=="2" (
+  set "HW_MAX="
+  set /p "HW_MAX=Batas maks battle per karakter (default: sampai heart habis / 99): "
+  if "%HW_MAX%"=="" set "HW_MAX=99"
+  echo.
+  node ns_halloween.js multi %HW_MAX%
+) else (
+  set "HW_MAX="
+  set /p "HW_MAX=Batas maks battle (default: sampai heart habis / 99): "
+  if "%HW_MAX%"=="" set "HW_MAX=99"
+  echo.
+  node ns_halloween.js run %HW_MAX%
+)
+echo.
+pause
+goto MENU
+
+:HALLOWEEN_SCHED
+cls
+echo ======================================================================
+echo             HALLOWEEN AUTO MATCH SCHEDULER (LOOP CONTINUOUS)
+echo                     cc: MagnetScript(Razki)
+echo ======================================================================
+echo   - Bot berjalan terus di background/terminal:
+echo       1. Langsung bertarung jika Heart tersedia (Auto Claim Reward)
+echo       2. Saat Heart habis (0/8), mendeteksi waktu refill dari server
+echo       3. Standby & hitung mundur otomatis
+echo       4. Begitu Heart terisi (>= 1), langsung instant mulai match kembali!
+echo.
+echo   Pilih mode scheduler:
+echo     1. Scheduler untuk Akun Aktif (%NS_USER% - %NS_CHAR_NAME%)
+echo     2. Scheduler untuk Multiple Akun (accounts.txt)
+echo     0. Kembali ke Menu Utama
+echo.
+echo   Tips: Tekan tombol [Q] atau [Ctrl+C] kapan saja untuk stop ke menu.
+echo.
+set "SCH_OPT="
+set /p "SCH_OPT=Pilih mode [0-2, default: 1]: "
+if "%SCH_OPT%"=="" set "SCH_OPT=1"
+if "%SCH_OPT%"=="0" goto MENU
+echo.
+if "%SCH_OPT%"=="2" (
+  node ns_halloween.js multi_loop
+) else (
+  node ns_halloween.js loop
+)
+echo.
+pause
+goto MENU
+
 :GRADES
 cls
 echo ======================================================================
@@ -393,8 +478,8 @@ goto MENU
 cls
 set "NS_FORCE_SELECT=1"
 call node ns_select_char.js
-if exist ".char_env.bat" (
-  call ".char_env.bat"
+if exist "%~dp0.char_env.bat" (
+  call "%~dp0.char_env.bat"
 )
 set "NS_FORCE_SELECT="
 goto MENU

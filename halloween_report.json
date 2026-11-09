@@ -1,0 +1,86 @@
+{
+  "timestamp": "2026-11-09T08:52:39.024Z",
+  "totalCharacters": 7,
+  "totalBattles": 41,
+  "totalHeartOfKari": 41,
+  "durationSec": 159,
+  "details": [
+    {
+      "user": "Mrmgnt",
+      "slot": "1",
+      "charName": "Uchiha Razq",
+      "battles": 6,
+      "kariGained": 6,
+      "kariTotal": 10,
+      "refillRemain": 1740,
+      "status": "SUCCESS",
+      "duration": 20
+    },
+    {
+      "user": "Mrmgnt",
+      "slot": "2",
+      "charName": "GOKU",
+      "battles": 7,
+      "kariGained": 7,
+      "kariTotal": 35,
+      "refillRemain": 509,
+      "status": "SUCCESS",
+      "duration": 22
+    },
+    {
+      "user": "Mrmgnt",
+      "slot": "3",
+      "charName": "GOJO SATORU",
+      "battles": 8,
+      "kariGained": 8,
+      "kariTotal": 32,
+      "refillRemain": 3580,
+      "status": "SUCCESS",
+      "duration": 25
+    },
+    {
+      "user": "Mrmgnt1",
+      "slot": "1",
+      "charName": "Uzumaki Magnet",
+      "battles": 5,
+      "kariGained": 5,
+      "kariTotal": 25,
+      "refillRemain": 3588,
+      "status": "SUCCESS",
+      "duration": 18
+    },
+    {
+      "user": "Mrmgnt2",
+      "slot": "1",
+      "charName": "mrmgnt2",
+      "battles": 5,
+      "kariGained": 5,
+      "kariTotal": 5,
+      "refillRemain": 3587,
+      "status": "SUCCESS",
+      "duration": 17
+    },
+    {
+      "user": "dummymagnet",
+      "slot": "1",
+      "charName": "dummymagnet",
+      "battles": 5,
+      "kariGained": 5,
+      "kariTotal": 5,
+      "refillRemain": 3588,
+      "status": "SUCCESS",
+      "duration": 17
+    },
+    {
+      "user": "Mrmgnt3",
+      "slot": "1",
+      "charName": "MagnetPrime",
+      "battles": 5,
+      "kariGained": 5,
+      "kariTotal": 5,
+      "refillRemain": 3587,
+      "status": "SUCCESS",
+      "duration": 17
+    }
+  ]
+}

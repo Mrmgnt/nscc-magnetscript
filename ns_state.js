@@ -153,7 +153,7 @@ function countItemInString(rawStr, itemId) {
     const ssOut = ssMissions.map(m => `msn${m}: ${cariMsn(m)}`).join('  ');
     console.log(`   ${ssOut}`);
 
-    // Hunting House & Eudemon Dragon Status
+    // Hunting House, Eudemon Dragon & Halloween Status
     try {
         const hh = await c.amf('ItemDAO.getCharacterHuntingList', [s.sessionKey]);
         if (hh.body && Number(hh.body.status) === 1) {
@@ -168,6 +168,19 @@ function countItemInString(rawStr, itemId) {
             const rooms = eg.body.result.room;
             const totalTries = rooms.reduce((acc, r) => acc + (Number(r.time) || 0), 0);
             console.log(` Eudemon Dragon: Sisa total ${totalTries}x kesempatan battle hari ini dari ${rooms.length} room`);
+        }
+    } catch (_) { }
+
+    try {
+        const hw = await c.amf('HalloweenEvent2016.getBattleStatus', [s.sessionKey]);
+        if (hw.body && hw.body.result) {
+            const rHeart = hw.body.result.remain_heart || 0;
+            const mHeart = hw.body.result.heart_max || 8;
+            const rRefill = hw.body.result.heart_refill_remain || 0;
+            const m = Math.floor(rRefill / 60);
+            const sRemain = rRefill % 60;
+            const refillStr = m > 0 ? `${m}m ${sRemain}s` : `${sRemain}s`;
+            console.log(` Event Halloween: Sisa ${rHeart}/${mHeart} Hearts (Refill: ${refillStr}) | ${rHeart > 0 ? 'SIAP BATTLE' : 'Menunggu refill'}`);
         }
     } catch (_) { }
 
