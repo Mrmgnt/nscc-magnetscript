@@ -9,6 +9,7 @@ scratch/
 
 # Sensitive account and credential files
 coop_accounts.txt
+pvpduel.txt
 coop_report.json
 coop_validation.json
 accounts.txt

@@ -24,6 +24,18 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 const SITE = 'https://ninjasaga.cc/';
 const ORIGIN = 'https://ninjasaga.cc';
 
+function curlProxyArgs() {
+    const configured = process.env.NS_HTTP_PROXY || process.env.HTTPS_PROXY || process.env.https_proxy;
+    if (configured) return ['--proxy', configured];
+    if (process.platform !== 'win32') return [];
+    try {
+        const result = spawnSync('reg.exe', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings', '/v', 'ProxyServer'], { encoding: 'utf8', windowsHide: true });
+        const match = result.status === 0 && String(result.stdout || '').match(/ProxyServer\s+REG_SZ\s+(.+)$/mi);
+        if (!match || !match[1].trim()) return [];
+        return ['--proxy', 'http://' + match[1].trim()];
+    } catch (_) { return []; }
+}
+
 const u16 = v => { const b = Buffer.allocUnsafe(2); b.writeUInt16BE(v, 0); return b; };
 const u32 = v => { const b = Buffer.allocUnsafe(4); b.writeUInt32BE(v, 0); return b; };
 function enc(val) {
@@ -99,6 +111,7 @@ function httpJson(host, path, payload) {
         const data = Buffer.from(JSON.stringify(payload), 'utf8');
         const args = [
             '-s', '-S',
+            ...curlProxyArgs(),
             '-X', 'POST',
             url,
             '-H', 'Content-Type: application/json',
@@ -144,6 +157,7 @@ function amf(service, params) {
     if (process.platform === 'win32') {
         const args = [
             '-s', '-S',
+            ...curlProxyArgs(),
             '-X', 'POST',
             'https://' + AMF_HOST + '/',
             '-H', 'Content-Type: application/x-amf',

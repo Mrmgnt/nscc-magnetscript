@@ -119,11 +119,12 @@ echo   [ 5 ] INFORMASI ^& KARAKTER
 echo        15. Cek Status Karakter (Level, XP, Gold, Token, Ujian, Hunting, Heart)
 echo        16. Ganti Karakter Aktif (Pilih karakter lain di akun ini)
 echo        17. Ganti Akun / Logout
+echo        18. Auto Live PvP Duel (pvpduel.txt)
 echo.
 echo         0. Keluar
 echo ======================================================================
 set "PILIH="
-set /p "PILIH=Pilih menu [0-17]: "
+set /p "PILIH=Pilih menu [0-18]: "
 
 if "%PILIH%"=="1" goto DAILY
 if "%PILIH%"=="2" goto TRAIN
@@ -142,6 +143,7 @@ if "%PILIH%"=="14" goto LOCALFEED
 if "%PILIH%"=="15" goto STATE
 if "%PILIH%"=="16" goto GANTICHAR
 if "%PILIH%"=="17" goto GANTI
+if "%PILIH%"=="18" goto PVPDUEL
 if "%PILIH%"=="0" goto END
 goto MENU
 
@@ -529,6 +531,23 @@ echo.
 echo   Tips: Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti ke menu.
 echo.
 node ns_multi_manager.js
+echo.
+pause
+goto MENU
+
+:PVPDUEL
+cls
+echo ======================================================================
+echo                        AUTO LIVE PVP DUEL
+echo ======================================================================
+echo   Config : pvpduel.txt
+echo   Format : winner:username:password:characterSlot
+echo            loser:username:password:characterSlot
+echo.
+echo   Winner menyerang otomatis. Loser menggunakan dodge saat gilirannya.
+echo   Loop berjalan sampai Q, Esc, atau Ctrl+C. Tidak memakai rematch.
+echo.
+node ns_pvp_duel.js
 echo.
 pause
 goto MENU
