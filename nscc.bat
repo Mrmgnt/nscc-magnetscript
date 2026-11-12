@@ -105,7 +105,7 @@ echo         6. Auto Halloween Battle (Cepat, Claim Reward, Single/Multi-Akun)
 echo         7. Halloween Scheduler Loop (Auto Match Tiap Heart Terisi)
 echo.
 echo   [ 3 ] MISI ^& GRINDING LEVEL
-echo         8. Misi Grade S (Auto Stamina Runner: Stage 1-5, XP 80k-100k)
+echo         8. Misi Grade S (Auto Selesaikan Misi 1-4 Sampai Energi Habis)
 echo         9. Auto Leveling + Ujian Hard (Chunin / Jounin / Sennin)
 echo        10. Murni Grinding Misi Grade Level (C / B / A / S)
 echo        11. Cek Daftar Misi ^& Status Selesai (Per Grade)
@@ -375,36 +375,64 @@ goto MENU
 :GRADES
 cls
 echo ======================================================================
-echo             MISI GRADE S (AUTO STAMINA RUNNER - STAGE 1 s/d 5)
+echo       MISI GRADE S (MAP MISI 1 s/d 4 - AUTO ENERGY / STAMINA RUNNER)
+echo                     cc: MagnetScript(Razki)
 echo ======================================================================
-echo   Misi Grade S menggunakan sistem stamina (-12 Stamina per battle)
+echo   Misi Grade S menggunakan sistem stamina / energi (-12 Stamina per battle)
 echo   dan memberikan XP serta Gold masif untuk karakter Level 80+:
-echo     - Stage 1 (Lv 80+) : XP 82.700  ^| Gold 5.000 ^| -12 Stamina
-echo     - Stage 2 (Lv 81+) : XP 88.600  ^| Gold 5.300 ^| -12 Stamina
-echo     - Stage 3 (Lv 82+) : XP 92.580  ^| Gold 5.500 ^| -12 Stamina
-echo     - Stage 4 (Lv 83+) : XP 95.430  ^| Gold 5.600 ^| -12 Stamina
-echo     - Stage 5 (Lv 84+) : XP 100.000 ^| Gold 5.900 ^| -12 Stamina
+echo     - Misi 1 (Stage 1, Min Lv 80) : XP 82.700  ^| Gold 5.000 ^| -12 Energi
+echo     - Misi 2 (Stage 2, Min Lv 81) : XP 88.600  ^| Gold 5.300 ^| -12 Energi
+echo     - Misi 3 (Stage 3, Min Lv 82) : XP 92.580  ^| Gold 5.500 ^| -12 Energi
+echo     - Misi 4 (Stage 4, Min Lv 83) : XP 95.430  ^| Gold 5.600 ^| -12 Energi
+echo     - Stage 5 (Bonus, Min Lv 84)  : XP 100.000 ^| Gold 5.900 ^| -12 Energi
 echo.
-echo   Pilih Stage yang ingin dimainkan:
-echo     0. Auto (Pilih stage tertinggi yang memenuhi level)
-echo     1. Stage 1 (Min Lv 80)
-echo     2. Stage 2 (Min Lv 81 - Story Genin)
-echo     3. Stage 3 (Min Lv 82)
-echo     4. Stage 4 (Min Lv 83)
-echo     5. Stage 5 (Min Lv 84)
+echo   Fitur:
+echo     - Menyelesaikan semua Misi 1-4 secara berurutan setiap hari sampai energi habis
+echo     - Mengumpulkan (collect) semua prize / drop reward after match
+echo     - Deteksi ^& laporan langsung jika mendapatkan 10 Token di log
 echo.
-set "STG="
-set /p "STG=Pilihan Stage [0-5, default: 0]: "
-if "%STG%"=="" set "STG=0"
+echo   Pilih Mode yang ingin dimainkan:
+echo     1. Selesaikan Semua Misi 1-4 Sampai Energi Habis [RECOMMENDED]
+echo     2. Scheduler Harian Loop (Habiskan Misi 1-4, standby tunggu refill)
+echo     3. Misi Tertentu Saja (Pilih Stage 1, 2, 3, 4, atau 5)
+echo     0. Kembali ke Menu Utama
+echo.
+set "GS_MODE="
+set /p "GS_MODE=Pilihan Mode [0-3, default: 1]: "
+if "%GS_MODE%"=="" set "GS_MODE=1"
+if "%GS_MODE%"=="0" goto MENU
+if "%GS_MODE%"=="3" goto GRADES_PICK
+
 set "JDA="
 set /p "JDA=Jeda antar battle dalam detik (default: 8s): "
 if "%JDA%"=="" set "JDA=8"
 echo.
-if "%STG%"=="0" (
-  node ns_grade_s.js auto %JDA%
+if "%GS_MODE%"=="2" (
+  node ns_grade_s.js loop %JDA%
 ) else (
-  node ns_grade_s.js %STG% %JDA%
+  node ns_grade_s.js 1-4 %JDA%
 )
+echo.
+pause
+goto MENU
+
+:GRADES_PICK
+echo.
+echo   Pilih Stage yang ingin dimainkan:
+echo     1. Misi 1 (Stage 1, Min Lv 80)
+echo     2. Misi 2 (Stage 2, Min Lv 81 - Story Genin)
+echo     3. Misi 3 (Stage 3, Min Lv 82)
+echo     4. Misi 4 (Stage 4, Min Lv 83)
+echo     5. Stage 5 (Bonus, Min Lv 84)
+echo.
+set "STG="
+set /p "STG=Pilihan Stage [1-5, default: 1]: "
+if "%STG%"=="" set "STG=1"
+set "JDA="
+set /p "JDA=Jeda antar battle dalam detik (default: 8s): "
+if "%JDA%"=="" set "JDA=8"
+echo.
+node ns_grade_s.js %STG% %JDA%
 echo.
 pause
 goto MENU
@@ -543,8 +571,9 @@ echo ======================================================================
 echo   Config : pvpduel.txt
 echo   Format : winner:username:password:characterSlot
 echo            loser:username:password:characterSlot
+echo   Option : loserAction:dodge ^| loserAction:pass
 echo.
-echo   Winner menyerang otomatis. Loser menggunakan dodge saat gilirannya.
+echo   Winner menyerang otomatis. pass lebih cepat, dodge mode default.
 echo   Loop berjalan sampai Q, Esc, atau Ctrl+C. Tidak memakai rematch.
 echo.
 node ns_pvp_duel.js

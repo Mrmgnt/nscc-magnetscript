@@ -63,7 +63,7 @@ async function bangunDaftarTahap() {
     } catch (_) { }
 
     if (charLevel >= 80) {
-        list.push(['Daily: Misi Grade S', [process.execPath, 'ns_grade_s.js', '5']]);
+        list.push(['Daily: Misi Grade S (Map 1-4)', [process.execPath, 'ns_grade_s.js', '1-4', '8']]);
     }
 
     let butuhUjianNama = '';

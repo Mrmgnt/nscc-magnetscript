@@ -16,12 +16,19 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 function parseAccountsFile(file = DEFAULT_FILE) {
     if (!fs.existsSync(file)) throw new Error('File akun tidak ditemukan: ' + file + ' (salin pvpduel.example.txt).');
     const accounts = new Map();
+    let loserAction = 'dodge';
     for (const raw of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
         const line = raw.trim();
         if (!line || line.startsWith('#')) continue;
         const parts = line.split(':');
-        if (parts.length < 4) throw new Error('Format pvpduel.txt salah pada role yang diberikan.');
         const role = parts.shift().trim().toLowerCase();
+        if (role === 'loseraction') {
+            const action = String(parts.shift() || '').trim().toLowerCase();
+            if (parts.length || !['dodge', 'pass'].includes(action)) throw new Error('loserAction harus dodge atau pass.');
+            loserAction = action;
+            continue;
+        }
+        if (parts.length < 3) throw new Error('Format pvpduel.txt salah pada role yang diberikan.');
         const username = parts.shift().trim();
         const slot = parts.pop().trim();
         const password = parts.join(':');
@@ -35,7 +42,7 @@ function parseAccountsFile(file = DEFAULT_FILE) {
     const winner = accounts.get('winner');
     const loser = accounts.get('loser');
     if (winner.username.toLowerCase() === loser.username.toLowerCase()) throw new Error('Winner dan loser harus akun berbeda.');
-    return { winner, loser };
+    return { winner, loser: { ...loser, loserAction }, loserAction };
 }
 
 function skillId(value) {
@@ -119,7 +126,7 @@ function sendBattleStep(socket, player, message, opponentId, nextSkill) {
     else if (state === 'start_atb') socket.actionReady();
     else if (state === 'battle_action') socket.actionFinish(Boolean(message.char_dead || message.charDead));
     else if (message.event === 'command' && state === 'action' && normalizedCharId(message.charId) === normalizedCharId(player.charId)) {
-        if (player.role === 'loser') socket.battleCommand(player.charId, 'dodge', null, opponentId);
+        if (player.role === 'loser') socket.battleCommand(player.charId, player.loserAction || 'dodge', null, opponentId);
         else {
             const skill = nextSkill();
             socket.battleCommand(player.charId, skill ? 'skill' : 'attack', skill, opponentId);
@@ -194,7 +201,7 @@ async function main() {
     c.enableGracefulStop('menu NSCC');
     const [winner, loser] = await Promise.all([loginAccount(accounts.winner), loginAccount(accounts.loser)]);
     console.log(winner.skills.length ? '[i] Winner ' + winner.charName + ' skill priority: ' + winner.skills.join(', ') : '[i] Skill winner tidak ditemukan. Fallback basic attack.');
-    console.log('[i] PvP duel: ' + winner.username + ' vs ' + loser.username + '. Tekan Q/Esc/Ctrl+C untuk stop.');
+    console.log('[i] PvP duel: ' + winner.username + ' vs ' + loser.username + '. Loser action=' + loser.loserAction + '. Tekan Q/Esc/Ctrl+C untuk stop.');
     let wins = 0;
     let bestCycle = Infinity;
     const maxWins = Number(process.env.NS_PVP_MAX_WINS || 0);

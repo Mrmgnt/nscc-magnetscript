@@ -1,5 +1,7 @@
 # Live PvP duel configuration. Do not commit pvpduel.txt.
 # Format: role:username:password:characterSlot
 # role must be winner or loser.
+# Optional: loserAction:dodge (default) or loserAction:pass (faster; no dodge).
+loserAction:pass
 winner:Mrmgnt:replace-with-password:1
 loser:Mrmgnt1:replace-with-password:1
