@@ -29,10 +29,15 @@ function curlProxyArgs() {
     if (configured) return ['--proxy', configured];
     if (process.platform !== 'win32') return [];
     try {
+        const enableRes = spawnSync('reg.exe', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings', '/v', 'ProxyEnable'], { encoding: 'utf8', windowsHide: true });
+        const enableMatch = enableRes.status === 0 && String(enableRes.stdout || '').match(/ProxyEnable\s+REG_DWORD\s+0x([0-9a-f]+)/mi);
+        if (!enableMatch || parseInt(enableMatch[1], 16) !== 1) return [];
+
         const result = spawnSync('reg.exe', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings', '/v', 'ProxyServer'], { encoding: 'utf8', windowsHide: true });
         const match = result.status === 0 && String(result.stdout || '').match(/ProxyServer\s+REG_SZ\s+(.+)$/mi);
         if (!match || !match[1].trim()) return [];
-        return ['--proxy', 'http://' + match[1].trim()];
+        const raw = match[1].trim();
+        return ['--proxy', /^https?:\/\//i.test(raw) ? raw : 'http://' + raw];
     } catch (_) { return []; }
 }
 
@@ -130,7 +135,7 @@ function httpJson(host, path, payload) {
                 if (lastNewline !== -1) {
                     const body = stdout.slice(0, lastNewline);
                     const status = parseInt(stdout.slice(lastNewline + 1).trim(), 10) || 0;
-                    return Promise.resolve({ status, body });
+                    if (status > 0) return Promise.resolve({ status, body });
                 }
             }
         } catch (_) { }
