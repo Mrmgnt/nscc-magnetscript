@@ -100,62 +100,105 @@ function parseRewardInfo(fb) {
     return { xpGain, goldGain, items, raw: rewardAll };
 }
 
-(async () => {
-    const rawMode = (process.argv[2] || 'status').toLowerCase();
-    const maks = Number(process.argv[3] || 10);
+async function runHuntSession(opts = {}) {
+    const rawMode = String(opts.mode || process.argv[2] || 'status').toLowerCase();
+    const maks = Number(opts.maks !== undefined ? opts.maks : (process.argv[3] || 10));
     const defaultJeda = Number(process.env.NS_HUNT_DELAY || 10.5);
-    const reqJeda = Number(process.argv[4] || defaultJeda);
+    const reqJeda = Number(opts.jeda !== undefined ? opts.jeda : (process.argv[4] || defaultJeda));
     const battleWaitMs = Math.max(MIN_BATTLE_WAIT_MS, Math.round(reqJeda * 1000));
     const battleWaitSecLabel = (battleWaitMs / 1000).toFixed(1).replace(/\.0$/, '');
-    const mulaiRoom = Math.max(0, Number(process.argv[5] || 0));
+    const mulaiRoom = Math.max(0, Number(opts.mulaiRoom !== undefined ? opts.mulaiRoom : (process.argv[5] || 0)));
 
-    c.enableGracefulStop('menu bot');
-    const u = process.env.NS_USER, p = process.env.NS_PASS;
-    if (!u || !p) { line('Butuh NS_USER dan NS_PASS.'); process.exit(1); }
+    const shared = opts.shared || null;
+    const u = (shared && shared.user) || process.env.NS_USER;
+    const p = (shared && shared.pass) || process.env.NS_PASS;
+    if (!u || !p) { line('Butuh NS_USER dan NS_PASS.'); return { exitCode: 1, kredit: 0, summary: 'Butuh NS_USER dan NS_PASS' }; }
 
-    const s = await c.login(u, p);
-    if (!s.ok) {
-        line('LOGIN GAGAL: ' + s.stage + ' (' + (s.message || s.body || 'status ' + s.http) + ')');
-        process.exit(2);
+    let s = (shared && shared.s) || null;
+    let h = (shared && shared.h) || null;
+    let charId = (shared && shared.charId) || null;
+    let row = (shared && shared.row) || null;
+
+    if (!s) {
+        s = await c.login(u, p);
+        if (!s.ok) {
+            line('LOGIN GAGAL: ' + s.stage + ' (' + (s.message || s.body || 'status ' + s.http) + ')');
+            return { exitCode: 2, kredit: 0, summary: 'LOGIN GAGAL' };
+        }
+        h = k.mk(s.sessionKey);
     }
-    const h = k.mk(s.sessionKey);
-    const rl = await c.amf('CharacterDAO.getCharactersList', [s.sessionKey]);
-    const chars = (rl && rl.body && Array.isArray(rl.body.result)) ? rl.body.result : [];
-    const row = c.getSelectedChar(chars, process.env.NS_CHAR_ID || process.env.NS_CHAR_SLOT);
-    if (!row) { line('Gagal ambil karakter.'); process.exit(3); }
-    const charId = row[0];
+    if (!h) h = k.mk(s.sessionKey);
+
+    if (!charId || !row) {
+        const rl = await c.amf('CharacterDAO.getCharactersList', [s.sessionKey]);
+        const chars = (rl && rl.body && Array.isArray(rl.body.result)) ? rl.body.result : [];
+        row = c.getSelectedChar(chars, process.env.NS_CHAR_ID || process.env.NS_CHAR_SLOT);
+        if (!row) { line('Gagal ambil karakter.'); return { exitCode: 3, kredit: 0, summary: 'Gagal ambil karakter' }; }
+        charId = row[0];
+    }
+
     // Di Account.as: FREE = 1, PREMIUM (EMBLEM) = 2
     const isEmblem = Boolean(s.isEmblem || Number(s.accountType) === 2);
-    line('Karakter aktif : ' + charId + ' "' + row[1] + '" (Lv ' + (row[2] || '?') + ') [' + (isEmblem ? 'EMBLEM' : 'FREE') + ']');
-
-    async function baca(maxRetries = 10) {
-        for (let i = 0; i < maxRetries; i++) {
-            const b = (await c.amf('CharacterDAO.getCharacterById', [s.sessionKey, charId])).body || {};
-            if (b.gk) {
-                const x = b.result || {};
-                const inv = x.character_inventory || {};
-                const essenceRaw = inv.char_essence_item != null ? inv.char_essence_item : (x.character_essence_item || x.char_essence_item || '');
-                return {
-                    gk: String(b.gk),
-                    level: Number(x.character_level),
-                    xp: Number(x.character_xp),
-                    gold: Number(x.character_gold),
-                    mission: String(x.character_mission || ''),
-                    essenceRaw: String(essenceRaw || ''),
-                    tickets: countTickets(essenceRaw),
-                };
-            }
-            // Server memberlakukan cooldown ~12-15s jika getCharacterById baru saja dipanggil
-            await sleep(3000);
-        }
-        return null;
+    if (!shared) {
+        line('Karakter aktif : ' + charId + ' "' + row[1] + '" (Lv ' + (row[2] || '?') + ') [' + (isEmblem ? 'EMBLEM' : 'FREE') + ']');
     }
 
-    let st = await baca(10);
-    if (!st) { line('Gagal membaca data karakter (server cooldown). Coba beberapa detik lagi.'); process.exit(3); }
+    async function baca(maxWaitMs = 45000) {
+        const res = await c.getCharacterByIdWithWait(s, charId, {
+            maxWaitMs,
+            credentials: { user: u, pass: p },
+            onCooldown: sec => line('  [Cooldown] Menunggu ' + sec + 's sebelum membaca data karakter...')
+        });
+        if (!res.ok) return null;
+        if (res.session && res.session.sessionKey && res.session.sessionKey !== s.sessionKey) {
+            s = res.session;
+            h = k.mk(s.sessionKey);
+        }
+        const x = res.result || {};
+        const inv = x.character_inventory || {};
+        const essenceRaw = inv.char_essence_item != null ? inv.char_essence_item : (x.character_essence_item || '');
+        return {
+            gk: String(res.gk),
+            level: Number(x.character_level),
+            xp: Number(x.character_xp),
+            gold: Number(x.character_gold),
+            rank: Number(x.character_rank || 1),
+            stamina: x.character_stamina !== undefined && x.character_stamina !== null ? Number(x.character_stamina) : 75,
+            mission: String(x.character_mission || ''),
+            essenceRaw: String(essenceRaw || ''),
+            tickets: countTickets(essenceRaw),
+            raw: x
+        };
+    }
 
-    const exRes = await c.amf('CharacterDAO.getExtraData', [s.sessionKey, charId, s.token, st.gk]);
-    const ex = (exRes && exRes.body && exRes.body.result) ? exRes.body.result : {};
+    let st = (shared && shared.st) || await baca(45000);
+    if (!st) { line('Gagal membaca data karakter (server cooldown). Coba beberapa detik lagi.'); return { exitCode: 3, kredit: 0, summary: 'Gagal baca karakter' }; }
+    if (st.tickets === undefined) {
+        const inv = (st.raw && st.raw.character_inventory) || {};
+        const essenceRaw = inv.char_essence_item != null ? inv.char_essence_item : ((st.raw && st.raw.character_essence_item) || '');
+        st.essenceRaw = String(essenceRaw || '');
+        st.tickets = countTickets(essenceRaw);
+    }
+
+    let ex = (shared && shared.ex) || null;
+    if (!ex) {
+        const exRes = await c.getExtraDataWithRetry(s.sessionKey, charId, s.token, st.gk, 3);
+        if (!exRes.ok || !exRes.result) {
+            line('Gagal membaca extraData karakter: ' + (exRes.error || 'kosong'));
+            return { exitCode: 4, kredit: 0, summary: 'Gagal extraData' };
+        }
+        ex = exRes.result;
+    }
+
+    if (shared) {
+        shared.s = s;
+        shared.h = h;
+        shared.charId = charId;
+        shared.row = row;
+        shared.st = st;
+        shared.ex = ex;
+    }
+
     const gk3 = kv(String(ex.recent_achievement || ''));
     const gk4 = kv(String(ex.map_key || ''));
     const egv = String(ex.q7t || '');
@@ -198,7 +241,12 @@ function parseRewardInfo(fb) {
         line('== Claim Daily Hunting House Passport (item509) ==');
         const hhInfo = await getHuntingHouseInfo();
         const tiketAwal = st.tickets;
-        const claimRes = await c.amf('ItemDAO.getDailyHuntingPassport', [s.sessionKey]);
+        let claimRes = null;
+        for (let coba = 1; coba <= 3; coba++) {
+            claimRes = await c.amf('ItemDAO.getDailyHuntingPassport', [s.sessionKey]);
+            if (claimRes && claimRes.body) break;
+            if (coba < 3) await sleep(1500);
+        }
         const cb = (claimRes && claimRes.body) || {};
 
         if (Number(cb.status) === 1) {
@@ -206,24 +254,27 @@ function parseRewardInfo(fb) {
             const totalTiket = tiketAwal + dapat;
             st.tickets = totalTiket;
             line('  [OK] Berhasil klaim Daily Hunting Passport: +' + dapat + ' tiket (item509) | Total tiket: ' + totalTiket);
-            return { claimed: true, reward: dapat, totalTickets: totalTiket };
+            return { claimed: true, ok: true, reward: dapat, totalTickets: totalTiket };
         } else {
+            const alreadyClaimed = !hhInfo.canClaimPassport || /already/i.test(String(cb.error || ''));
             const msg = cb.error || (hhInfo.canClaimPassport ? 'Gagal klaim' : 'Sudah diklaim hari ini');
             line('  [INFO] Daily Hunting Passport: ' + msg + ' | Tiket saat ini: ' + tiketAwal);
-            return { claimed: false, reward: 0, totalTickets: tiketAwal };
+            return { claimed: false, ok: hhInfo.ok && alreadyClaimed, reward: 0, totalTickets: tiketAwal };
         }
     }
 
     // Helper: Battle Hunting House (ItemDAO.startHunting -> ItemDAO.getBossReward)
     async function runHuntingHouseBattles(maxBattles, claimFirst = true) {
+        let hadError = false;
         if (claimFirst) {
-            await claimDailyPassport();
+            const cl = await claimDailyPassport();
+            if (!cl.ok) hadError = true;
             line('');
         }
         line('== Farming Hunting House Boss ==');
         if (st.level < 5) {
             line('  [SKIP] Hunting House terbuka mulai Level 5 (Level saat ini: ' + st.level + ').');
-            return { tried: 0, won: 0 };
+            return { tried: 0, won: 0, hadError };
         }
 
         let tried = 0, won = 0;
@@ -231,6 +282,7 @@ function parseRewardInfo(fb) {
             const hh = await getHuntingHouseInfo();
             if (!hh.ok) {
                 line('  [STOP] Gagal mengambil daftar boss Hunting House: ' + JSON.stringify(hh.raw).slice(0, 160));
+                hadError = true;
                 break;
             }
             if (!hh.zones.length) {
@@ -243,6 +295,7 @@ function parseRewardInfo(fb) {
             }
             if (!gk4 || !hh.z9n) {
                 line('  [STOP] Token Hunting House (gk4/z9n) kosong.');
+                hadError = true;
                 break;
             }
 
@@ -260,6 +313,7 @@ function parseRewardInfo(fb) {
             if (Number(mb.status) !== 1) {
                 const err = String(mb.error || JSON.stringify(mb).slice(0, 160));
                 line('  [' + pick.zone + '] ' + bosssid + ' startHunting ditolak: ' + err);
+                hadError = true;
                 break;
             }
 
@@ -294,34 +348,41 @@ function parseRewardInfo(fb) {
                 if (rw.items.length) info.push('Item: ' + rw.items.join(', '));
                 line('    -> MENANG! ' + (info.length ? info.join(' | ') : JSON.stringify(rw.raw).slice(0, 180)));
             } else {
+                hadError = true;
                 line('    -> GAGAL klaim reward boss: ' + JSON.stringify(fb).slice(0, 200));
             }
 
-            await sleep(1000);
+            await sleep(300);
         }
 
         line('  Ringkasan Hunting House: ' + won + '/' + tried + ' battle sukses | Sisa tiket (item509): ' + st.tickets);
-        return { tried, won };
+        return { tried, won, hadError };
     }
 
     // Helper: Farming Eudemon Dragon / Eudemon Garden (Full Auto 3x Emblem / 1x Free)
     async function runEudemonGarden(maxRooms) {
         line('== Farming Eudemon Dragon (Eudemon Garden) ==');
-        const hsInit = await c.amf('EudemonGarden.getHuntingStatus', [s.sessionKey]);
+        let hsInit = null;
+        for (let t = 1; t <= 3; t++) {
+            hsInit = await c.amf('EudemonGarden.getHuntingStatus', [s.sessionKey]);
+            if (hsInit && hsInit.body && hsInit.body.result) break;
+            if (t < 3) await sleep(1500);
+        }
         const hbInit = (hsInit && hsInit.body) || {};
         const roomsInit = ((hbInit.result || {}).room) || [];
         if (!roomsInit.length) {
             line('  [STOP] Server tidak mengirim daftar room Eudemon Garden.');
-            return { tried: 0, won: 0, skippedDone: 0, skippedLock: 0 };
+            return { tried: 0, won: 0, skippedDone: 0, skippedLock: 0, hadError: true };
         }
         if (!gk3) {
             line('  [STOP] Token Eudemon Garden (gk3) kosong.');
-            return { tried: 0, won: 0, skippedDone: 0, skippedLock: 0 };
+            return { tried: 0, won: 0, skippedDone: 0, skippedLock: 0, hadError: true };
         }
 
         let tried = 0, won = 0, skippedDone = 0, skippedLock = 0;
         let totalXpGained = 0, totalGoldGained = 0;
         let cachedHs = hbInit; // gunakan respons awal untuk battle pertama agar hemat 1 request
+        let hadError = false;
         const lockedRooms = new Set();
 
         const endRoom = Math.min(mulaiRoom + maxRooms, roomsInit.length);
@@ -377,6 +438,7 @@ function parseRewardInfo(fb) {
                         lockedRooms.add(roomIdx);
                         line('  [Room ' + roomIdx + '] ' + enemyStr + ' -> Level karakter belum cukup untuk room ini.');
                     } else {
+                        hadError = true;
                         line('  [Room ' + roomIdx + '] ' + enemyStr + ' startHunting ditolak: ' + (err || JSON.stringify(mb).slice(0, 140)));
                     }
                     break;
@@ -410,7 +472,7 @@ function parseRewardInfo(fb) {
                     line('    -> finishHunting gagal (' + fErr + '), akan diulang dari startHunting...');
                 }
 
-                await sleep(1000);
+                await sleep(300);
             }
         }
 
@@ -448,7 +510,7 @@ function parseRewardInfo(fb) {
         line('  Ringkasan Eudemon Dragon: ' + won + '/' + tried + ' battle sukses | Total Reward XP +' + totalXpGained.toLocaleString('id-ID') + ' | Total Gold +' + totalGoldGained.toLocaleString('id-ID') +
             (skippedDone ? ' | ' + skippedDone + ' room sudah 0x' : '') +
             (skippedLock ? ' | ' + skippedLock + ' room terkunci level' : ''));
-        return { tried, won, skippedDone, skippedLock, totalXpGained, totalGoldGained };
+        return { tried, won, skippedDone, skippedLock, totalXpGained, totalGoldGained, hadError };
     }
 
     // ─────────────────────────────────────────────────────────
@@ -480,47 +542,64 @@ function parseRewardInfo(fb) {
         line('  Total Sisa Battle Eudemon Hari Ini: ' + totalSisaEudemon + 'x (' + (isEmblem ? 'Akun Emblem: 3x/room' : 'Akun Free: 1x/room') + ')');
         line('');
         line('Karakter: Level ' + st.level + ' | XP ' + st.xp.toLocaleString('id-ID') + ' | Gold ' + st.gold.toLocaleString('id-ID'));
-        process.exit(0);
+        return { exitCode: 0, kredit: 0, summary: 'status' };
     }
 
     if (rawMode === 'claim') {
-        await claimDailyPassport();
-        process.exit(0);
+        const cl = await claimDailyPassport();
+        return { exitCode: cl.ok ? 0 : 1, kredit: cl.claimed ? 1 : 0, summary: cl.claimed ? 'Claim HH +tiket' : 'HH sudah diklaim' };
     }
 
     if (rawMode === 'house' || rawMode === 'hunting') {
-        await runHuntingHouseBattles(maks);
-        process.exit(0);
+        const hhRes = await runHuntingHouseBattles(maks);
+        return { exitCode: hhRes.hadError ? 1 : 0, kredit: hhRes.won, summary: `HH ${hhRes.won}/${hhRes.tried}` };
     }
 
     if (rawMode === 'fight' || rawMode === 'battle') {
-        await runHuntingHouseBattles(maks, false);
-        process.exit(0);
+        const hhRes = await runHuntingHouseBattles(maks, false);
+        return { exitCode: hhRes.hadError ? 1 : 0, kredit: hhRes.won, summary: `HH ${hhRes.won}/${hhRes.tried}` };
     }
 
     if (rawMode === 'eudemon' || rawMode === 'dragon') {
-        await runEudemonGarden(maks);
-        process.exit(0);
+        const egRes = await runEudemonGarden(maks);
+        return { exitCode: egRes.hadError ? 1 : 0, kredit: egRes.won, summary: `Eudemon ${egRes.won}/${egRes.tried}` };
     }
 
     if (rawMode === 'daily' || rawMode === 'eudemon_claim') {
-        await claimDailyPassport();
+        const cl = await claimDailyPassport();
         line('');
-        await runEudemonGarden(maks);
-        process.exit(0);
+        const egRes = await runEudemonGarden(maks);
+        return {
+            exitCode: (!cl.ok || egRes.hadError) ? 1 : 0,
+            kredit: (cl.claimed ? 1 : 0) + egRes.won,
+            summary: `Eudemon ${egRes.won}/${egRes.tried}`
+        };
     }
 
     if (rawMode === 'both' || rawMode === 'all' || rawMode === 'run') {
-        await runHuntingHouseBattles(maks);
+        const hhRes = await runHuntingHouseBattles(maks);
         line('');
-        await runEudemonGarden(maks);
-        process.exit(0);
+        const egRes = await runEudemonGarden(maks);
+        return {
+            exitCode: (hhRes.hadError || egRes.hadError) ? 1 : 0,
+            kredit: hhRes.won + egRes.won,
+            summary: `HH ${hhRes.won}/${hhRes.tried} | Eudemon ${egRes.won}/${egRes.tried}`
+        };
     }
 
     line('Mode tidak dikenal: ' + rawMode);
     line('Gunakan: status | claim | eudemon | house | fight | daily | both');
-    process.exit(1);
-})().catch(e => {
-    line('FATAL ' + e.message);
-    process.exit(1);
-});
+    return { exitCode: 1, kredit: 0, summary: 'Mode tidak dikenal' };
+}
+
+if (require.main === module) {
+    c.enableGracefulStop('menu bot');
+    runHuntSession()
+        .then(res => process.exit(res ? res.exitCode : 0))
+        .catch(e => {
+            line('FATAL ' + e.message);
+            process.exit(1);
+        });
+}
+
+module.exports = { runHuntSession };

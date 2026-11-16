@@ -55,7 +55,7 @@ function countItemInString(rawStr, itemId) {
         process.exit(1);
     }
 
-    const s = await c.login(u, p);
+    let s = await c.login(u, p);
     if (!s.ok) {
         console.log('LOGIN GAGAL: ' + s.stage + ' (' + (s.message || s.body || 'status ' + s.http) + ')');
         process.exit(2);
@@ -70,21 +70,17 @@ function countItemInString(rawStr, itemId) {
     }
 
     const charId = row[0];
-    let x = null;
-    for (let i = 1; i <= 12; i++) {
-        const r = await c.amf('CharacterDAO.getCharacterById', [s.sessionKey, charId]);
-        const b = r.body || {};
-        if (b.gk) {
-            x = b.result || {};
-            break;
-        }
-        await sleep(3000);
-    }
-
-    if (!x) {
-        console.log('ERROR: Gagal membaca data karakter dari server.');
+    const chRes = await c.getCharacterByIdWithWait(s, charId, {
+        maxWaitMs: 45000,
+        credentials: { user: u, pass: p },
+        onCooldown: sec => console.log(`[Cooldown] Menunggu ${sec}s sebelum membaca data karakter...`)
+    });
+    if (!chRes.ok || !chRes.result) {
+        console.log('ERROR: Gagal membaca data karakter dari server: ' + (chRes.error || 'cooldown'));
         process.exit(4);
     }
+    if (chRes.session && chRes.session.sessionKey) s = chRes.session;
+    const x = chRes.result;
 
     const charName = x.character_name || row[1];
     const level = Number(x.character_level) || Number(row[2]) || 1;

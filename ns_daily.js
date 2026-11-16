@@ -21,6 +21,9 @@ const line = s => console.log(s);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const dir = __dirname;
 const c = require('./nsclient.js');
+const { runHuntSession } = require('./ns_hunt.js');
+const { runTrainSession } = require('./ns_train.js');
+const { runGradeSSession } = require('./ns_grade_s.js');
 
 const argv = process.argv.slice(2);
 const iLv = argv.indexOf('--level');
@@ -29,57 +32,6 @@ const isPureDaily = argv.includes('--pure');
 const withHhBattle = argv.includes('--with-hh-battle');
 
 if (!process.env.NS_USER || !process.env.NS_PASS) { line('Butuh NS_USER dan NS_PASS.'); process.exit(1); }
-
-async function bangunDaftarTahap() {
-    const huntMode = withHhBattle ? 'both' : 'daily';
-    const huntTitle = withHhBattle
-        ? 'Daily: Claim & Battle HH + Eudemon Dragon'
-        : 'Daily: Claim HH + Eudemon Dragon';
-
-    const list = [
-        [huntTitle, [process.execPath, 'ns_hunt.js', huntMode, '10', '11']],
-        ['Daily: TP & SS Training', [process.execPath, 'ns_train.js', 'all', '5', '15']]
-    ];
-
-    if (isPureDaily) {
-        return list;
-    }
-
-    // Cek profil karakter untuk evaluasi Ujian (Lv 20, 40, 60, 80) & Grade S
-    let charLevel = Number(process.env.NS_CHAR_LEVEL || 1);
-    let charRank = 1;
-    try {
-        const u = process.env.NS_USER, p = process.env.NS_PASS;
-        const s = await c.login(u, p);
-        if (s && s.sessionKey) {
-            const rl = await c.amf('CharacterDAO.getCharactersList', [s.sessionKey]);
-            const chars = (rl && rl.body && Array.isArray(rl.body.result)) ? rl.body.result : [];
-            const row = c.getSelectedChar(chars, process.env.NS_CHAR_ID || process.env.NS_CHAR_SLOT);
-            if (row) {
-                charLevel = Number(row[2] || 1);
-                charRank = Number(row[3] || 1);
-            }
-        }
-    } catch (_) { }
-
-    if (charLevel >= 80) {
-        list.push(['Daily: Misi Grade S (Map 1-4)', [process.execPath, 'ns_grade_s.js', '1-4', '8']]);
-    }
-
-    let butuhUjianNama = '';
-    if (charLevel >= 80 && charRank < 8) butuhUjianNama = 'Ujian Sennin / Tutor (Lv 80 Cap)';
-    else if (charLevel >= 60 && charRank < 6) butuhUjianNama = 'Ujian Special Jounin (Lv 60 Cap)';
-    else if (charLevel >= 40 && charRank < 4) butuhUjianNama = 'Ujian Jounin (Lv 40 Cap)';
-    else if (charLevel >= 20 && charRank < 2) butuhUjianNama = 'Ujian Chunin (Lv 20 Cap)';
-
-    if (butuhUjianNama) {
-        list.push(['Auto Exam: ' + butuhUjianNama, [process.execPath, 'ns_level.js', String(targetLevel || charLevel), '8']]);
-    } else if (targetLevel && targetLevel > charLevel) {
-        list.push(['Auto Leveling ke ' + targetLevel, [process.execPath, 'ns_level.js', String(targetLevel), '8']]);
-    }
-
-    return list;
-}
 
 function runTahap(cmd) {
     return new Promise(resolve => {
@@ -129,22 +81,80 @@ function angka(out) {
 
 function sebab(out) {
     const baris = out.split(/\r?\n/).filter(Boolean);
-    const penting = baris.filter(b => /^(Catatan|STOP|RINGKASAN|Ringkasan|\[OK\]|\[INFO\]|PERINGATAN|SS Training sudah|semua misi|mode misi-saja|LOGIN GAGAL)/.test(b.trim()));
+    const penting = baris.filter(b => /^(Catatan|STOP|ERROR|RINGKASAN|Ringkasan|\[OK\]|\[INFO\]|PERINGATAN|SS Training sudah|TP Training membutuhkan|semua misi|mode misi-saja|LOGIN GAGAL)/.test(b.trim()));
     return penting.length ? penting[penting.length - 1].trim().slice(0, 120) : '';
 }
 
 (async () => {
     c.enableGracefulStop('menu bot');
-    const tahap = await bangunDaftarTahap();
+    const shared = {
+        user: process.env.NS_USER,
+        pass: process.env.NS_PASS
+    };
     const hasil = [];
-    for (let idx = 0; idx < tahap.length; idx++) {
-        const [nama, cmd] = tahap[idx];
+
+    const huntMode = withHhBattle ? 'both' : 'daily';
+    const huntTitle = withHhBattle
+        ? 'Daily: Claim & Battle HH + Eudemon Dragon'
+        : 'Daily: Claim HH + Eudemon Dragon';
+    line('');
+    line('################ ' + huntTitle + ' ################');
+    const huntRes = await runHuntSession({ mode: huntMode, maks: 10, jeda: 10.5, shared });
+    hasil.push([huntTitle, huntRes.exitCode, huntRes.kredit || 0, huntRes.summary || '']);
+
+    // Jika sesi utama (login / char) gagal, langsung hentikan tahap berikutnya
+    if (!shared.s || !shared.st || !shared.ex) {
         line('');
-        line('################ ' + nama + ' ################');
-        const r = await runTahap(cmd);
-        hasil.push([nama, r.status, angka(r.stdout), sebab(r.stdout)]);
-        if (idx < tahap.length - 1) {
-            await sleep(2000);
+        line('################ RINGKASAN HARIAN ################');
+        for (const [nama, kode, kredit, alasan] of hasil) {
+            line('  ' + nama.padEnd(38) + '| ' + (kode === 0 ? 'exit 0' : 'exit ' + kode) + ' | sukses/reward: ' + kredit + (alasan ? ' | ' + alasan : ''));
+        }
+        process.exit(1);
+    }
+
+    await sleep(300);
+
+    const trainTitle = 'Daily: TP & SS Training';
+    line('');
+    line('################ ' + trainTitle + ' ################');
+    const trainRes = await runTrainSession({ mode: 'all', maks: 5, jeda: 11, shared });
+    hasil.push([trainTitle, trainRes.exitCode, trainRes.kredit || 0, trainRes.exitCode === 0 ? 'Selesai' : 'Ada kegagalan']);
+
+    if (!isPureDaily) {
+        const charLevel = Number(shared.st.level || 1);
+        const charRank = Number(shared.st.rank || 1);
+
+        if (charLevel >= 80) {
+            await sleep(300);
+            const gsTitle = 'Daily: Misi Grade S (Map 1-4)';
+            line('');
+            line('################ ' + gsTitle + ' ################');
+            const gsRes = await runGradeSSession({ target: '1-4', jeda: 8, shared });
+            hasil.push([gsTitle, gsRes.exitCode, gsRes.battles || 0, `Grade S ${gsRes.battles || 0}x`]);
+        }
+
+        let butuhUjianNama = '';
+        if (charLevel >= 80 && charRank < 8) butuhUjianNama = 'Ujian Sennin / Tutor (Lv 80 Cap)';
+        else if (charLevel >= 60 && charRank < 6) butuhUjianNama = 'Ujian Special Jounin (Lv 60 Cap)';
+        else if (charLevel >= 40 && charRank < 4) butuhUjianNama = 'Ujian Jounin (Lv 40 Cap)';
+        else if (charLevel >= 20 && charRank < 2) butuhUjianNama = 'Ujian Chunin (Lv 20 Cap)';
+
+        let lvCmd = null;
+        let lvTitle = '';
+        if (butuhUjianNama) {
+            lvTitle = 'Auto Exam: ' + butuhUjianNama;
+            lvCmd = [process.execPath, 'ns_level.js', String(targetLevel || charLevel), '8'];
+        } else if (targetLevel && targetLevel > charLevel) {
+            lvTitle = 'Auto Leveling ke ' + targetLevel;
+            lvCmd = [process.execPath, 'ns_level.js', String(targetLevel), '8'];
+        }
+
+        if (lvCmd) {
+            await sleep(500);
+            line('');
+            line('################ ' + lvTitle + ' ################');
+            const r = await runTahap(lvCmd);
+            hasil.push([lvTitle, r.status, angka(r.stdout), sebab(r.stdout)]);
         }
     }
 

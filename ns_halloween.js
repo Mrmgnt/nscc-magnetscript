@@ -112,21 +112,38 @@ function loadAccounts() {
  */
 async function expandAccountsIfNeeded(rawAccounts) {
     const expanded = [];
+    const charListCache = new Map();
+
+    async function fetchCharsForAccount(user, pass) {
+        const cacheKey = `${user.toLowerCase()}:${pass}`;
+        if (charListCache.has(cacheKey)) return charListCache.get(cacheKey);
+        const s = await c.login(user, pass);
+        if (!s.ok) return { ok: false, error: s.message || s.stage };
+        let chars = [];
+        for (let t = 0; t < 3; t++) {
+            const rl = await c.amf('CharacterDAO.getCharactersList', [s.sessionKey]);
+            if (rl && rl.body && Array.isArray(rl.body.result)) {
+                chars = rl.body.result;
+                break;
+            }
+            await sleep(800);
+        }
+        const entry = { ok: true, chars };
+        charListCache.set(cacheKey, entry);
+        return entry;
+    }
+
     for (const acc of rawAccounts) {
         const sl = String(acc.slot || '').toLowerCase();
-        if (sl === 'all' || sl === '*') {
-            try {
-                const s = await c.login(acc.user, acc.pass);
-                if (!s.ok) {
-                    expanded.push({ ...acc, slot: '1' });
-                    continue;
-                }
-                const rl = await c.amf('CharacterDAO.getCharactersList', [s.sessionKey]);
-                const chars = (rl && rl.body && Array.isArray(rl.body.result)) ? rl.body.result : [];
-                if (chars.length === 0) {
-                    continue;
-                }
-                chars.forEach((ch, idx) => {
+        try {
+            const info = await fetchCharsForAccount(acc.user, acc.pass);
+            if (!info.ok || !info.chars.length) {
+                if (sl === 'all' || sl === '*') expanded.push({ ...acc, slot: '1' });
+                else expanded.push(acc);
+                continue;
+            }
+            if (sl === 'all' || sl === '*') {
+                info.chars.forEach((ch, idx) => {
                     expanded.push({
                         user: acc.user,
                         pass: acc.pass,
@@ -137,12 +154,26 @@ async function expandAccountsIfNeeded(rawAccounts) {
                         charLevel: Number(ch[2]) || 1
                     });
                 });
-                await sleep(500);
-            } catch (_) {
-                expanded.push({ ...acc, slot: '1' });
+                await sleep(300);
+            } else {
+                const picked = c.getSelectedChar(info.chars, acc.slot);
+                if (!picked) {
+                    line(`  [SKIP] ${acc.user} slot "${acc.slot}" tidak ditemukan.`);
+                    continue;
+                }
+                const slotIdx = info.chars.indexOf(picked) + 1;
+                expanded.push({
+                    user: acc.user,
+                    pass: acc.pass,
+                    targetLevel: acc.targetLevel,
+                    slot: String(slotIdx),
+                    charId: String(picked[0]),
+                    charName: String(picked[1] || ('Char_' + picked[0])),
+                    charLevel: Number(picked[2]) || 1
+                });
             }
-        } else {
-            expanded.push(acc);
+        } catch (_) {
+            expanded.push({ ...acc, slot: sl === 'all' || sl === '*' ? '1' : acc.slot });
         }
     }
     return expanded;
@@ -152,11 +183,11 @@ async function expandAccountsIfNeeded(rawAccounts) {
  * Login dan ambil context karakter
  */
 async function getAccountContext(user, pass, slotOrId) {
-    const s = await c.login(user, pass);
+    let s = await c.login(user, pass);
     if (!s.ok) {
         return { ok: false, error: 'Login gagal: ' + (s.message || s.stage || 'status ' + s.http) };
     }
-    const sk = s.sessionKey;
+    let sk = s.sessionKey;
 
     let rl = null;
     for (let t = 0; t < 3; t++) {
@@ -173,29 +204,27 @@ async function getAccountContext(user, pass, slotOrId) {
     const charId = String(row[0]);
     const charName = String(row[1] || 'Ninja');
 
-    // Baca data karakter & GK
-    let chData = null;
-    let gk = '';
-    for (let t = 0; t < 3; t++) {
-        const r = await c.amf('CharacterDAO.getCharacterById', [sk, charId]);
-        const b = r.body || {};
-        if (b.gk) {
-            gk = String(b.gk);
-            chData = b.result || {};
-            break;
-        }
-        await sleep(500);
+    // Baca data karakter & GK (tunggu cooldown server jika ada, misal antar karakter di akun Emblem)
+    const chRes = await c.getCharacterByIdWithWait(s, charId, {
+        maxWaitMs: 45000,
+        credentials: { user, pass },
+        onCooldown: sec => line(`  [Cooldown] Menunggu ${sec}s sebelum memilih karakter ${charName}...`)
+    });
+    if (!chRes.ok || !chRes.result || !chRes.gk) {
+        return { ok: false, error: 'Gagal membaca data karakter dari server: ' + (chRes.error || 'cooldown') };
     }
-
-    if (!chData || !gk) {
-        return { ok: false, error: 'Gagal membaca data karakter dari server' };
+    if (chRes.session && chRes.session.sessionKey) {
+        s = chRes.session;
+        sk = s.sessionKey;
     }
+    const chData = chRes.result;
+    const gk = chRes.gk;
 
     // Ambil extraData z9t (ivg) untuk kalkulasi token boss _k8
     let ivg = '';
     try {
-        const exRes = await c.amf('CharacterDAO.getExtraData', [sk, charId, s.token, gk]);
-        const ex = (exRes && exRes.body && exRes.body.result) ? exRes.body.result : {};
+        const exRes = await c.getExtraDataWithRetry(sk, charId, s.token, gk, 3);
+        const ex = (exRes && exRes.ok && exRes.result) ? exRes.result : {};
         ivg = ex.z9t ? String(ex.z9t) : '';
     } catch (_) {
         ivg = '';
@@ -406,20 +435,22 @@ async function runHalloweenForAccount(user, pass, slotOrId = '1', maxBattles = 9
         }
     }
 
-    // Cek ulang data karakter untuk verifikasi saldo akhir Heart of Kari
+    // Cek ulang data karakter hanya jika ada battle & tidak di-skip (hemat cooldown 20s antar karakter)
     let kariAkhir = ctx.kariInitial + totalKari;
-    try {
-        const rEnd = await c.amf('CharacterDAO.getCharacterById', [sk, ctx.charId]);
-        if (rEnd && rEnd.body && rEnd.body.result) {
-            const rawMat = String(rEnd.body.result.character_material || '');
-            const matEnd = {};
-            rawMat.split(',').forEach(p => {
-                const [kId, v] = p.split(':');
-                if (kId) matEnd[kId] = Number(v) || 0;
-            });
-            if (matEnd['1027'] !== undefined) kariAkhir = matEnd['1027'];
-        }
-    } catch (_) { }
+    if (totalBattles > 0 && !options.skipEndRefresh) {
+        try {
+            const rEnd = await c.amf('CharacterDAO.getCharacterById', [sk, ctx.charId]);
+            if (rEnd && rEnd.body && rEnd.body.result) {
+                const rawMat = String(rEnd.body.result.character_material || '');
+                const matEnd = {};
+                rawMat.split(',').forEach(p => {
+                    const [kId, v] = p.split(':');
+                    if (kId) matEnd[kId] = Number(v) || 0;
+                });
+                if (matEnd['1027'] !== undefined) kariAkhir = matEnd['1027'];
+            }
+        } catch (_) { }
+    }
 
     // Ambil sisa waktu refill terkini
     const stFinal = await getHalloweenStatus(sk);
@@ -441,6 +472,28 @@ async function runHalloweenForAccount(user, pass, slotOrId = '1', maxBattles = 9
     };
 }
 
+function interleaveAccounts(list) {
+    const groups = new Map();
+    for (const acc of list) {
+        const key = String(acc.user || '').toLowerCase();
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(acc);
+    }
+    const queues = Array.from(groups.values());
+    const ordered = [];
+    let added = true;
+    while (added) {
+        added = false;
+        for (const q of queues) {
+            if (q.length > 0) {
+                ordered.push(q.shift());
+                added = true;
+            }
+        }
+    }
+    return ordered;
+}
+
 /**
  * Multi-Account Runner untuk Event Halloween
  */
@@ -454,31 +507,49 @@ async function runMultiAccounts(maxBattles = 99, options = {}) {
     if (rawAccounts.length === 0) return;
 
     line(`Mendeteksi dan menyiapkan seluruh karakter di accounts.txt...`);
-    const accounts = await expandAccountsIfNeeded(rawAccounts);
-    if (accounts.length === 0) {
+    const expanded = await expandAccountsIfNeeded(rawAccounts);
+    if (expanded.length === 0) {
         line(`[!] Tidak ada akun yang siap diproses.`);
         return;
     }
+    const accounts = interleaveAccounts(expanded);
 
-    const delaySec = options.accountDelay !== undefined ? options.accountDelay : 4;
+    const delaySec = options.accountDelay !== undefined ? options.accountDelay : 2;
     line(`Total antrean: ${accounts.length} karakter. Jeda antar akun: ${delaySec}s.\n`);
 
     const results = [];
     const startTime = Date.now();
+    const lastCooldownAnchor = new Map();
+    const ACCOUNT_COOLDOWN_MS = 21000;
+    const runOpts = Object.assign({}, options, { skipEndRefresh: true });
 
     for (let i = 0; i < accounts.length; i++) {
         const acc = accounts[i];
         const accIdx = `[${i + 1}/${accounts.length}]`;
+        const userKey = acc.user.toLowerCase();
+
+        const prevAnchor = lastCooldownAnchor.get(userKey);
+        if (prevAnchor) {
+            const elapsed = Date.now() - prevAnchor;
+            if (elapsed < ACCOUNT_COOLDOWN_MS) {
+                const needWaitMs = ACCOUNT_COOLDOWN_MS - elapsed;
+                line(`${accIdx} [Cooldown] Menunggu sisa ${(needWaitMs / 1000).toFixed(1)}s untuk akun ${acc.user}...`);
+                await sleep(needWaitMs);
+            }
+        }
+
         line(`${accIdx} Memulai akun: ${acc.user} (Karakter: ${acc.charName || 'Slot ' + acc.slot})...`);
 
         const startT = Date.now();
         let res;
         try {
-            res = await runHalloweenForAccount(acc.user, acc.pass, acc.charId || acc.slot, maxBattles, options);
+            res = await runHalloweenForAccount(acc.user, acc.pass, acc.charId || acc.slot, maxBattles, runOpts);
         } catch (err) {
             res = { ok: false, error: err.message };
         }
-        const dur = Math.round((Date.now() - startT) / 1000);
+        const endT = Date.now();
+        const dur = Math.round((endT - startT) / 1000);
+        lastCooldownAnchor.set(userKey, Math.min(endT, startT + 3500));
 
         if (res.ok) {
             results.push({
@@ -505,9 +576,14 @@ async function runMultiAccounts(maxBattles = 99, options = {}) {
             });
         }
 
-        if (i < accounts.length - 1) {
-            line(`Menunggu jeda aman ${delaySec} detik sebelum akun berikutnya...`);
-            await sleep(delaySec * 1000);
+        if (i < accounts.length - 1 && delaySec > 0) {
+            const nextAcc = accounts[i + 1];
+            const nextPrevAnchor = lastCooldownAnchor.get(nextAcc.user.toLowerCase());
+            const nextNeedMs = nextPrevAnchor ? Math.max(0, ACCOUNT_COOLDOWN_MS - (Date.now() - nextPrevAnchor)) : 0;
+            if (nextNeedMs === 0) {
+                line(`Menunggu jeda aman ${delaySec} detik sebelum akun berikutnya...`);
+                await sleep(delaySec * 1000);
+            }
         }
     }
 
@@ -687,7 +763,8 @@ if (require.main === module) {
                 process.exit(1);
             }
 
-            await runHalloweenForAccount(user, pass, slotOrId, maxBattles);
+            const res = await runHalloweenForAccount(user, pass, slotOrId, maxBattles);
+            if (!res || !res.ok) process.exit(1);
         }
         process.exit(0);
     })().catch(err => {

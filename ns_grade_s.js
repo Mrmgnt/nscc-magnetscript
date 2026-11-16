@@ -147,52 +147,73 @@ if (!isMapMode && rawTarget !== 'auto') {
 const jedaSec = Math.max(5, parseInt(args[1], 10) || 8);
 const maxBattles = parseInt(args[2], 10) || 0;
 
-async function runGradeSSession() {
-    c.enableGracefulStop('menu bot');
-    const user = process.env.NS_USER;
-    const pass = process.env.NS_PASS;
+async function runGradeSSession(opts = {}) {
+    const shared = opts.shared || null;
+    const localTarget = String(opts.target || rawTarget).toLowerCase();
+    const localIsLoopMode = localTarget === 'loop' || localTarget === '--loop' || args.includes('--loop');
+    const localIsMapMode = localTarget === 'all' || localTarget === '1-4' || localTarget === 'map' || localTarget === 'rotation' || localIsLoopMode;
+    let localSingleStageNum = 0;
+    if (!localIsMapMode && localTarget !== 'auto') {
+        localSingleStageNum = parseInt(localTarget, 10) || 0;
+    }
+    const localJedaSec = Math.max(5, parseInt(opts.jeda !== undefined ? opts.jeda : jedaSec, 10) || 8);
+    const localMaxBattles = parseInt(opts.maxBattles !== undefined ? opts.maxBattles : maxBattles, 10) || 0;
+
+    const user = (shared && shared.user) || process.env.NS_USER;
+    const pass = (shared && shared.pass) || process.env.NS_PASS;
     if (!user || !pass) {
         console.log('[!] Diperlukan NS_USER dan NS_PASS di environment.');
-        process.exit(1);
+        return { exitCode: 1, battles: 0, totalTokensWon: 0, curStamina: 0 };
     }
 
-    line('Menghubungkan ke server Ninja Saga...');
-    const s = await c.login(user, pass);
-    if (!s.ok) {
-        line('LOGIN GAGAL: ' + s.stage + ' (' + (s.message || s.body || 'status ' + s.http) + ')');
-        process.exit(2);
+    let s = (shared && shared.s) || null;
+    let h = (shared && shared.h) || null;
+    let charId = (shared && shared.charId) || null;
+    let charRow = (shared && shared.row) || null;
+
+    if (!s) {
+        line('Menghubungkan ke server Ninja Saga...');
+        s = await c.login(user, pass);
+        if (!s.ok) {
+            line('LOGIN GAGAL: ' + s.stage + ' (' + (s.message || s.body || 'status ' + s.http) + ')');
+            return { exitCode: 2, battles: 0, totalTokensWon: 0, curStamina: 0 };
+        }
+        h = k.mk(s.sessionKey);
     }
+    if (!h) h = k.mk(s.sessionKey);
 
     let initialTokens = Number(s.tokens !== undefined ? s.tokens : (s.raw && s.raw.result && s.raw.result[2]) || 0);
 
-    const rl = await c.amf('CharacterDAO.getCharactersList', [s.sessionKey]);
-    const chars = (rl && rl.body && Array.isArray(rl.body.result)) ? rl.body.result : [];
-    const charRow = c.getSelectedChar(chars, process.env.NS_CHAR_ID || process.env.NS_CHAR_SLOT);
-    if (!charRow) {
-        line('ERROR: Tidak ada karakter ditemukan.');
-        process.exit(3);
-    }
-
-    const charId = charRow[0];
-    let h = k.mk(s.sessionKey);
-
-    // Ambil data detail karakter
-    let charObj = null;
-    let gk = '';
-    for (let i = 1; i <= 6; i++) {
-        const r = await c.amf('CharacterDAO.getCharacterById', [s.sessionKey, charId]);
-        const b = r.body || {};
-        if (b.gk) {
-            gk = String(b.gk);
-            charObj = b.result || {};
-            break;
+    if (!charId || !charRow) {
+        const rl = await c.amf('CharacterDAO.getCharactersList', [s.sessionKey]);
+        const chars = (rl && rl.body && Array.isArray(rl.body.result)) ? rl.body.result : [];
+        charRow = c.getSelectedChar(chars, process.env.NS_CHAR_ID || process.env.NS_CHAR_SLOT);
+        if (!charRow) {
+            line('ERROR: Tidak ada karakter ditemukan.');
+            return { exitCode: 3, battles: 0, totalTokensWon: 0, curStamina: 0 };
         }
-        await sleep(2500);
+        charId = charRow[0];
     }
 
-    if (!charObj) {
-        line('ERROR: Gagal membaca data karakter.');
-        process.exit(4);
+    // Ambil data detail karakter (gunakan shared jika sudah ada)
+    let charObj = (shared && shared.st && shared.st.raw) || null;
+    let gk = (shared && shared.st && shared.st.gk) || '';
+    if (!charObj || !gk) {
+        const chRes = await c.getCharacterByIdWithWait(s, charId, {
+            maxWaitMs: 45000,
+            credentials: { user, pass },
+            onCooldown: sec => line(`  [Cooldown] Menunggu ${sec}s sebelum membaca data karakter...`)
+        });
+        if (!chRes.ok || !chRes.result) {
+            line('ERROR: Gagal membaca data karakter: ' + (chRes.error || 'server cooldown'));
+            return { exitCode: 4, battles: 0, totalTokensWon: 0, curStamina: 0 };
+        }
+        if (chRes.session && chRes.session.sessionKey && chRes.session.sessionKey !== s.sessionKey) {
+            s = chRes.session;
+            h = k.mk(s.sessionKey);
+        }
+        charObj = chRes.result;
+        gk = chRes.gk;
     }
 
     const charName = charObj.character_name || charRow[1];
@@ -203,26 +224,26 @@ async function runGradeSSession() {
     // Ambil kunci tanda tangan extraData
     let extraKeys = null;
     let extraTokens = 0;
-    for (let i = 1; i <= 3; i++) {
-        const res = await c.amf('CharacterDAO.getExtraData', [s.sessionKey, charId, s.token, gk]);
-        const b = (res && res.body) || {};
-        if (b.result) {
-            const ex = b.result;
+    let ex = (shared && shared.ex) || null;
+    if (!ex) {
+        const exRes = await c.getExtraDataWithRetry(s.sessionKey, charId, s.token, gk, 3);
+        if (exRes.ok && exRes.result) ex = exRes.result;
+    }
+    if (ex) {
+        if (ex.totalToken !== undefined) extraTokens = Number(ex.totalToken);
+        if (ex.isGraphic && ex.statistic_battle && ex.m7v && ex.q7t) {
             const kq0 = kv(String(ex.isGraphic)), kq1 = kv(String(ex.statistic_battle));
             const dvx = String(ex.m7v), egv = String(ex.q7t);
             const pet = Array.isArray(ex.player_pet) && ex.player_pet.length ? ex.player_pet[0] : null;
-            if (ex.totalToken !== undefined) extraTokens = Number(ex.totalToken);
-            if (kq0 && kq1 && dvx) {
+            if (kq0 && kq1 && dvx && egv) {
                 extraKeys = { kq0, kq1, dvx, egv, pet };
-                break;
             }
         }
-        await sleep(2000);
     }
 
     if (!extraKeys) {
         line('ERROR: Gagal memperoleh kunci tanda tangan extraData dari server.');
-        process.exit(5);
+        return { exitCode: 5, battles: 0, totalTokensWon: 0, curStamina: 0 };
     }
 
     if (!initialTokens && extraTokens) initialTokens = extraTokens;
@@ -244,24 +265,24 @@ async function runGradeSSession() {
     if (curLevel < 80) {
         line(`[!] Karakter "${charName}" masih Level ${curLevel}.`);
         line('    Misi Grade S membutuhkan minimal Level 80.');
-        process.exit(0);
+        return { exitCode: 0, battles: 0, totalTokensWon: 0, curStamina };
     }
 
     // Tentukan daftar stage yang akan dimainkan
     let stageQueue = [];
     let modeLabel = '';
 
-    if (isMapMode) {
+    if (localIsMapMode) {
         // Mode Misi 1-4 (Map Story): Rotasi msn274, msn275, msn276, msn277
         stageQueue = STAGES.slice(0, 4).filter(st => curLevel >= st.reqLv);
         modeLabel = `Rotasi Misi 1 s/d ${stageQueue.length} (Map Story)`;
         line(`Mode Target   : ${modeLabel}`);
         line(`Daftar Misi   : ` + stageQueue.map(s => `${s.name} [${s.id}]`).join(', '));
-    } else if (singleStageNum >= 1 && singleStageNum <= 5) {
-        const picked = STAGES[singleStageNum - 1];
+    } else if (localSingleStageNum >= 1 && localSingleStageNum <= 5) {
+        const picked = STAGES[localSingleStageNum - 1];
         if (curLevel < picked.reqLv) {
             line(`[!] Level tidak cukup untuk ${picked.name} (Butuh Lv ${picked.reqLv}, Level saat ini: ${curLevel}).`);
-            process.exit(0);
+            return { exitCode: 0, battles: 0, totalTokensWon: 0, curStamina };
         }
         stageQueue = [picked];
         modeLabel = `Fokus ${picked.name} [${picked.id}] Saja`;
@@ -275,7 +296,7 @@ async function runGradeSSession() {
         line(`Mode Target   : ${modeLabel}`);
     }
 
-    line(`Jeda Battle   : ${jedaSec} detik | Auto Collect Prize: YA`);
+    line(`Jeda Battle   : ${localJedaSec} detik | Auto Collect Prize: YA`);
     line(`Tips: Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti dan kembali ke menu.\n`);
 
     const { kq0, kq1, dvx, egv, pet } = extraKeys;
@@ -283,6 +304,7 @@ async function runGradeSSession() {
     let totalXpGained = 0;
     let totalGoldGained = 0;
     let totalTokensWon = 0;
+    let hadError = false;
     const stageBattleCounts = {};
     const collectedItemsAll = [];
 
@@ -290,14 +312,13 @@ async function runGradeSSession() {
     let roundNumber = 1;
 
     while (true) {
-        if (maxBattles > 0 && battleSuccess >= maxBattles) {
-            line(`[i] Batas maksimal battle yang ditentukan (${maxBattles}x) telah tercapai.`);
+        if (localMaxBattles > 0 && battleSuccess >= localMaxBattles) {
+            line(`[i] Batas maksimal battle yang ditentukan (${localMaxBattles}x) telah tercapai.`);
             break;
         }
 
         const curStage = stageQueue[stageCursor];
         const mid = curStage.mid;
-        const battleNo = battleSuccess + 1;
         const t0 = now();
 
         line(`>>> [Putaran #${roundNumber}] Memulai ${curStage.name} [${mid}] (Biaya: 12 Energi)...`);
@@ -322,6 +343,7 @@ async function runGradeSSession() {
             } else if (Number(mb.error) === 108) {
                 line('[i] Level karakter terlalu tinggi untuk misi ini.');
             } else {
+                hadError = true;
                 line(`[!] Server menolak start mission: ${errMsg.slice(0, 160)}`);
             }
             break;
@@ -330,9 +352,9 @@ async function runGradeSSession() {
         const sbid = mb.startBattleId;
         const cfn = mb.csf ? String(mb.csf) : (mb.cfn ? String(mb.cfn) : '');
         console.log(`OK (Battle ID: ${sbid})`);
-        line(`    Simulasi pertarungan (${jedaSec}s)...`);
+        line(`    Simulasi pertarungan (${localJedaSec}s)...`);
 
-        await sleep(jedaSec * 1000);
+        await sleep(localJedaSec * 1000);
 
         // 2. updateCharacter (Collect Prize & Rewards)
         const bfl = JSON.stringify({ battles: [] });
@@ -412,37 +434,26 @@ async function runGradeSSession() {
                 roundNumber++;
             }
         } else {
+            hadError = true;
             line(`  ✗ Gagal update reward battle: ${JSON.stringify(ub).slice(0, 160)}`);
             break;
         }
 
-        await sleep(2000);
+        await sleep(500);
     }
 
-    // Verifikasi saldo token akhir dari server
+    // Verifikasi saldo token akhir dari server hanya jika ada token / battle sukses (hemat request & hindari cooldown baru)
     let finalTokens = initialTokens + totalTokensWon;
-    try {
-        const sEnd = await c.login(user, pass);
-        if (sEnd && sEnd.tokens !== undefined) {
-            finalTokens = Number(sEnd.tokens);
-            if (finalTokens > initialTokens && totalTokensWon === 0) {
-                totalTokensWon = finalTokens - initialTokens;
+    if (battleSuccess > 0 && totalTokensWon > 0) {
+        try {
+            const sEnd = await c.login(user, pass);
+            if (sEnd && sEnd.tokens !== undefined) {
+                finalTokens = Number(sEnd.tokens);
+                if (finalTokens > initialTokens && totalTokensWon === 0) {
+                    totalTokensWon = finalTokens - initialTokens;
+                }
             }
-        }
-    } catch (_) {}
-
-    // Refresh data karakter terakhir
-    for (let i = 1; i <= 3; i++) {
-        const rEnd = await c.amf('CharacterDAO.getCharacterById', [s.sessionKey, charId]);
-        if (rEnd && rEnd.body && rEnd.body.result) {
-            const rx = rEnd.body.result;
-            curLevel = Number(rx.character_level) || curLevel;
-            curXp = Number(rx.character_xp) || curXp;
-            curGold = Number(rx.character_gold) || curGold;
-            if (rx.character_stamina !== undefined) curStamina = Number(rx.character_stamina);
-            break;
-        }
-        await sleep(1500);
+        } catch (_) {}
     }
 
     console.log('\n======================================================================');
@@ -483,6 +494,7 @@ async function runGradeSSession() {
     console.log('======================================================================\n');
 
     return {
+        exitCode: hadError ? 1 : 0,
         battles: battleSuccess,
         totalTokensWon,
         curStamina
@@ -490,9 +502,10 @@ async function runGradeSSession() {
 }
 
 async function main() {
+    c.enableGracefulStop('menu bot');
     if (!isLoopMode) {
-        await runGradeSSession();
-        return;
+        const res = await runGradeSSession();
+        process.exit(res ? res.exitCode : 0);
     }
 
     line('>>> MODE SCHEDULER MISI GRADE S DIAKTIFKAN <<<');
@@ -500,7 +513,7 @@ async function main() {
     line('Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti.\n');
 
     while (true) {
-        const res = await runGradeSSession();
+        await runGradeSSession();
         line('Standby & menunggu regenerasi energi (15 menit)...');
         // Tunggu 15 menit untuk regenerasi energi (~3 stamina), lalu cek kembali
         for (let s = 900; s > 0; s -= 30) {
@@ -511,7 +524,11 @@ async function main() {
     }
 }
 
-main().catch(err => {
-    line('FATAL: ' + err.message);
-    process.exit(1);
-});
+if (require.main === module) {
+    main().catch(err => {
+        line('FATAL: ' + err.message);
+        process.exit(1);
+    });
+}
+
+module.exports = { runGradeSSession };

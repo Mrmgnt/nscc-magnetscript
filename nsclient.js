@@ -215,7 +215,9 @@ function amf(service, params) {
     });
 }
 
-async function login(username, password, webData) {
+const sleepMs = ms => new Promise(r => setTimeout(r, ms));
+
+async function loginOnce(username, password, webData) {
     username = String(username || '').trim();
     password = String(password || '');
     let j = webData && webData.success === true ? webData : null;
@@ -266,24 +268,120 @@ async function login(username, password, webData) {
     };
 }
 
+async function login(username, password, webData, retries = 2) {
+    let last = null;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        last = await loginOnce(username, password, attempt === 0 ? webData : null);
+        if (last.ok) return last;
+        // Jangan retry jika credential ditolak oleh API (401/403/Invalid credentials)
+        if (last.stage === 'web-login' && last.http && last.http >= 400 && last.http < 500) {
+            return last;
+        }
+        if (attempt < retries) {
+            await sleepMs(1500 * (attempt + 1));
+        }
+    }
+    return last;
+}
+
+async function getCharacterByIdWithWait(session, charId, options = {}) {
+    const maxWaitMs = Number(options.maxWaitMs || 60000);
+    const credentials = options.credentials || null;
+    const deadline = Date.now() + maxWaitMs;
+    let curSession = typeof session === 'string' ? { sessionKey: session } : (session || {});
+    let lastErr = '';
+
+    for (let attempt = 1; attempt <= 20; attempt++) {
+        const r = await amf('CharacterDAO.getCharacterById', [curSession.sessionKey, charId]);
+        const b = (r && r.body) || null;
+        if (b && b.gk) {
+            return {
+                ok: true,
+                gk: String(b.gk),
+                cd: Number(b.cd || 0),
+                result: b.result || {},
+                raw: b,
+                session: curSession
+            };
+        }
+
+        const errStr = String((b && b.error) || r.netError || r.parseError || '');
+        lastErr = errStr || 'Unknown getCharacterById error';
+
+        // Server cooldown (20s per akun setelah pemilihan karakter)
+        const cdSec = b && b.cooldown ? Number(b.cooldown) : 0;
+        if (cdSec > 0 || /wait a moment/i.test(errStr)) {
+            const waitMs = Math.min(Math.max(2000, (cdSec > 0 ? cdSec + 1 : 4) * 1000), 25000);
+            if (Date.now() + waitMs > deadline) {
+                return { ok: false, error: lastErr, cooldown: cdSec, session: curSession };
+            }
+            if (typeof options.onCooldown === 'function') {
+                options.onCooldown(Math.ceil(waitMs / 1000), lastErr);
+            }
+            await sleepMs(waitMs);
+            continue;
+        }
+
+        // Session expired / validation failed
+        if (b && (Number(b.error) === 101 || Number(b.error) === 102 || /session validation failed|please re-select/i.test(errStr))) {
+            if (credentials && credentials.user && credentials.pass) {
+                const sNew = await login(credentials.user, credentials.pass);
+                if (sNew && sNew.ok) {
+                    curSession = sNew;
+                    await sleepMs(1000);
+                    continue;
+                }
+            }
+            return { ok: false, error: lastErr, sessionExpired: true, session: curSession };
+        }
+
+        if (Date.now() + 2500 > deadline) break;
+        await sleepMs(2500);
+    }
+
+    return { ok: false, error: lastErr || 'Timeout getCharacterById', session: curSession };
+}
+
+async function getExtraDataWithRetry(sessionKey, charId, token, gk, retries = 3) {
+    let lastBody = null;
+    for (let i = 1; i <= retries; i++) {
+        const res = await amf('CharacterDAO.getExtraData', [sessionKey, charId, token, gk]);
+        const b = (res && res.body) || null;
+        lastBody = b;
+        if (b && b.result && typeof b.result === 'object') {
+            return { ok: true, result: b.result, raw: b };
+        }
+        const err = String((b && b.error) || (res && res.netError) || '');
+        if (/session validation failed|please re-select/i.test(err)) {
+            return { ok: false, sessionExpired: true, error: err, raw: b };
+        }
+        if (i < retries) await sleepMs(1500);
+    }
+    return { ok: false, error: String((lastBody && lastBody.error) || 'Empty extraData'), raw: lastBody };
+}
+
 function getSelectedChar(charList, target) {
     if (!charList || !charList.length) return null;
-    if (!target) return charList[0];
+    if (target === undefined || target === null || String(target).trim() === '') return charList[0];
     const tStr = String(target).trim().toLowerCase();
     // 1. Match by charId (column 0)
-    const byId = charList.find(c => String(c[0]) === tStr);
+    const byId = charList.find(c => String(c[0]).toLowerCase() === tStr);
     if (byId) return byId;
-    // 2. Match by charName (column 1)
+    // 2. Jika target berupa nomor slot (1-based: "1", "2", ...), cocokkan index slot langsung
+    //    agar nama karakter yang mengandung angka (misal "Goku1") tidak salah tertangkap.
+    if (/^\d+$/.test(tStr)) {
+        const num = parseInt(tStr, 10);
+        if (num >= 1 && num <= charList.length) {
+            return charList[num - 1];
+        }
+        return null;
+    }
+    // 3. Match by charName (column 1)
     const byExactName = charList.find(c => String(c[1]).toLowerCase() === tStr);
     if (byExactName) return byExactName;
     const bySubName = charList.find(c => String(c[1]).toLowerCase().includes(tStr));
     if (bySubName) return bySubName;
-    // 3. Match by slot number (1-based: 1, 2, ...)
-    const num = parseInt(tStr, 10);
-    if (!isNaN(num) && num >= 1 && num <= charList.length) {
-        return charList[num - 1];
-    }
-    return charList[0];
+    return null;
 }
 
 function enableGracefulStop(label = 'menu') {
@@ -315,4 +413,4 @@ function enableGracefulStop(label = 'menu') {
     }
 }
 
-module.exports = { login, amf, httpJson, getSelectedChar, enableGracefulStop, AMF_HOST, API_HOST, BUILD_NO, SALT, CODEC, sha1, getHash, getArrayHash, getLoginHash, ucEncode };
+module.exports = { login, amf, httpJson, getSelectedChar, getCharacterByIdWithWait, getExtraDataWithRetry, enableGracefulStop, AMF_HOST, API_HOST, BUILD_NO, SALT, CODEC, sha1, getHash, getArrayHash, getLoginHash, ucEncode };
