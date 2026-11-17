@@ -120,11 +120,12 @@ echo        15. Cek Status Karakter (Level, XP, Gold, Token, Ujian, Hunting, Hea
 echo        16. Ganti Karakter Aktif (Pilih karakter lain di akun ini)
 echo        17. Ganti Akun / Logout
 echo        18. Auto Live PvP Duel (pvpduel.txt)
+echo        19. Auto Co-op Minotaur Public Room (1 Akun)
 echo.
 echo         0. Keluar
 echo ======================================================================
 set "PILIH="
-set /p "PILIH=Pilih menu [0-18]: "
+set /p "PILIH=Pilih menu [0-19]: "
 
 if "%PILIH%"=="1" goto DAILY
 if "%PILIH%"=="2" goto TRAIN
@@ -144,6 +145,7 @@ if "%PILIH%"=="15" goto STATE
 if "%PILIH%"=="16" goto GANTICHAR
 if "%PILIH%"=="17" goto GANTI
 if "%PILIH%"=="18" goto PVPDUEL
+if "%PILIH%"=="19" goto COOPMINOTAUR
 if "%PILIH%"=="0" goto END
 goto MENU
 
@@ -559,6 +561,30 @@ echo.
 echo   Tips: Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti ke menu.
 echo.
 node ns_multi_manager.js
+echo.
+pause
+goto MENU
+
+:COOPMINOTAUR
+cls
+echo ======================================================================
+echo              AUTO CO-OP MINOTAUR - PUBLIC ROOM
+echo ======================================================================
+echo   Config : coop_accounts.txt
+echo   Format : main:username:password:slot
+echo   Syarat : room punya player lain; Emblem dicek bila status dikirim server.
+echo.
+echo   [ 1 ] Dry-run: login + cek room list, tanpa join
+echo   [ 2 ] Capture battle: join satu room, tanpa serang
+echo   [ 3 ] Jalankan loop public room + auto battle
+echo   [ 0 ] Kembali
+echo.
+set "COOP_OPT="
+set /p "COOP_OPT=Pilih [0-3]: "
+if "%COOP_OPT%"=="1" node ns_coop_minotaur.js --dry-run --accounts coop_accounts.txt
+if "%COOP_OPT%"=="2" node ns_coop_minotaur.js --capture-battle --max-matches 1 --headful --accounts coop_accounts.txt
+if "%COOP_OPT%"=="3" node ns_coop_minotaur.js --accounts coop_accounts.txt
+if "%COOP_OPT%"=="0" goto MENU
 echo.
 pause
 goto MENU

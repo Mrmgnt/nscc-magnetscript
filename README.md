@@ -151,34 +151,24 @@ node ns_halloween.js status
 
 #### Auto Co-op Hunting Minotaur Extreme (`ns_coop_minotaur.js`):
 ```cmd
-:: Cek dulu rencana rotasi host & energy (tanpa buat room)
-node ns_coop_minotaur.js --dry-run
+:: Satu akun. Hanya membaca room list, tanpa join.
+node ns_coop_minotaur.js --dry-run --accounts coop_accounts.txt
 
-# Uji satu captcha/create-room tanpa memulai battle
-node ns_coop_minotaur.js --captcha-test USERNAME --headful
+:: Join room publik Minotaur Extreme. Bot tidak membuat room atau pakai dummy.
+node ns_coop_minotaur.js --max-matches 1 --headful
 
-:: Uji satu match; auto-kill belum terbukti sampai server mengonfirmasi
-node ns_coop_minotaur.js --auto-kill --max-matches 1 --headful
-
-:: Setelah satu match berhasil, uji tiga host bergilir
-node ns_coop_minotaur.js --auto-kill --max-matches 3 --headful
-
-:: Loop penuh hanya dibuka setelah tiga match valid dengan host berbeda
-node ns_coop_minotaur.js --auto-kill --boss minotaur --level extreme --password 1111
+:: Capture battle satu room tanpa mengirim skill.
+node ns_coop_minotaur.js --capture-battle --max-matches 1 --headful
 ```
 Isi file `coop_accounts.txt` (contoh: `coop_accounts.example.txt`):
 ```text
-host:dummy1:pass:1
-host:dummy2:pass:1
-main:akunUtama1:pass:1
+main:akun:pass:1
 ```
+Akun bot boleh Free atau Emblem. Room harus sudah memiliki sedikitnya satu player Emblem lain.
+Host tidak harus Emblem. Player Emblem lain harus tetap ada sebelum battle dimulai.
+Bot meninggalkan room bila kick, player Emblem lain keluar, atau host belum mulai dalam 50 detik.
+Quick Match belum dipakai karena command PvE belum tervalidasi. Mode loop mengirim Seal ke head, AoE atau stun ke left hand, lalu merotasi skill terkuat.
 
-Menu 16 memakai auto-kill dan batas validasi otomatis: 1 match, lalu 3, lalu loop penuh.
-`coop_validation.json` terikat tiga karakter dan quest; jangan mengeditnya untuk melewati uji.
-Kegagalan captcha, socket, ready, atau battle menghentikan sesi dengan exit code 1.
-Energy lokal tidak dikurangi ketika hasil belum terkonfirmasi. Pengurangan server harus cocok biaya quest.
-`battle_win` bukan bukti hadiah masuk: periksa score/inventory di game sebelum menjalankan sesi berikutnya.
-Jika captcha rotate/grid muncul atau verifikasi slider/drag gagal, sesi berhenti; full-auto belum terjamin.
 ---
 
 *Copyright &copy; 2026 MagnetScript (Razki)*
