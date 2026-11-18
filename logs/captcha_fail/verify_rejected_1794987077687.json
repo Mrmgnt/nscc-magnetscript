@@ -1,0 +1,57 @@
+{
+  "type": "slider",
+  "start_x": 330,
+  "max_x": 330,
+  "track_w": 380,
+  "dom": {},
+  "details": {
+    "target": {
+      "x": 191,
+      "y": 0,
+      "score": 100.46818181818182,
+      "borderMismatch": 49.73,
+      "histScore": 0.677,
+      "candidates": [
+        {
+          "x": 78,
+          "score": 115.47136363636363,
+          "borderMismatch": 54.2,
+          "histScore": 0.817,
+          "boundary": 53622,
+          "pattern": 32.8684,
+          "checker": 0.764
+        },
+        {
+          "x": 191,
+          "score": 100.46818181818182,
+          "borderMismatch": 49.73,
+          "histScore": 0.677,
+          "boundary": 56179,
+          "pattern": 38.4176,
+          "checker": 0.8024
+        }
+      ]
+    },
+    "images": {
+      "scaleX": 0.6926316110711349,
+      "scaleY": 0.6926042829241071,
+      "initialX": 231.00003051757812,
+      "initialY": 0,
+      "trackWidth": 266,
+      "background": {
+        "width": 380,
+        "height": 140
+      },
+      "piece": {
+        "width": 50,
+        "height": 140
+      }
+    },
+    "deltaX": -98.70739280299136,
+    "deltaY": 0,
+    "position": {
+      "x": 132.29995727539062,
+      "y": 0
+    }
+  }
+}

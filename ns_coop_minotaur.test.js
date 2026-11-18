@@ -9,7 +9,8 @@ vm.runInNewContext(source.slice(0, cut) + '\nmodule.exports = { parseArgs, findQ
 const { parseArgs, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, chooseMinotaurTurn } = context.module.exports;
 assert.equal(parseArgs([]).maxMatches, Infinity);
 assert.equal(parseArgs(['--max-matches', '2']).maxMatches, 2);
-assert.equal(findQuestId([{ display_boss: ['enemy501'], quest_obj: [{ quest: 3, energy: [25, 5] }] }], 'minotaur', 'extreme').quest, 3);
+assert.equal(parseArgs(['--host-room']).hostRoom, true);
+assert.equal(findQuestId([{ display_boss: ['enemy546'], quest_obj: [{ quest: 23, energy: [25, 5] }] }], 'cerberus', 'extreme').quest, 23);
 const room = normalizeRoom({ room_name: '12', quest: 3, max_player: 3, character_array: [{ character_id: 'free', accountType: 1 }, { character_id: 'emblem', accountType: 2 }] }, 3);
 assert.equal(countOtherEmblems(room.players, 'bot'), 1);
 assert.equal(countOtherEmblems(room.players, 'emblem'), 0);
@@ -27,6 +28,7 @@ assert.equal(scanSummary([{ reason: 'room_full' }, { reason: 'room_full' }, { re
 const skills = [{ id: '2004', skillId: 'skill2004' }, { id: '632', skillId: 'skill632' }, { id: '345', skillId: 'skill345' }];
 assert.equal(chooseMinotaurTurn(skills, ['head', 'left'], 0).skill.skillId, 'skill2004');
 assert.equal(chooseMinotaurTurn(skills, ['head', 'left'], 0).targetId, 'head');
+assert.equal(chooseMinotaurTurn([{ id: '39', skillId: 'skill39' }, { id: '2004', skillId: 'skill2004' }], ['head'], 0, true).skill.skillId, 'skill39');
 assert.equal(chooseMinotaurTurn(skills, ['head', 'left'], 1).skill.skillId, 'skill632');
 assert.equal(chooseMinotaurTurn([{ id: '345', skillId: 'skill345' }], ['head', 'left'], 1).targetId, 'left');
 console.log('OK: public room parser, quest, other-Emblem filter, room selection');

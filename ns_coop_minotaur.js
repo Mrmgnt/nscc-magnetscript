@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * Public co-op Minotaur runner. One Emblem account joins existing rooms only.
+ * Public co-op boss runner. One account joins existing rooms only.
  * It never creates rooms or starts games. Battle commands stay disabled until
  * live target and skill mappings are captured and verified.
  */
@@ -13,7 +13,8 @@ const { PveBattle } = require('./lib/ns_pve_battle.js');
 
 const line = message => console.log(message);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-const BOSS_ENEMY_ID = { minotaur: 'enemy501' };
+// Live room list maps public Co-op bosses to their enemy IDs.
+const BOSS_ENEMY_ID = { minotaur: 'enemy533', cerberus: 'enemy546' };
 const LEVEL_INDEX = { normal: 1, hard: 2, extreme: 3, extream: 3 };
 const AUTO_SKILL_PRIORITY = ['2004', '632', '638', '623', '728', '345', '854', '151', '39'];
 const AOE_SKILL_IDS = String((process.env && process.env.NS_COOP_AOE_SKILL_IDS) || '632,638,623,728').split(',').map(id => id.trim()).filter(Boolean);
@@ -21,8 +22,8 @@ const STUN_SKILL_ID = String((process.env && process.env.NS_COOP_STUN_SKILL_ID) 
 
 function parseArgs(argv) {
     const args = {
-        boss: 'minotaur', level: 'extreme', accounts: 'coop_accounts.txt', maxMatches: Infinity,
-        roomPollMs: 3000, hostStartTimeout: 50000, dryRun: false, captureBattle: false, headful: false,
+        boss: 'cerberus', level: 'extreme', accounts: 'coop_accounts.txt', maxMatches: Infinity,
+        roomPollMs: 1500, hostStartTimeout: 180000, dryRun: false, captureBattle: false, hostRoom: false, headful: false,
     };
     for (let i = 0; i < argv.length; i++) {
         const key = argv[i];
@@ -34,6 +35,7 @@ function parseArgs(argv) {
         else if (key === '--host-start-timeout') args.hostStartTimeout = Number(argv[++i]);
         else if (key === '--dry-run') args.dryRun = true;
         else if (key === '--capture-battle') args.captureBattle = true;
+        else if (key === '--host-room') args.hostRoom = true;
         else if (key === '--headful') args.headful = true;
         else throw new Error('Argumen tidak dikenal: ' + key);
     }
@@ -139,7 +141,9 @@ function normalizePlayer(raw) {
     const emblemValue = raw.isEmblem ?? raw.is_emblem ?? raw.emblem ?? raw.accountType ?? raw.account_type ?? raw.userType ?? raw.user_type;
     const hasEmblem = emblemValue !== undefined && emblemValue !== null;
     if (charId == null || !hasEmblem) return null;
-    return { charId: String(charId), isEmblem: boolEmblem(emblemValue) || Number(emblemValue) === 2 };
+    const levelValue = raw.character_level ?? raw.characterLevel ?? raw.level ?? raw.lv;
+    const level = Number(levelValue);
+    return { charId: String(charId), isEmblem: boolEmblem(emblemValue) || Number(emblemValue) === 2, level: Number.isFinite(level) ? level : null };
 }
 function normalizeRoom(raw, questId) {
     if (!raw || typeof raw !== 'object') return null;
@@ -159,7 +163,11 @@ function pickRoom(rooms, questId, botCharId) {
     const evaluated = [];
     for (const raw of (Array.isArray(rooms) ? rooms : [])) {
         const room = normalizeRoom(raw, questId);
-        if (!room || !room.id || room.quest !== Number(questId)) { evaluated.push({ reason: 'quest_or_id' }); continue; }
+        if (!room || !room.id || room.quest !== Number(questId)) {
+            const enemies = Array.isArray(raw && raw.tb) ? raw.tb.join(',') : '';
+            evaluated.push({ reason: 'quest_or_id', quest: room && room.quest, enemies });
+            continue;
+        }
         if (room.hasPassword) { evaluated.push({ roomId: room.id, reason: 'password_required' }); continue; }
         if (room.slots != null && room.slots < 1) { evaluated.push({ roomId: room.id, reason: 'room_full' }); continue; }
         // Room summary often omits roster. Join only to verify it; READY stays blocked
@@ -176,7 +184,10 @@ function scanSummary(evaluated) {
     const counts = new Map();
     for (const item of evaluated || []) {
         if (item.reason === 'accepted') continue;
-        counts.set(item.reason, (counts.get(item.reason) || 0) + 1);
+        const label = item.reason === 'quest_or_id' && item.quest != null
+            ? 'other_quest=' + item.quest + (item.enemies ? '/' + item.enemies : '')
+            : item.reason;
+        counts.set(label, (counts.get(label) || 0) + 1);
     }
     return [...counts.entries()].map(([reason, count]) => reason + '=' + count).join(', ') || 'tidak ada room';
 }
@@ -197,8 +208,10 @@ function messageValue(raw) {
     try { return JSON.parse(message); } catch (_) { return null; }
 }
 function pickSkill(skills, id) { return (skills || []).find(skill => String(skill.id) === String(id)) || null; }
-function chooseMinotaurTurn(skills, enemyIds, turn) {
+function chooseMinotaurTurn(skills, enemyIds, turn, hostDodgeFirst = false) {
     const head = enemyIds && enemyIds[0];
+    const evasion = pickSkill(skills, '39');
+    if (hostDodgeFirst && turn === 0 && evasion) return { skill: evasion, targetId: head, label: 'host_evasion' };
     const leftHand = (enemyIds && enemyIds[1]) || head;
     const seal = pickSkill(skills, '2004');
     if (turn === 0 && seal) return { skill: seal, targetId: head, label: 'seal_head' };
@@ -220,7 +233,7 @@ async function runDryRun(args, account) {
     if (!result.ok) throw new Error('Login gagal: ' + result.error);
     const pve = await readPveInit(result.session);
     const quest = pve && findQuestId(pve.questList, args.boss, args.level);
-    if (!pve || !quest || !pve.pvpServer || !pve.pvpServer[0]) throw new Error('PvE Minotaur Extreme tidak tersedia.');
+    if (!pve || !quest || !pve.pvpServer || !pve.pvpServer[0]) throw new Error('PvE boss Extreme tidak tersedia.');
     const socket = await connectPve({ server: pve.pvpServer[0], sessionKey: result.session.sessionKey, charId: result.charId, handoffToken: pve.handoffToken, handoffNonce: pve.handoffNonce, ver: pve.ver });
     try {
         let rooms = null;
@@ -261,7 +274,7 @@ async function runLive(args, account) {
         if (!result.ok) throw new Error('Login gagal: ' + result.error);
         const pve = await readPveInit(result.session);
         const quest = pve && findQuestId(pve.questList, args.boss, args.level);
-        if (!pve || !quest || !pve.pvpServer || !pve.pvpServer[0]) throw new Error('PvE Minotaur Extreme tidak tersedia.');
+        if (!pve || !quest || !pve.pvpServer || !pve.pvpServer[0]) throw new Error('PvE boss Extreme tidak tersedia.');
         if (!result.skills.length) throw new Error('Skill karakter tidak terbaca; battle otomatis dihentikan.');
         const joinCost = Number(quest.energy[1]);
         if (!(joinCost > 0)) throw new Error('Biaya energy join tidak valid.');
@@ -281,6 +294,13 @@ async function runLive(args, account) {
             active.done = true;
         };
         const requestRooms = () => { rooms = null; socket.getRoomSummary(); };
+        const watchJoinResponse = (reason, timeoutMs) => {
+            if (joinRejectTimer) clearTimeout(joinRejectTimer);
+            joinRejectTimer = setTimeout(() => {
+                joinRejectTimer = null;
+                if (active && !active.done && !active.joinAccepted) resetActive(reason);
+            }, timeoutMs);
+        };
         socket.on('error', () => { fatal = fatal || new Error('Socket error'); });
         socket.on('si_error', () => { fatal = fatal || new Error('Socket.IO error'); });
         socket.on('close', () => { if (!fatal) fatal = new Error('Socket terputus'); });
@@ -294,9 +314,14 @@ async function runLive(args, account) {
             if (++captchaAttempts > 1) { resetActive('captcha_retry_limit'); return; }
             solvingCaptcha = true;
             line('  #' + active.match + ' CAPTCHA verifikasi join...');
-            solver.solve('pve').then(ok => {
+            solver.solve('pve').then(async ok => {
                 if (!ok) { fatal = new Error('CAPTCHA ditolak server. Selesaikan CAPTCHA secara manual sebelum menjalankan ulang agar akun tidak terkunci.'); return; }
-                if (active && !active.done) socket.joinRoom(active.room.id, '', pve.ver);
+                // Give server verification state time to reach PvE socket before retrying join.
+                await sleep(750);
+                if (!active || active.done) return;
+                line('  #' + active.match + ' CAPTCHA OK; ulang join room=' + active.room.id);
+                socket.joinRoom(active.room.id, '', pve.ver);
+                watchJoinResponse('captcha_join_timeout', 12000);
             }).catch(error => {
                 resetActive('captcha_error:' + String(error.message || error).slice(0, 80));
             }).finally(() => { solvingCaptcha = false; });
@@ -327,7 +352,7 @@ async function runLive(args, account) {
             active.joinAcceptedToReadyMs = elapsedMs(active.joinAcceptedNs);
             if (active.joinAcceptedToReadyMs > 250) active.latencyWarning = 'ready lambat';
             active.ready = true;
-            line('  #' + active.match + ' READY room=' + active.room.id + ' (' + active.joinAcceptedToReadyMs.toFixed(1) + ' ms)' + (active.rosterConfirmed ? '' : ' roster=menunggu'));
+            line('  #' + active.match + ' READY room=' + active.room.id + ' (' + active.joinAcceptedToReadyMs.toFixed(1) + ' ms)' + (active.rosterConfirmed ? '' : ' roster=menunggu') + '; tunggu host max ' + Math.round(args.hostStartTimeout / 1000) + ' dtk');
         };
         socket.on('join_room', data => {
             if (!active || active.done) return;
@@ -335,14 +360,10 @@ async function runLive(args, account) {
             if (Number(data && data.status) !== 1 || data.room_name === 'lobby') {
                 // Some servers emit join rejection just before captcha_required.
                 // Hold state briefly so CAPTCHA can resend this same join command.
-                if (!active.captchaRequested && !joinRejectTimer) {
-                    joinRejectTimer = setTimeout(() => {
-                        joinRejectTimer = null;
-                        if (active && !active.done && !active.captchaRequested) resetActive('join_rejected');
-                    }, 1500);
-                }
+                if (!active.captchaRequested && !joinRejectTimer) watchJoinResponse('join_rejected', 1500);
                 return;
             }
+            if (joinRejectTimer) { clearTimeout(joinRejectTimer); joinRejectTimer = null; }
             active.joinAccepted = true;
             active.joinAcceptedNs = nowNs();
             applyRoster(data);
@@ -361,11 +382,29 @@ async function runLive(args, account) {
             }
             if (countOtherEmblems(active.players, result.charId) < 1) resetActive('emblem_player_left');
         });
-        for (const event of ['kick_user', 'force_lobby', 'destroy_battle']) socket.on(event, () => resetActive(event));
+        const roomEventDetail = data => {
+            if (!data || typeof data !== 'object') return {};
+            return {
+                status: data.status,
+                reason: data.reason || data.message || data.error,
+                keys: Object.keys(data).slice(0, 12),
+            };
+        };
+        for (const event of ['kick_user', 'force_lobby', 'destroy_battle']) {
+            socket.on(event, data => {
+                if (active && !active.done) {
+                    const detail = roomEventDetail(data);
+                    active.roomEvents = active.roomEvents || [];
+                    active.roomEvents.push({ event, ...detail });
+                    line('  #' + active.match + ' SERVER ' + event + (detail.reason ? ' (' + detail.reason + ')' : ''));
+                }
+                resetActive(event);
+            });
+        }
         const markBattleStarted = () => {
             if (!active || active.started) return;
             active.started = true;
-            line('  #' + active.match + ' START MINOTAUR');
+            line('  #' + active.match + ' START ' + String(args.boss).toUpperCase());
         };
         socket.on('battle_start', markBattleStarted);
         socket.on('battle_msg', raw => {
@@ -393,10 +432,18 @@ async function runLive(args, account) {
         await socket.waitAuth(15000);
         if (!socket.hasCommandKey()) throw new Error('Command key socket tidak terbentuk.');
         socket.joinLobby();
+        let knownEnergy = Number(pve.energy);
+        let lastEnergyCheckAt = Date.now();
 
         while (report.matches.length < args.maxMatches) {
-            const fresh = await readPveInit(result.session);
-            if (!fresh || !Number.isFinite(fresh.energy) || fresh.energy < joinCost) break;
+            // Room scan stays socket-only; avoid slow AMF refresh on every 1.5s poll.
+            if (Date.now() - lastEnergyCheckAt >= 30000) {
+                const fresh = await readPveInit(result.session);
+                if (!fresh || !Number.isFinite(fresh.energy)) break;
+                knownEnergy = fresh.energy;
+                lastEnergyCheckAt = Date.now();
+            }
+            if (!Number.isFinite(knownEnergy) || knownEnergy < joinCost) break;
             requestRooms();
             const scanDeadline = Date.now() + 15000;
             while (!Array.isArray(rooms)) {
@@ -416,24 +463,38 @@ async function runLive(args, account) {
             captchaAttempts = 0;
             line('  #' + matchNo + ' JOIN room=' + active.room.id + (picked.otherEmblems == null ? ' (verifikasi roster)' : ' emblem=' + picked.room.players.filter(player => player.isEmblem).length));
             socket.joinRoom(active.room.id, '', pve.ver);
-            const deadline = Date.now() + args.hostStartTimeout;
-            while (!active.done && Date.now() < deadline) {
+            const readyDeadline = Date.now() + args.hostStartTimeout;
+            while (!active.done && !active.ready && Date.now() < readyDeadline) {
                 if (fatal) throw fatal;
                 await sleep(10);
             }
-            if (!active.done && !active.started) resetActive('host_start_timeout');
+            if (!active.done && !active.ready) resetActive('ready_timeout');
+            if (active && !active.done && !active.started) {
+                // Host timer begins only after our READY command, never during CAPTCHA/join.
+                const hostDeadline = active.readySentNs
+                    ? Date.now() + Math.max(0, args.hostStartTimeout - Math.round(elapsedMs(active.readySentNs)))
+                    : Date.now() + args.hostStartTimeout;
+                while (!active.done && !active.started && Date.now() < hostDeadline) {
+                    if (fatal) throw fatal;
+                    await sleep(10);
+                }
+                if (!active.done && !active.started) resetActive('host_start_timeout');
+            }
             if (active && !active.done && active.started && !args.captureBattle) {
-                // Safety gate: wait only for server outcome; no unverified player action is emitted.
-                while (!active.done && Date.now() < deadline + args.hostStartTimeout) {
+                const battleDeadline = Date.now() + args.hostStartTimeout * 2;
+                while (!active.done && Date.now() < battleDeadline) {
                     if (fatal) throw fatal;
                     await sleep(10);
                 }
                 if (!active.done) resetActive('battle_timeout');
             }
             if (active.room && !active.outcome) socket.leaveRoom(active.room.id);
-            const summary = { match: active.match, roomId: active.room.id, otherEmblems: active.otherEmblems, emblemStatusUnknown: active.emblemStatusUnknown, rosterConfirmed: active.rosterConfirmed, rosterFields: active.rosterFields, ready: active.ready, outcome: active.outcome || 'retry', reason: active.reason, joinAcceptedToReadyMs: active.joinAcceptedToReadyMs, latencyWarning: active.latencyWarning, lastAction: active.lastAction, battleCommandLatencyMs: active.battleCommandLatencyMs, durationMs: Date.now() - active.startedAt, battle: bufferedBattle.splice(0) };
+            const summary = { match: active.match, roomId: active.room.id, otherEmblems: active.otherEmblems, emblemStatusUnknown: active.emblemStatusUnknown, rosterConfirmed: active.rosterConfirmed, rosterFields: active.rosterFields, roomEvents: active.roomEvents, ready: active.ready, outcome: active.outcome || 'retry', reason: active.reason, joinAcceptedToReadyMs: active.joinAcceptedToReadyMs, latencyWarning: active.latencyWarning, lastAction: active.lastAction, battleCommandLatencyMs: active.battleCommandLatencyMs, durationMs: Date.now() - active.startedAt, battle: bufferedBattle.splice(0) };
             report.matches.push(summary);
-            if (summary.outcome === 'battle_finish' || summary.outcome === 'battle_win') line('  #' + summary.match + ' WIN MINOTAUR (' + summary.outcome + ')');
+            // Force a fresh energy read after every joined room/battle attempt.
+            lastEnergyCheckAt = 0;
+            saveReport();
+            if (summary.outcome === 'battle_finish' || summary.outcome === 'battle_win') line('  #' + summary.match + ' WIN ' + String(args.boss).toUpperCase() + ' (' + summary.outcome + ')');
             else line('  #' + summary.match + ' RETRY (' + (summary.reason || summary.outcome) + ')');
             active = null;
         }
@@ -448,11 +509,147 @@ async function runLive(args, account) {
     }
 }
 
+async function runHostRoom(args, account) {
+    const { CaptchaSolver } = require('./lib/ns_captcha_solver.js');
+    const solver = new CaptchaSolver({ headful: args.headful, log: line, username: account.username, password: account.password });
+    let socket = null;
+    try {
+        await solver.open();
+        const result = await loginAccount(account, solver.webLoginData);
+        if (!result.ok) throw new Error('Login gagal: ' + result.error);
+        const pve = await readPveInit(result.session);
+        const quest = pve && findQuestId(pve.questList, args.boss, args.level);
+        if (!pve || !quest || !pve.pvpServer || !pve.pvpServer[0]) throw new Error('PvE boss Extreme tidak tersedia.');
+        if (!pickSkill(result.skills, '39')) throw new Error('Kinjutsu: Evasion (skill39) tidak ditemukan pada karakter host.');
+        socket = await connectPve({ server: pve.pvpServer[0], sessionKey: result.session.sessionKey, charId: result.charId, handoffToken: pve.handoffToken, handoffNonce: pve.handoffNonce, ver: pve.ver });
+        let active = null;
+        let fatal = null;
+        let solvingCaptcha = false;
+        const lookup = new Map();
+        const sleepUntil = async predicate => { while (!predicate()) { if (fatal) throw fatal; await sleep(50); } };
+        const rawPlayers = data => data && (data.character_array || data.characters || data.players || data.player_array);
+        const getPlayerInfo = async (raw, charId) => {
+            const fromRoom = normalizePlayer(raw);
+            if (fromRoom && fromRoom.level != null) return fromRoom;
+            const detail = await c.amf('CharacterDAO.getCharacterById', [result.session.sessionKey, charId]);
+            const body = detail && detail.body || {};
+            const data = body.result || body.character || body;
+            const level = Number(data.character_level ?? data.characterLevel ?? data.level);
+            const accountType = data.accountType ?? data.account_type ?? data.userType ?? data.user_type ?? data.isEmblem ?? data.is_emblem;
+            return { charId: String(charId), level: Number.isFinite(level) ? level : null, isEmblem: boolEmblem(accountType) || Number(accountType) === 2 };
+        };
+        const validateRoster = data => {
+            if (!active) return;
+            const roster = rawPlayers(data);
+            if (!Array.isArray(roster)) return;
+            for (const raw of roster) {
+                const id = String((raw && typeof raw === 'object' ? raw.character_id ?? raw.characterId ?? raw.charId ?? raw.id : raw) ?? '');
+                if (!id || id === String(result.charId) || lookup.has(id)) continue;
+                lookup.set(id, { status: 'checking' });
+                getPlayerInfo(raw, id).then(player => {
+                    if (!active) return;
+                    const allowed = player.isEmblem === true && Number(player.level) > 60;
+                    lookup.set(id, { status: allowed ? 'valid' : 'invalid', player });
+                    if (!allowed) {
+                        line('  KICK char=' + id + ' (butuh Emblem + Lv >60; dapat Emblem=' + Boolean(player.isEmblem) + ', Lv=' + (player.level ?? '?') + ')');
+                        socket.kickPlayer(id);
+                    } else {
+                        line('  VALID char=' + id + ' (Emblem, Lv ' + player.level + ')');
+                    }
+                    maybeStart();
+                }).catch(() => {
+                    if (!active) return;
+                    lookup.set(id, { status: 'invalid' });
+                    line('  KICK char=' + id + ' (data Emblem/level tidak terbaca)');
+                    socket.kickPlayer(id);
+                });
+            }
+        };
+        const markReady = data => {
+            if (!active) return;
+            const direct = data && (data.character_id ?? data.characterId ?? data.charId ?? data.id);
+            if (direct != null) active.ready.add(String(direct));
+            const roster = rawPlayers(data);
+            if (Array.isArray(roster)) for (const raw of roster) {
+                const id = String((raw && typeof raw === 'object' ? raw.character_id ?? raw.characterId ?? raw.charId ?? raw.id : raw) ?? '');
+                const flag = raw && typeof raw === 'object' && (raw.ready ?? raw.is_ready ?? raw.isReady);
+                if (id && (flag === true || flag === 1 || flag === '1' || !direct)) active.ready.add(id);
+            }
+        };
+        const maybeStart = () => {
+            if (!active || active.started) return;
+            const valid = [...lookup.entries()].filter(([, value]) => value.status === 'valid').map(([id]) => id);
+            if (valid.length !== 2 || !active.ready.has(String(result.charId)) || !valid.every(id => active.ready.has(id))) return;
+            active.started = true;
+            line('  READY 3/3 valid. HOST START CERBERUS');
+            socket.startGame();
+        };
+        socket.on('error', () => { fatal = fatal || new Error('Socket error'); });
+        socket.on('si_error', () => { fatal = fatal || new Error('Socket.IO error'); });
+        socket.on('close', () => { if (!fatal) fatal = new Error('Socket terputus'); });
+        socket.on('captcha_required', () => {
+            if (!active || solvingCaptcha) return;
+            solvingCaptcha = true;
+            solver.solve('pve').then(async ok => {
+                if (!ok) { fatal = new Error('CAPTCHA ditolak server. Selesaikan manual sebelum lanjut.'); return; }
+                await sleep(750);
+                if (active && !active.roomId) socket.createRoom({ password: '', mode: 3, quest: quest.quest, ver: pve.ver });
+            }).finally(() => { solvingCaptcha = false; });
+        });
+        socket.on('join_room', data => {
+            if (!active || Number(data && data.status) !== 1 || data.room_name === 'lobby') return;
+            if (!active.roomId) {
+                active.roomId = String(data.room_name);
+                active.ready.add(String(result.charId));
+                line('  HOST ROOM=' + active.roomId + ' | tunggu Emblem Lv >60 | refresh 1 dtk');
+                socket.ready(result.charId);
+            }
+            validateRoster(data);
+        });
+        socket.on('ready', data => { validateRoster(data); markReady(data); maybeStart(); });
+        socket.on('leave_room', data => { if (!active) return; const id = String(data && (data.character_id ?? data.characterId ?? data.charId ?? data.id) || ''); if (id) { lookup.delete(id); active.ready.delete(id); } });
+        for (const event of ['force_lobby', 'destroy_battle', 'kick_user']) socket.on(event, data => { if (active) { active.done = true; active.reason = event + (data && (data.reason || data.message) ? ':' + (data.reason || data.message) : ''); } });
+        socket.on('battle_msg', raw => {
+            const message = messageValue(raw);
+            if (!active || !message) return;
+            if (['join', 'start', 'start_atb'].includes(message.state) && !active.battleStarted) { active.battleStarted = true; line('  START CERBERUS'); }
+            if (message.state === 'battle_finish' || message.state === 'battle_win') { active.done = true; active.won = true; return; }
+            const step = active.battle.nextStep(message);
+            if (step.type === 'ready') socket.battleReady();
+            else if (step.type === 'startAtb') socket.startAtb();
+            else if (step.type === 'actionReady') socket.actionReady();
+            else if (step.type === 'actionFinish') socket.actionFinish(step.charDead);
+            else if (step.type === 'turn') {
+                const turn = chooseMinotaurTurn(result.skills, active.battle.enemyIds, active.turn++, true);
+                line('  HOST SKILL ' + turn.label + ' skill' + (turn.skill ? turn.skill.id : 'weapon'));
+                socket.battleCommand(result.charId, turn.skill ? 'skill' : 'weapon_attack', turn.skill && turn.skill.id, turn.targetId);
+            }
+        });
+        socket.on('battle_start', () => { if (active) { active.battleStarted = true; line('  START CERBERUS'); } });
+        let roomNo = 0;
+        while (!fatal) {
+            lookup.clear();
+            active = { roomId: null, ready: new Set(), started: false, done: false, won: false, battleStarted: false, turn: 0, battle: new PveBattle({ charId: result.charId, strategy: 'B', skills: result.skills }) };
+            line('  #' + (++roomNo) + ' CREATE ROOM CERBERUS EXTREME');
+            socket.createRoom({ password: '', mode: 3, quest: quest.quest, ver: pve.ver });
+            const ticker = setInterval(() => { if (active && active.roomId) { socket.getRoomSummary(); line('  ROOM ' + active.roomId + ' valid=' + [...lookup.values()].filter(x => x.status === 'valid').length + '/2 ready=' + active.ready.size + '/3'); } }, 1000);
+            await sleepUntil(() => active.done);
+            clearInterval(ticker);
+            if (active.won) line('  WIN CERBERUS'); else line('  RETRY (' + (active.reason || 'room_reset') + ')');
+            if (active.roomId) socket.leaveRoom(active.roomId);
+            await sleep(1000);
+        }
+    } finally {
+        if (socket) socket.close();
+        await solver.close();
+    }
+}
 (async () => {
     if (process.argv.includes('--selftest')) return;
     const args = parseArgs(process.argv.slice(2));
     const accounts = parseAccountsFile(args.accounts, 1);
     if (args.dryRun) await runDryRun(args, accounts[0]);
+    else if (args.hostRoom) await runHostRoom(args, accounts[0]);
     else await runLive(args, accounts[0]);
 })().catch(error => { line('STOP: ' + error.message); process.exitCode = 1; });
 

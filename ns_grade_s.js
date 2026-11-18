@@ -139,13 +139,15 @@ function logTokenReward(user, charName, charId, stageName, tokenCount, beforeTok
 const args = process.argv.slice(2);
 const rawTarget = (args[0] || '1-4').toLowerCase();
 const isLoopMode = rawTarget === 'loop' || rawTarget === '--loop' || args.includes('--loop');
+const isSpamMode = rawTarget === 'spam' || rawTarget === '--spam';
 const isMapMode = rawTarget === 'all' || rawTarget === '1-4' || rawTarget === 'map' || rawTarget === 'rotation' || isLoopMode;
 let singleStageNum = 0;
-if (!isMapMode && rawTarget !== 'auto') {
+if (!isMapMode && !isSpamMode && rawTarget !== 'auto') {
     singleStageNum = parseInt(rawTarget, 10) || 0;
 }
-const jedaSec = Math.max(5, parseInt(args[1], 10) || 8);
-const maxBattles = parseInt(args[2], 10) || 0;
+const spamStageNum = isSpamMode ? parseInt(args[1], 10) || 0 : 0;
+const jedaSec = Math.max(5, parseInt(args[isSpamMode ? 2 : 1], 10) || 8);
+const maxBattles = parseInt(args[isSpamMode ? 3 : 2], 10) || 0;
 
 async function runGradeSSession(opts = {}) {
     const shared = opts.shared || null;
@@ -258,7 +260,7 @@ async function runGradeSSession(opts = {}) {
     console.log(` Akun         : ${user}`);
     console.log(` Karakter     : ${charName} (ID: ${charId})`);
     console.log(` Level        : Lv ${curLevel} | Gold: ${curGold.toLocaleString()} | XP: ${curXp.toLocaleString()}`);
-    console.log(` Saldo Token  : ${initialTokens} Tokens`);
+    console.log(` Saldo Token  : ${initialTokens} Tokens | Token Sesi: +0`);
     console.log(` Energi/Stam  : ${curStamina} / 75 (Biaya: 12 energi per battle)`);
     console.log('======================================================================\n');
 
@@ -318,6 +320,10 @@ async function runGradeSSession(opts = {}) {
         }
 
         const curStage = stageQueue[stageCursor];
+        if (curStamina < curStage.staminaCost) {
+            line(`[i] Stamina lokal ${curStamina}/75, kurang dari biaya ${curStage.staminaCost}. Sesi dihentikan; mode spam akan menunggu refill.`);
+            break;
+        }
         const mid = curStage.mid;
         const t0 = now();
 
@@ -409,22 +415,22 @@ async function runGradeSSession(opts = {}) {
                 totalTokensWon += 10;
             }
 
-            line(`  ✓ Battle #${battleSuccess} SELESAI! [${curStage.name}]`);
-            line(`    - Prize Masuk : +${matchXp.toLocaleString()} XP | +${matchGold.toLocaleString()} Gold`);
+            line(`  [DONE] #${battleSuccess} | ${curStage.name}`);
+            line(`         XP +${matchXp.toLocaleString()} | Gold +${matchGold.toLocaleString()} | Energy ~${curStamina}/75 | Token Session +${totalTokensWon}`);
             if (parsed.items.length) {
-                line(`    - Hadiah Item : [ ${parsed.items.join(', ')} ]`);
+                line(`         Drop: ${parsed.items.join(', ')}`);
             }
-            line(`    - Est. Energi : ~${curStamina} / 75`);
 
             // LAPORAN SPESIAL JIKA MENDAPATKAN 10 TOKEN
             if (wonTokenThisMatch) {
                 console.log('\n**********************************************************************');
-                console.log(' ★★★ [REPORT HADIAH TOKEN] MENDAPATKAN 10 SAGA TOKEN SETELAH MATCH! ★★★');
+                console.log(' [TOKEN REWARD] SAGA TOKEN MASUK SETELAH MATCH');
                 console.log(`     Karakter : ${charName} (ID: ${charId})`);
                 console.log(`     Misi     : ${curStage.name} [ID: ${mid}]`);
-                console.log(`     Hadiah   : +10 Saga Token Berhasil Masuk!`);
+                console.log(`     Hadiah   : +${parsed.tokenGained || 10} Saga Token Berhasil Masuk!`);
+                console.log(`     Counter Sesi Token: +${totalTokensWon} Token`);
                 console.log('**********************************************************************\n');
-                logTokenReward(user, charName, charId, curStage.name, 10, initialTokens, initialTokens + totalTokensWon);
+                logTokenReward(user, charName, charId, curStage.name, parsed.tokenGained || 10, initialTokens, initialTokens + totalTokensWon);
             }
 
             // Geser rotasi ke stage berikutnya jika mode 1-4
@@ -487,7 +493,7 @@ async function runGradeSSession(opts = {}) {
         console.log(`     Log Tersimpan di: logs/grade_s_tokens.log`);
         console.log('----------------------------------------------------------------------');
     } else {
-        console.log(` Status Hadiah Token: Belum roll 10 token (Saldo: ${finalTokens} Token)`);
+        console.log(` Status Hadiah Token: Tidak ada token dari response server sesi ini (Saldo: ${finalTokens} Token)`);
     }
 
     console.log(` Status Energi     : Energi Habis / Grinding Selesai (Sisa: ${curStamina} / 75)`);
@@ -501,26 +507,40 @@ async function runGradeSSession(opts = {}) {
     };
 }
 
+async function waitForRefill() {
+    line('Standby & menunggu regenerasi energi (15 menit)...');
+    for (let seconds = 900; seconds > 0; seconds -= 30) {
+        process.stdout.write(`\rMenunggu refill energi: ${Math.floor(seconds / 60)}m ${seconds % 60}s tersisa...  `);
+        await sleep(30000);
+    }
+    console.log('');
+}
+
 async function main() {
     c.enableGracefulStop('menu bot');
-    if (!isLoopMode) {
+    if (!isLoopMode && !isSpamMode) {
         const res = await runGradeSSession();
         process.exit(res ? res.exitCode : 0);
+    }
+
+    if (isSpamMode) {
+        if (spamStageNum < 1 || spamStageNum > 5) throw new Error('Mode spam butuh Stage 1 sampai 5.');
+        line('>>> MODE SPAM MISI GRADE S DIAKTIFKAN <<<');
+        line(`Bot menjalankan Stage ${spamStageNum} terus menerus; saat energi habis bot menunggu refill.`);
+        line('Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti.\n');
+        while (true) {
+            const res = await runGradeSSession({ target: String(spamStageNum), jeda: jedaSec });
+            if (res && res.exitCode) process.exit(res.exitCode);
+            await waitForRefill();
+        }
     }
 
     line('>>> MODE SCHEDULER MISI GRADE S DIAKTIFKAN <<<');
     line('Bot akan menghabiskan energi Misi 1-4, lalu standby otomatis saat energi kosong.');
     line('Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti.\n');
-
     while (true) {
         await runGradeSSession();
-        line('Standby & menunggu regenerasi energi (15 menit)...');
-        // Tunggu 15 menit untuk regenerasi energi (~3 stamina), lalu cek kembali
-        for (let s = 900; s > 0; s -= 30) {
-            process.stdout.write(`\rMenunggu refill energi: ${Math.floor(s / 60)}m ${s % 60}s tersisa...  `);
-            await sleep(30000);
-        }
-        console.log('');
+        await waitForRefill();
     }
 }
 
