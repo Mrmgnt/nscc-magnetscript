@@ -552,6 +552,7 @@ async function runHostRoom(args, account) {
                     lookup.set(id, { status: allowed ? 'valid' : 'invalid', player });
                     if (!allowed) {
                         line('  KICK char=' + id + ' (butuh Emblem + Lv >60; dapat Emblem=' + Boolean(player.isEmblem) + ', Lv=' + (player.level ?? '?') + ')');
+                        active.pendingKicks.add(id);
                         socket.kickPlayer(id);
                     } else {
                         line('  VALID char=' + id + ' (Emblem, Lv ' + player.level + ')');
@@ -608,7 +609,26 @@ async function runHostRoom(args, account) {
         });
         socket.on('ready', data => { validateRoster(data); markReady(data); maybeStart(); });
         socket.on('leave_room', data => { if (!active) return; const id = String(data && (data.character_id ?? data.characterId ?? data.charId ?? data.id) || ''); if (id) { lookup.delete(id); active.ready.delete(id); } });
-        for (const event of ['force_lobby', 'destroy_battle', 'kick_user']) socket.on(event, data => { if (active) { active.done = true; active.reason = event + (data && (data.reason || data.message) ? ':' + (data.reason || data.message) : ''); } });
+        for (const event of ['force_lobby', 'destroy_battle']) socket.on(event, data => {
+            if (active) { active.done = true; active.reason = event + (data && (data.reason || data.message) ? ':' + (data.reason || data.message) : ''); }
+        });
+        socket.on('kick_user', data => {
+            if (!active) return;
+            const id = String(data && (data.character_id ?? data.characterId ?? data.charId ?? data.id) || '');
+            // Server echoes host's own kick command. Keep hosting after a rejected player leaves.
+            // Some server packets echo the host ID instead of kicked character ID.
+            // A pending local kick is therefore authoritative for this event.
+            if ((id && lookup.get(id)?.status === 'invalid') || active.pendingKicks.size) {
+                const kickedId = active.pendingKicks.has(id) ? id : active.pendingKicks.values().next().value;
+                active.pendingKicks.delete(kickedId);
+                lookup.delete(kickedId);
+                active.ready.delete(kickedId);
+                line('  KICK SELESAI char=' + kickedId + ' (server=' + (id || '?') + '); lanjut tunggu pemain lain');
+                return;
+            }
+            active.done = true;
+            active.reason = 'kick_user';
+        });
         socket.on('battle_msg', raw => {
             const message = messageValue(raw);
             if (!active || !message) return;
@@ -626,10 +646,15 @@ async function runHostRoom(args, account) {
             }
         });
         socket.on('battle_start', () => { if (active) { active.battleStarted = true; line('  START CERBERUS'); } });
+        socket.auth();
+        await socket.waitAuth(15000);
+        if (!socket.hasCommandKey()) throw new Error('Command key socket tidak terbentuk.');
+        socket.joinLobby();
+        line('  PVE AUTH OK');
         let roomNo = 0;
         while (!fatal) {
             lookup.clear();
-            active = { roomId: null, ready: new Set(), started: false, done: false, won: false, battleStarted: false, turn: 0, battle: new PveBattle({ charId: result.charId, strategy: 'B', skills: result.skills }) };
+            active = { roomId: null, ready: new Set(), pendingKicks: new Set(), started: false, done: false, won: false, battleStarted: false, turn: 0, battle: new PveBattle({ charId: result.charId, strategy: 'B', skills: result.skills }) };
             line('  #' + (++roomNo) + ' CREATE ROOM CERBERUS EXTREME');
             socket.createRoom({ password: '', mode: 3, quest: quest.quest, ver: pve.ver });
             const ticker = setInterval(() => { if (active && active.roomId) { socket.getRoomSummary(); line('  ROOM ' + active.roomId + ' valid=' + [...lookup.values()].filter(x => x.status === 'valid').length + '/2 ready=' + active.ready.size + '/3'); } }, 1000);
