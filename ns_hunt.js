@@ -304,21 +304,11 @@ async function runHuntSession(opts = {}) {
             const pick = sortedZones[bIdx % sortedZones.length];
             const bosssid = pick.bosses.join(',');
 
-            const slotid = k.zra(gk4, hh.z9n);
-            const loc5 = ivg ? k.zra(ivg, hh.z9n) : '';
             const battleLog = hh.ivn ? k.zrb(gk4, hh.ivn) : '';
 
-            const mulai = await c.amf('ItemDAO.startHunting', [s.sessionKey, bosssid, slotid, loc5]);
-            const mb = (mulai && mulai.body) || {};
-            if (Number(mb.status) !== 1) {
-                const err = String(mb.error || JSON.stringify(mb).slice(0, 160));
-                line('  [' + pick.zone + '] ' + bosssid + ' startHunting ditolak: ' + err);
-                hadError = true;
-                break;
-            }
-
+            // Update server 20 Nov 2026: ItemDAO.startHunting dihapus; client langsung generate startBattleId lokal
             tried++;
-            const sbid = String(mb.startBattleId || mb.sbid || '1');
+            const sbid = String(1 + Math.floor(Math.random() * 2000000000));
             st.tickets = Math.max(0, st.tickets - hh.cost);
             line('  [#' + (bIdx + 1) + ' ' + pick.zone + ' (' + pick.mode + ')] Lawan ' + bosssid + ' (biaya ' + hh.cost + ' tiket, sisa ~' + st.tickets + ') -> battle ' + battleWaitSecLabel + 's...');
 
@@ -420,33 +410,12 @@ async function runHuntSession(opts = {}) {
 
                 const keBerapa = kuotaLabel - sisaTime + 1;
                 const enemyStr = Array.isArray(room.boss) ? room.boss.join(',') : String(room.boss || '');
-                const currBoss = k.tokenBoss(gk3, q7b);
-                const egvTok = egv ? k.tokenBoss(egv, q7b) : '';
                 const battleLog = q7fb ? k.tokenLog(gk3, q7fb) : '';
-                const loc4 = h.getHash(String(roomIdx) + enemyStr);
 
-                const mulai = await c.amf('EudemonGarden.startHunting', [s.sessionKey, roomIdx, currBoss, loc4, egvTok, enemyStr]);
-                const mb = (mulai && mulai.body) || {};
-
-                if (Number(mb.status) !== 1) {
-                    const err = String(mb.error || '');
-                    if (/daily limit/i.test(err)) {
-                        skippedDone++;
-                        line('  [Room ' + roomIdx + '] ' + enemyStr + ' -> Limit harian room ini sudah habis.');
-                    } else if (/level is too low/i.test(err)) {
-                        skippedLock++;
-                        lockedRooms.add(roomIdx);
-                        line('  [Room ' + roomIdx + '] ' + enemyStr + ' -> Level karakter belum cukup untuk room ini.');
-                    } else {
-                        hadError = true;
-                        line('  [Room ' + roomIdx + '] ' + enemyStr + ' startHunting ditolak: ' + (err || JSON.stringify(mb).slice(0, 140)));
-                    }
-                    break;
-                }
-
+                // Update server 20 Nov 2026: EudemonGarden.startHunting dihapus; client langsung battle
+                // lalu kirim EudemonGarden.finishHunting dengan parameter ke-13 (bossId / enemyStr).
                 tried++;
-                // Penting: di Main.as:1140, Central.main.startBattleId bernilai default "1"
-                const sbid = String(mb.startBattleId || mb.sbid || '1');
+                const sbid = '1';
                 line('  [Room ' + roomIdx + ' | Lawan ' + Math.max(1, keBerapa) + '/' + kuotaLabel + '] ' + enemyStr + ' (Sisa jatah: ' + sisaTime + 'x) -> battle ' + battleWaitSecLabel + 's...');
                 await sleep(battleWaitMs);
 
@@ -454,7 +423,7 @@ async function runHuntSession(opts = {}) {
                 const fin = await c.amf('EudemonGarden.finishHunting', [
                     s.sessionKey, roomIdx, [], 0, h.getHash(String(roomIdx) + 0), '1',
                     battleLog, sbid, json, h.getHash('1' + sbid + json),
-                    eh(String(roomIdx) + '|0|' + sbid), egv
+                    eh(String(roomIdx) + '|0|' + sbid), egv, enemyStr
                 ]);
 
                 const fb = (fin && fin.body) || {};
@@ -469,7 +438,18 @@ async function runHuntSession(opts = {}) {
                     line('    -> MENANG! XP +' + xpDapat.toLocaleString('id-ID') + ' | Gold +' + goldDapat.toLocaleString('id-ID') + itemKet);
                 } else {
                     const fErr = String(fb.error || JSON.stringify(fb).slice(0, 160));
-                    line('    -> finishHunting gagal (' + fErr + '), akan diulang dari startHunting...');
+                    if (/daily limit/i.test(fErr)) {
+                        skippedDone++;
+                        line('  [Room ' + roomIdx + '] ' + enemyStr + ' -> Limit harian room ini sudah habis.');
+                        break;
+                    } else if (/level is too low/i.test(fErr)) {
+                        skippedLock++;
+                        lockedRooms.add(roomIdx);
+                        line('  [Room ' + roomIdx + '] ' + enemyStr + ' -> Level karakter belum cukup untuk room ini.');
+                        break;
+                    }
+                    hadError = true;
+                    line('    -> finishHunting gagal (' + fErr + '), akan diulang...');
                 }
 
                 await sleep(300);

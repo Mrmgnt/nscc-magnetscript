@@ -121,7 +121,7 @@ function butuhUjian(st) {
 }
 
 (async () => {
-    const target = Number(process.argv[2] || 0);
+    let target = Number(process.argv[2] || 0);
     const jeda = Number(process.env.NS_JEDA || process.argv[3] || 8);
     // Ujian SELALU hard mode — --easy diabaikan kecuali --force-easy juga disertakan
     const pakaiEasy = process.argv.includes('--force-easy') && process.argv.includes('--easy');
@@ -194,12 +194,13 @@ function butuhUjian(st) {
                 }
                 const kq0 = kv(String(ex.isGraphic)), kq1 = kv(String(ex.statistic_battle));
                 const dvx = String(ex.m7v), egv = String(ex.q7t);
+                const cfn = ex.csf != null ? String(ex.csf) : '';
                 const pet = Array.isArray(ex.player_pet) && ex.player_pet.length ? ex.player_pet[0] : null;
                 if (!kq0 || !kq1 || !dvx) {
                     line('STOP: kunci tanda tangan tidak lengkap dari server');
                     process.exit(4);
                 }
-                extraKeys = { kq0, kq1, dvx, egv, pet };
+                extraKeys = { kq0, kq1, dvx, egv, cfn, pet };
                 return true;
             }
             if (i < 3) await sleep(2000);
@@ -232,32 +233,25 @@ function butuhUjian(st) {
     }
 
     async function baca() {
-        for (let i = 1; i <= 6; i++) {
-            const r = await c.amf('CharacterDAO.getCharacterById', [s.sessionKey, charId]);
-            const b = (r && r.body) || {};
-            if (b.gk) {
-                const x = b.result || {};
-                return {
-                    gk: String(b.gk),
-                    level: Number(x.character_level),
-                    xp: Number(x.character_xp),
-                    gold: Number(x.character_gold),
-                    rank: Number(x.character_rank || 1),
-                    mission: String(x.character_mission || '')
-                };
-            }
-            if (b.cooldown || /wait a moment/i.test(String(b.error || ''))) {
-                const waitSec = Math.max(3, Number(b.cooldown || 6) + 1);
-                await sleep(waitSec * 1000);
-                continue;
-            }
-            if (Number(b.error) === 101 || Number(b.error) === 102) {
-                const sNew = await c.login(u, p);
-                if (sNew && sNew.ok) { s = sNew; h = k.mk(s.sessionKey); }
-            }
-            if (i < 6) await sleep(2000);
+        const res = await c.getCharacterByIdWithWait(s, charId, {
+            maxWaitMs: 45000,
+            credentials: { user: u, pass: p },
+            onCooldown: sec => line('  [Cooldown] Menunggu ' + sec + 's sebelum membaca data karakter...')
+        });
+        if (!res.ok) return null;
+        if (res.session && res.session.sessionKey && res.session.sessionKey !== s.sessionKey) {
+            s = res.session;
+            h = k.mk(s.sessionKey);
         }
-        return null;
+        const x = res.result || {};
+        return {
+            gk: String(res.gk),
+            level: Number(x.character_level),
+            xp: Number(x.character_xp),
+            gold: Number(x.character_gold),
+            rank: Number(x.character_rank || 1),
+            mission: String(x.character_mission || '')
+        };
     }
 
     // ---- daftar misi yang sudah lewat: format server "266:1:2:3,259:..." ----
@@ -277,50 +271,53 @@ function butuhUjian(st) {
             await ambilKunciExtra();
             if (!extraKeys) return { ok: false, err: 'kunci extraData kosong' };
         }
-        const { kq0, kq1, dvx, egv, pet } = extraKeys;
+        // Update server 20 Nov 2026: CharacterService.startMission dihapus;
+        // cfn awal diambil dari extraData.csf, sbid dibuat lokal, lalu dirotasi dari ub.csf.
+        await sleep(Math.max(3, jeda) * 1000);
 
-        const t0 = now();
-        let mulai = null;
+        let upd = null;
         for (let coba = 1; coba <= 3; coba++) {
-            mulai = await c.amf('CharacterService.startMission', [s.sessionKey, mid,
-                h.msk(kq0 + '|' + mid + '|' + t0), h.getHash(mid), t0, h.msk(dvx + '|' + mid + '|' + t0)]);
-            const b = mulai.body || {};
-            if (Number(b.status) === 1) break;
-            if (Number(b.error) === 108) { selesaiSet.add(mid); return { ok: true, skip: true }; } // level terlalu tinggi untuk misi ini
-            if (Number(b.error) === 104) {
-                if (DAILY.has(mid)) { gagalHariIni.add(mid); return { ok: true, skip: true }; } // harian: sudah dipakai hari ini
+            if (!extraKeys) {
+                await relogin();
+                if (!extraKeys) return { ok: false, err: 'kunci extraData kosong' };
+            }
+            const { kq1, egv, cfn, pet } = extraKeys;
+            const sbid = String(1 + Math.floor(Math.random() * 2000000000));
+            const bfl = JSON.stringify({ battles: [] });
+            const arr = [s.sessionKey, charId, st.level, 0, 0, [], pet ? pet.id : 0, pet ? pet.level : 0, mid, 0, ''];
+            upd = await c.amf('CharacterService.updateCharacter', [s.sessionKey, charId, st.level, 0, 0, [],
+                pet ? pet.id : 0, pet ? pet.level : 0, mid, h.getArrayHash(arr), h.updateSequence(), 0, '',
+                '1', h.urk(kq1 + '|' + cfn), sbid, bfl, h.getHash('1' + sbid + bfl),
+                ucEncode(charId + '|0|0|' + mid + '|' + sbid), h.urk(egv + '|' + cfn)]);
+            const ub = (upd && upd.body) || {};
+            if (ub.csf != null) extraKeys.cfn = String(ub.csf);
+            if (Number(ub.status) === 1) break;
+            if (Number(ub.error) === 108) { selesaiSet.add(mid); return { ok: true, skip: true }; }
+            if (Number(ub.error) === 104) {
+                if (DAILY.has(mid)) { gagalHariIni.add(mid); return { ok: true, skip: true }; }
                 if (REPEATABLE_GRADE.has(mid)) {
-                    // Misi grade resmi: istirahatkan 30s di cooldown, jangan diblokir permanen
                     cooldown.set(mid, Date.now() + 30000);
                     return { ok: true, skip: true };
                 }
-                // error 104: misi sudah pernah selesai di akun ini (permanen, jangan diulang terus)
                 selesaiSet.add(mid);
                 return { ok: true, skip: true };
-            } // sudah pernah selesai
-            if (/Session validation failed|Please re-select/i.test(JSON.stringify(b))) {
+            }
+            const ubTxt = JSON.stringify(ub);
+            if (/Session validation failed|Please re-select/i.test(ubTxt) && coba < 3) {
                 line('  sesi login terputus di server — login ulang...');
                 await relogin();
                 continue;
             }
-            if (/please wait|wait/i.test(JSON.stringify(b))) { await sleep(25000); continue; }
+            if (/please wait|wait a moment/i.test(ubTxt) && coba < 3) {
+                await sleep(15000);
+                continue;
+            }
             break;
         }
-        const mb = mulai.body || {};
-        if (Number(mb.status) !== 1) return { ok: false, err: 'start: ' + JSON.stringify(mb).slice(0, 160) };
-        const sbid = mb.startBattleId;
-        const cfn = mb.csf ? String(mb.csf) : '';
-        await sleep(Math.max(5, jeda) * 1000);
-
-        const bfl = JSON.stringify({ battles: [] });
-        const arr = [s.sessionKey, charId, st.level, 0, 0, [], pet ? pet.id : 0, pet ? pet.level : 0, mid, 0, ''];
-        const upd = await c.amf('CharacterService.updateCharacter', [s.sessionKey, charId, st.level, 0, 0, [],
-            pet ? pet.id : 0, pet ? pet.level : 0, mid, h.getArrayHash(arr), h.updateSequence(), 0, '',
-            '1', h.urk(kq1 + '|' + cfn), sbid, bfl, h.getHash('1' + sbid + bfl),
-            ucEncode(charId + '|0|0|' + mid + '|' + sbid), h.urk(egv + '|' + cfn)]);
-        if (!upd.body || Number(upd.body.status) !== 1) {
-            const txt = JSON.stringify(upd.body || {}).slice(0, 200);
-            if (/Daily mission already completed today/i.test(txt)) {
+        const ub = (upd && upd.body) || {};
+        if (Number(ub.status) !== 1) {
+            const txt = JSON.stringify(ub).slice(0, 200);
+            if (/Daily mission already completed today|already completed/i.test(txt)) {
                 if (DAILY.has(mid)) { gagalHariIni.add(mid); return { ok: true, skip: true }; }
                 if (REPEATABLE_GRADE.has(mid)) {
                     cooldown.set(mid, Date.now() + 30000);
@@ -335,7 +332,7 @@ function butuhUjian(st) {
         } else if (!REPEATABLE_GRADE.has(mid)) {
             selesaiSet.add(mid);
         }
-        return { ok: true };
+        return { ok: true, body: ub };
     }
 
     let st = await baca();

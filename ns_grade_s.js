@@ -236,9 +236,10 @@ async function runGradeSSession(opts = {}) {
         if (ex.isGraphic && ex.statistic_battle && ex.m7v && ex.q7t) {
             const kq0 = kv(String(ex.isGraphic)), kq1 = kv(String(ex.statistic_battle));
             const dvx = String(ex.m7v), egv = String(ex.q7t);
+            const cfn = ex.csf != null ? String(ex.csf) : '';
             const pet = Array.isArray(ex.player_pet) && ex.player_pet.length ? ex.player_pet[0] : null;
             if (kq0 && kq1 && dvx && egv) {
-                extraKeys = { kq0, kq1, dvx, egv, pet };
+                extraKeys = { kq0, kq1, dvx, egv, cfn, pet };
             }
         }
     }
@@ -329,40 +330,15 @@ async function runGradeSSession(opts = {}) {
 
         line(`>>> [Putaran #${roundNumber}] Memulai ${curStage.name} [${mid}] (Biaya: 12 Energi)...`);
 
-        // 1. startMission
-        process.stdout.write(`    Mengirim start mission ke server... `);
-        const mulai = await c.amf('CharacterService.startMission', [
-            s.sessionKey, mid,
-            h.msk(kq0 + '|' + mid + '|' + t0),
-            h.getHash(mid),
-            t0,
-            h.msk(dvx + '|' + mid + '|' + t0)
-        ]);
-
-        const mb = mulai.body || {};
-        if (Number(mb.status) !== 1) {
-            const errMsg = JSON.stringify(mb);
-            console.log('SELESAI / HABIS!');
-            if (/stamina|not enough/i.test(errMsg) || Number(mb.error) === 106) {
-                line(`\n[i] Energi / Stamina karakter sudah habis (kurang dari 12).`);
-                line(`    Semua jatah energi misi Grade S hari ini telah terselesaikan dengan sukses!`);
-            } else if (Number(mb.error) === 108) {
-                line('[i] Level karakter terlalu tinggi untuk misi ini.');
-            } else {
-                hadError = true;
-                line(`[!] Server menolak start mission: ${errMsg.slice(0, 160)}`);
-            }
-            break;
-        }
-
-        const sbid = mb.startBattleId;
-        const cfn = mb.csf ? String(mb.csf) : (mb.cfn ? String(mb.cfn) : '');
-        console.log(`OK (Battle ID: ${sbid})`);
-        line(`    Simulasi pertarungan (${localJedaSec}s)...`);
+        // Update server 20 Nov 2026: CharacterService.startMission dihapus;
+        // cfn awal diambil dari extraData.csf, sbid dibuat lokal, lalu dirotasi dari ub.csf.
+        const sbid = String(1 + Math.floor(Math.random() * 2000000000));
+        const cfn = extraKeys.cfn || '';
+        line(`    Simulasi pertarungan (${localJedaSec}s, Battle ID: ${sbid})...`);
 
         await sleep(localJedaSec * 1000);
 
-        // 2. updateCharacter (Collect Prize & Rewards)
+        // updateCharacter (Collect Prize & Rewards)
         const bfl = JSON.stringify({ battles: [] });
         const arr = [s.sessionKey, charId, curLevel, 0, 0, [], pet ? pet.id : 0, pet ? pet.level : 0, mid, 0, ''];
         const upd = await c.amf('CharacterService.updateCharacter', [
@@ -374,6 +350,10 @@ async function runGradeSSession(opts = {}) {
         ]);
 
         const ub = upd.body || {};
+        if (ub.csf != null) {
+            extraKeys.cfn = String(ub.csf);
+            if (shared && shared.ex) shared.ex.csf = extraKeys.cfn;
+        }
         if (Number(ub.status) === 1) {
             battleSuccess++;
             stageBattleCounts[curStage.name] = (stageBattleCounts[curStage.name] || 0) + 1;

@@ -91,11 +91,12 @@ async function runTrainSession(opts = {}) {
         const kq1 = kv(String(ex.statistic_battle));
         const dvx = String(ex.m7v);
         const egv = String(ex.q7t);
+        const cfn = ex.csf != null ? String(ex.csf) : '';
         const pet = Array.isArray(ex.player_pet) && ex.player_pet.length ? ex.player_pet[0] : null;
         if (!kq0 || !kq1 || !dvx || !egv) {
             return { ok: false, error: 'kunci tanda tangan kosong setelah decode', ex };
         }
-        extraKeys = { kq0, kq1, dvx, egv, pet };
+        extraKeys = { kq0, kq1, dvx, egv, cfn, pet };
         return { ok: true, ex };
     }
 
@@ -231,51 +232,14 @@ async function runTrainSession(opts = {}) {
             }
             const g0 = st.gold, x0 = st.xp;
 
-            let mulai = null;
-            for (let coba = 1; coba <= 3; coba++) {
-                const { kq0, dvx } = extraKeys;
-                const t0 = now();
-                mulai = await c.amf('CharacterService.startMission', [s.sessionKey, mid,
-                    h.msk(kq0 + '|' + mid + '|' + t0), h.getHash(mid), t0, h.msk(dvx + '|' + mid + '|' + t0)]);
-                const mb = (mulai && mulai.body) || {};
-                if (Number(mb.status) === 1) break;
-                const mbTxt = JSON.stringify(mb);
-                if (/session validation failed|please re-select/i.test(mbTxt)) {
-                    line('  ' + mid + ' sesi terputus saat startMission — login ulang...');
-                    await relogin();
-                    continue;
-                }
-                if (/please wait|wait a moment/i.test(mbTxt)) {
-                    await sleep(20000);
-                    continue;
-                }
-                if ((!mulai || !mulai.body) && coba < 3) {
-                    await sleep(2500);
-                    continue;
-                }
-                break;
-            }
-
-            if (!mulai || !mulai.body || Number(mulai.body.status) !== 1) {
-                const mbTxt = JSON.stringify((mulai && mulai.body) || (mulai && mulai.netError) || {});
-                if (/already completed today|daily limit/i.test(mbTxt)) {
-                    alreadyDone++;
-                    line('  ' + mid + ' SUDAH DIKLAIM HARI INI');
-                } else {
-                    failedCount++;
-                    hadError = true;
-                    line('  ' + mid + ' DITOLAK start: ' + mbTxt.slice(0, 180));
-                }
-                continue;
-            }
-
-            const cfn = mulai.body.csf ? String(mulai.body.csf) : (mulai.body.cfn ? String(mulai.body.cfn) : '');
-            const sbid = mulai.body.startBattleId;
-            await sleep(Math.max(10, jeda) * 1000);
+            // Update server 20 Nov 2026: CharacterService.startMission dihapus;
+            // cfn awal diambil dari extraData.csf, sbid dibuat lokal, lalu dirotasi dari ub.csf.
+            await sleep(Math.max(3, jeda) * 1000);
 
             let upd = null;
             for (let coba = 1; coba <= 3; coba++) {
-                const { kq1, egv, pet } = extraKeys;
+                const { kq1, egv, cfn, pet } = extraKeys;
+                const sbid = String(1 + Math.floor(Math.random() * 2000000000));
                 const bfl = JSON.stringify({ battles: [] });
                 const arr = [s.sessionKey, charId, st.level, 0, 0, [], pet ? pet.id : 0, pet ? pet.level : 0, mid, 0, ''];
                 upd = await c.amf('CharacterService.updateCharacter', [s.sessionKey, charId, st.level, 0, 0, [],
@@ -283,9 +247,18 @@ async function runTrainSession(opts = {}) {
                     '1', h.urk(kq1 + '|' + cfn), sbid, bfl, h.getHash('1' + sbid + bfl),
                     ucEncode(charId + '|0|0|' + mid + '|' + sbid), h.urk(egv + '|' + cfn)]);
                 const ub = (upd && upd.body) || {};
+                if (ub.csf != null) {
+                    extraKeys.cfn = String(ub.csf);
+                    if (shared && shared.ex) shared.ex.csf = extraKeys.cfn;
+                }
                 if (Number(ub.status) === 1) break;
                 const ubTxt = JSON.stringify(ub);
-                if (/please wait/i.test(ubTxt) && coba < 3) {
+                if (/session validation failed|please re-select/i.test(ubTxt) && coba < 3) {
+                    line('  ' + mid + ' sesi terputus — login ulang...');
+                    await relogin();
+                    continue;
+                }
+                if (/please wait|wait a moment/i.test(ubTxt) && coba < 3) {
                     await sleep(10000);
                     continue;
                 }
