@@ -603,13 +603,13 @@ echo   Format : main:username:password:slot
 echo   Syarat : room punya player lain; Emblem dicek bila status dikirim server.
 echo.
 echo   [ 1 ] Auto quickmatch: cari dan join room Cerberus publik
-echo   [ 2 ] Create room: host, kick non-Emblem atau Lv ^<=60, start saat 3 ready
+echo   [ 2 ] Create room: host, kick pemain Lv ^< 80, start saat 3 pemain ready
 echo   [ 0 ] Kembali
 echo.
 set "COOP_OPT="
 set /p "COOP_OPT=Pilih [0-2]: "
 if "%COOP_OPT%"=="1" node ns_coop_minotaur.js --accounts coop_accounts.txt
-if "%COOP_OPT%"=="2" node ns_coop_minotaur.js --host-room --accounts coop_accounts.txt
+if "%COOP_OPT%"=="2" node ns_coop_minotaur.js --host-room --headful --min-level 80 --accounts coop_accounts.txt
 
 if "%COOP_OPT%"=="0" goto MENU
 echo.

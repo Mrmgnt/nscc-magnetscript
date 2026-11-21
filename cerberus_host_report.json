@@ -1,0 +1,181 @@
+{
+  "generatedAt": "2026-11-21T18:05:49.242Z",
+  "mode": "host-room",
+  "boss": "cerberus",
+  "level": "extreme",
+  "minLevel": 80,
+  "account": "Mrmgnt1",
+  "matches": [
+    {
+      "match": 1,
+      "roomId": "8698",
+      "outcome": "lose",
+      "reason": "battle_battle_finish",
+      "battleStarted": true,
+      "players": [
+        {
+          "id": "00027337",
+          "name": "xMarinettex",
+          "level": 80,
+          "status": "valid"
+        },
+        {
+          "id": "00084542",
+          "name": "Uchiha Razq",
+          "level": 100,
+          "status": "valid"
+        }
+      ],
+      "actions": [],
+      "score": {
+        "84612": 0
+      },
+      "reward": {
+        "84612": [
+          "gold46000"
+        ]
+      },
+      "energyBefore": 50,
+      "energyAfter": 25,
+      "durationMs": 369060,
+      "battleStates": [
+        "join",
+        "start",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "start_atb",
+        "action",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "start_atb",
+        "action",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "start_atb",
+        "action",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "battle_finish"
+      ]
+    }
+  ],
+  "attempts": [
+    {
+      "match": 1,
+      "roomId": "8698",
+      "outcome": "lose",
+      "reason": "battle_battle_finish",
+      "battleStarted": true,
+      "players": [
+        {
+          "id": "00027337",
+          "name": "xMarinettex",
+          "level": 80,
+          "status": "valid"
+        },
+        {
+          "id": "00084542",
+          "name": "Uchiha Razq",
+          "level": 100,
+          "status": "valid"
+        }
+      ],
+      "actions": [],
+      "score": {
+        "84612": 0
+      },
+      "reward": {
+        "84612": [
+          "gold46000"
+        ]
+      },
+      "energyBefore": 50,
+      "energyAfter": 25,
+      "durationMs": 369060,
+      "battleStates": [
+        "join",
+        "start",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "start_atb",
+        "action",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "start_atb",
+        "action",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "start_atb",
+        "action",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "battle_finish"
+      ]
+    }
+  ],
+  "error": "CAPTCHA ditolak server. Selesaikan manual sebelum lanjut."
+}

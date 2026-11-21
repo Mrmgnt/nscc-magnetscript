@@ -1,0 +1,36 @@
+{
+  "type": "drag_shape",
+  "start_x": 10,
+  "start_y": 50,
+  "max_x": 326,
+  "max_y": 146,
+  "dom": {},
+  "details": {
+    "target": {
+      "x": 37,
+      "y": 121,
+      "score": 0.5883318777292577
+    },
+    "images": {
+      "scaleX": 0.6926314504523027,
+      "scaleY": 0.6926171875,
+      "initialX": 7,
+      "initialY": 35,
+      "trackWidth": 0,
+      "background": {
+        "width": 380,
+        "height": 200
+      },
+      "piece": {
+        "width": 54,
+        "height": 54
+      }
+    },
+    "deltaX": 18.6273636667352,
+    "deltaY": 48.80667968750001,
+    "position": {
+      "x": 25.396881103515625,
+      "y": 84.39373779296875
+    }
+  }
+}
