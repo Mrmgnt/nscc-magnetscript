@@ -1,181 +1,205 @@
 {
-  "generatedAt": "2026-11-21T18:05:49.242Z",
+  "generatedAt": "2026-11-22T00:44:48.520Z",
   "mode": "host-room",
   "boss": "cerberus",
   "level": "extreme",
   "minLevel": 80,
-  "account": "Mrmgnt1",
+  "account": "Mrmgnt",
   "matches": [
     {
       "match": 1,
-      "roomId": "8698",
-      "outcome": "lose",
-      "reason": "battle_battle_finish",
+      "roomId": "8510",
+      "outcome": "retry",
+      "reason": "force_lobby:Room expired.",
       "battleStarted": true,
       "players": [
         {
-          "id": "00027337",
-          "name": "xMarinettex",
+          "id": "00046846",
+          "name": "〤 Sнαɗσω 〤〤",
           "level": 80,
           "status": "valid"
         },
         {
-          "id": "00084542",
-          "name": "Uchiha Razq",
+          "id": "00028274",
+          "name": "Raizo Zhen",
           "level": 100,
           "status": "valid"
         }
       ],
       "actions": [],
-      "score": {
-        "84612": 0
-      },
-      "reward": {
-        "84612": [
-          "gold46000"
-        ]
-      },
-      "energyBefore": 50,
-      "energyAfter": 25,
-      "durationMs": 369060,
+      "energyBefore": 80,
+      "energyAfter": 80,
+      "durationMs": 626071,
       "battleStates": [
-        "join",
-        "start",
-        "start_atb",
-        "action",
-        "battle_action",
-        "continue",
-        "start_atb",
-        "action",
-        "battle_action",
-        "continue",
-        "start_atb",
-        "action",
-        "battle_action",
-        "start_atb",
-        "action",
-        "start_atb",
-        "action",
-        "battle_action",
-        "continue",
-        "start_atb",
-        "action",
-        "battle_action",
-        "continue",
-        "start_atb",
-        "action",
-        "battle_action",
-        "start_atb",
-        "action",
-        "start_atb",
-        "action",
-        "battle_action",
-        "continue",
-        "start_atb",
-        "action",
-        "battle_action",
-        "continue",
-        "start_atb",
-        "action",
-        "battle_action",
-        "start_atb",
-        "action",
-        "start_atb",
-        "action",
-        "battle_action",
-        "continue",
-        "start_atb",
-        "action",
-        "battle_action",
-        "battle_finish"
+        "join"
+      ]
+    },
+    {
+      "match": 2,
+      "roomId": "5868",
+      "outcome": "retry",
+      "reason": "force_lobby:Room expired.",
+      "battleStarted": true,
+      "players": [
+        {
+          "id": "00074345",
+          "name": "tarobeerus",
+          "level": 84,
+          "status": "valid"
+        },
+        {
+          "id": "00028274",
+          "name": "Raizo Zhen",
+          "level": 100,
+          "status": "valid"
+        },
+        {
+          "id": "00087693",
+          "name": "echoking",
+          "level": 80,
+          "status": "valid"
+        }
+      ],
+      "actions": [],
+      "energyBefore": 80,
+      "energyAfter": 80,
+      "durationMs": 628595,
+      "battleStates": [
+        "join"
+      ]
+    },
+    {
+      "match": 3,
+      "roomId": "9068",
+      "outcome": "retry",
+      "reason": "force_lobby:Room expired.",
+      "battleStarted": true,
+      "players": [
+        {
+          "id": "00046846",
+          "name": "〤 Sнαɗσω 〤〤",
+          "level": 80,
+          "status": "valid"
+        },
+        {
+          "id": "00074345",
+          "name": "tarobeerus",
+          "level": 84,
+          "status": "valid"
+        },
+        {
+          "id": "00027131",
+          "name": "SirNheL",
+          "level": 100,
+          "status": "valid"
+        }
+      ],
+      "actions": [],
+      "energyBefore": 80,
+      "energyAfter": 80,
+      "durationMs": 627666,
+      "battleStates": [
+        "join"
       ]
     }
   ],
   "attempts": [
     {
       "match": 1,
-      "roomId": "8698",
-      "outcome": "lose",
-      "reason": "battle_battle_finish",
+      "roomId": "8510",
+      "outcome": "retry",
+      "reason": "force_lobby:Room expired.",
       "battleStarted": true,
       "players": [
         {
-          "id": "00027337",
-          "name": "xMarinettex",
+          "id": "00046846",
+          "name": "〤 Sнαɗσω 〤〤",
           "level": 80,
           "status": "valid"
         },
         {
-          "id": "00084542",
-          "name": "Uchiha Razq",
+          "id": "00028274",
+          "name": "Raizo Zhen",
           "level": 100,
           "status": "valid"
         }
       ],
       "actions": [],
-      "score": {
-        "84612": 0
-      },
-      "reward": {
-        "84612": [
-          "gold46000"
-        ]
-      },
-      "energyBefore": 50,
-      "energyAfter": 25,
-      "durationMs": 369060,
+      "energyBefore": 80,
+      "energyAfter": 80,
+      "durationMs": 626071,
       "battleStates": [
-        "join",
-        "start",
-        "start_atb",
-        "action",
-        "battle_action",
-        "continue",
-        "start_atb",
-        "action",
-        "battle_action",
-        "continue",
-        "start_atb",
-        "action",
-        "battle_action",
-        "start_atb",
-        "action",
-        "start_atb",
-        "action",
-        "battle_action",
-        "continue",
-        "start_atb",
-        "action",
-        "battle_action",
-        "continue",
-        "start_atb",
-        "action",
-        "battle_action",
-        "start_atb",
-        "action",
-        "start_atb",
-        "action",
-        "battle_action",
-        "continue",
-        "start_atb",
-        "action",
-        "battle_action",
-        "continue",
-        "start_atb",
-        "action",
-        "battle_action",
-        "start_atb",
-        "action",
-        "start_atb",
-        "action",
-        "battle_action",
-        "continue",
-        "start_atb",
-        "action",
-        "battle_action",
-        "battle_finish"
+        "join"
+      ]
+    },
+    {
+      "match": 2,
+      "roomId": "5868",
+      "outcome": "retry",
+      "reason": "force_lobby:Room expired.",
+      "battleStarted": true,
+      "players": [
+        {
+          "id": "00074345",
+          "name": "tarobeerus",
+          "level": 84,
+          "status": "valid"
+        },
+        {
+          "id": "00028274",
+          "name": "Raizo Zhen",
+          "level": 100,
+          "status": "valid"
+        },
+        {
+          "id": "00087693",
+          "name": "echoking",
+          "level": 80,
+          "status": "valid"
+        }
+      ],
+      "actions": [],
+      "energyBefore": 80,
+      "energyAfter": 80,
+      "durationMs": 628595,
+      "battleStates": [
+        "join"
+      ]
+    },
+    {
+      "match": 3,
+      "roomId": "9068",
+      "outcome": "retry",
+      "reason": "force_lobby:Room expired.",
+      "battleStarted": true,
+      "players": [
+        {
+          "id": "00046846",
+          "name": "〤 Sнαɗσω 〤〤",
+          "level": 80,
+          "status": "valid"
+        },
+        {
+          "id": "00074345",
+          "name": "tarobeerus",
+          "level": 84,
+          "status": "valid"
+        },
+        {
+          "id": "00027131",
+          "name": "SirNheL",
+          "level": 100,
+          "status": "valid"
+        }
+      ],
+      "actions": [],
+      "energyBefore": 80,
+      "energyAfter": 80,
+      "durationMs": 627666,
+      "battleStates": [
+        "join"
       ]
     }
   ],
-  "error": "CAPTCHA ditolak server. Selesaikan manual sebelum lanjut."
+  "error": null
 }
