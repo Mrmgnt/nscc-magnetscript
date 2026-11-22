@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-22T00:44:48.520Z",
+  "generatedAt": "2026-11-22T11:03:59.254Z",
   "mode": "host-room",
   "boss": "cerberus",
   "level": "extreme",
@@ -8,196 +8,502 @@
   "matches": [
     {
       "match": 1,
-      "roomId": "8510",
-      "outcome": "retry",
-      "reason": "force_lobby:Room expired.",
+      "roomId": "6552",
+      "outcome": "lose",
+      "reason": "battle_battle_finish",
       "battleStarted": true,
       "players": [
         {
-          "id": "00046846",
-          "name": "〤 Sнαɗσω 〤〤",
-          "level": 80,
+          "id": "00075128",
+          "name": "Prskavela",
+          "level": 82,
           "status": "valid"
         },
         {
-          "id": "00028274",
-          "name": "Raizo Zhen",
-          "level": 100,
-          "status": "valid"
-        }
-      ],
-      "actions": [],
-      "energyBefore": 80,
-      "energyAfter": 80,
-      "durationMs": 626071,
-      "battleStates": [
-        "join"
-      ]
-    },
-    {
-      "match": 2,
-      "roomId": "5868",
-      "outcome": "retry",
-      "reason": "force_lobby:Room expired.",
-      "battleStarted": true,
-      "players": [
-        {
-          "id": "00074345",
-          "name": "tarobeerus",
+          "id": "00072043",
+          "name": "Corbin",
           "level": 84,
           "status": "valid"
-        },
-        {
-          "id": "00028274",
-          "name": "Raizo Zhen",
-          "level": 100,
-          "status": "valid"
-        },
-        {
-          "id": "00087693",
-          "name": "echoking",
-          "level": 80,
-          "status": "valid"
         }
       ],
       "actions": [],
-      "energyBefore": 80,
-      "energyAfter": 80,
-      "durationMs": 628595,
+      "score": {
+        "84542": 0
+      },
+      "reward": {
+        "84542": [
+          "gold46000"
+        ]
+      },
+      "energyBefore": 100,
+      "energyAfter": 75,
+      "durationMs": 714440,
       "battleStates": [
-        "join"
+        "join",
+        "start",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "start_atb",
+        "action",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "battle_finish"
       ]
     },
     {
       "match": 3,
-      "roomId": "9068",
-      "outcome": "retry",
-      "reason": "force_lobby:Room expired.",
+      "roomId": "2163",
+      "outcome": "lose",
+      "reason": "battle_battle_finish",
       "battleStarted": true,
       "players": [
         {
-          "id": "00046846",
-          "name": "〤 Sнαɗσω 〤〤",
-          "level": 80,
-          "status": "valid"
-        },
-        {
-          "id": "00074345",
-          "name": "tarobeerus",
+          "id": "00072043",
+          "name": "Corbin",
           "level": 84,
           "status": "valid"
         },
         {
-          "id": "00027131",
-          "name": "SirNheL",
-          "level": 100,
+          "id": "00072915",
+          "name": "RuRia",
+          "level": 90,
           "status": "valid"
         }
       ],
       "actions": [],
-      "energyBefore": 80,
-      "energyAfter": 80,
-      "durationMs": 627666,
+      "score": {
+        "84542": 0
+      },
+      "reward": {
+        "84542": [
+          "gold46000"
+        ]
+      },
+      "energyBefore": 75,
+      "energyAfter": 50,
+      "durationMs": 716844,
       "battleStates": [
-        "join"
+        "join",
+        "start",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "start_atb",
+        "action",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "battle_finish"
+      ]
+    },
+    {
+      "match": 4,
+      "roomId": "4197",
+      "outcome": "lose",
+      "reason": "battle_battle_finish",
+      "battleStarted": true,
+      "players": [
+        {
+          "id": "00071852",
+          "name": "Miguel Miguel",
+          "level": 88,
+          "status": "valid"
+        },
+        {
+          "id": "00072915",
+          "name": "RuRia",
+          "level": 90,
+          "status": "valid"
+        }
+      ],
+      "actions": [],
+      "score": {
+        "84542": 0
+      },
+      "reward": {
+        "84542": [
+          "gold46000"
+        ]
+      },
+      "energyBefore": 50,
+      "energyAfter": 25,
+      "durationMs": 500135,
+      "battleStates": [
+        "join",
+        "start",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "start_atb",
+        "action",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "battle_finish"
+      ]
+    },
+    {
+      "match": 6,
+      "roomId": "7024",
+      "outcome": "lose",
+      "reason": "battle_battle_finish",
+      "battleStarted": true,
+      "players": [
+        {
+          "id": "00080180",
+          "name": "Madara",
+          "level": 81,
+          "status": "valid"
+        },
+        {
+          "id": "00075128",
+          "name": "Prskavela",
+          "level": 82,
+          "status": "valid"
+        }
+      ],
+      "actions": [],
+      "score": {
+        "84542": 0
+      },
+      "reward": {
+        "84542": [
+          "gold46000"
+        ]
+      },
+      "energyBefore": 25,
+      "energyAfter": 0,
+      "durationMs": 565599,
+      "battleStates": [
+        "join",
+        "start",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "start_atb",
+        "action",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "battle_finish"
       ]
     }
   ],
   "attempts": [
     {
       "match": 1,
-      "roomId": "8510",
-      "outcome": "retry",
-      "reason": "force_lobby:Room expired.",
+      "roomId": "6552",
+      "outcome": "lose",
+      "reason": "battle_battle_finish",
       "battleStarted": true,
       "players": [
         {
-          "id": "00046846",
-          "name": "〤 Sнαɗσω 〤〤",
-          "level": 80,
+          "id": "00075128",
+          "name": "Prskavela",
+          "level": 82,
           "status": "valid"
         },
         {
-          "id": "00028274",
-          "name": "Raizo Zhen",
-          "level": 100,
+          "id": "00072043",
+          "name": "Corbin",
+          "level": 84,
           "status": "valid"
         }
       ],
       "actions": [],
-      "energyBefore": 80,
-      "energyAfter": 80,
-      "durationMs": 626071,
+      "score": {
+        "84542": 0
+      },
+      "reward": {
+        "84542": [
+          "gold46000"
+        ]
+      },
+      "energyBefore": 100,
+      "energyAfter": 75,
+      "durationMs": 714440,
       "battleStates": [
-        "join"
+        "join",
+        "start",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "start_atb",
+        "action",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "battle_finish"
       ]
     },
     {
       "match": 2,
-      "roomId": "5868",
+      "roomId": "4446",
       "outcome": "retry",
       "reason": "force_lobby:Room expired.",
-      "battleStarted": true,
-      "players": [
-        {
-          "id": "00074345",
-          "name": "tarobeerus",
-          "level": 84,
-          "status": "valid"
-        },
-        {
-          "id": "00028274",
-          "name": "Raizo Zhen",
-          "level": 100,
-          "status": "valid"
-        },
-        {
-          "id": "00087693",
-          "name": "echoking",
-          "level": 80,
-          "status": "valid"
-        }
-      ],
+      "battleStarted": false,
+      "players": [],
       "actions": [],
-      "energyBefore": 80,
-      "energyAfter": 80,
-      "durationMs": 628595,
-      "battleStates": [
-        "join"
-      ]
+      "energyBefore": 75,
+      "energyAfter": 75,
+      "durationMs": 619368,
+      "battleStates": []
     },
     {
       "match": 3,
-      "roomId": "9068",
-      "outcome": "retry",
-      "reason": "force_lobby:Room expired.",
+      "roomId": "2163",
+      "outcome": "lose",
+      "reason": "battle_battle_finish",
       "battleStarted": true,
       "players": [
         {
-          "id": "00046846",
-          "name": "〤 Sнαɗσω 〤〤",
-          "level": 80,
-          "status": "valid"
-        },
-        {
-          "id": "00074345",
-          "name": "tarobeerus",
+          "id": "00072043",
+          "name": "Corbin",
           "level": 84,
           "status": "valid"
         },
         {
-          "id": "00027131",
-          "name": "SirNheL",
-          "level": 100,
+          "id": "00072915",
+          "name": "RuRia",
+          "level": 90,
           "status": "valid"
         }
       ],
       "actions": [],
-      "energyBefore": 80,
-      "energyAfter": 80,
-      "durationMs": 627666,
+      "score": {
+        "84542": 0
+      },
+      "reward": {
+        "84542": [
+          "gold46000"
+        ]
+      },
+      "energyBefore": 75,
+      "energyAfter": 50,
+      "durationMs": 716844,
       "battleStates": [
-        "join"
+        "join",
+        "start",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "start_atb",
+        "action",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "battle_finish"
+      ]
+    },
+    {
+      "match": 4,
+      "roomId": "4197",
+      "outcome": "lose",
+      "reason": "battle_battle_finish",
+      "battleStarted": true,
+      "players": [
+        {
+          "id": "00071852",
+          "name": "Miguel Miguel",
+          "level": 88,
+          "status": "valid"
+        },
+        {
+          "id": "00072915",
+          "name": "RuRia",
+          "level": 90,
+          "status": "valid"
+        }
+      ],
+      "actions": [],
+      "score": {
+        "84542": 0
+      },
+      "reward": {
+        "84542": [
+          "gold46000"
+        ]
+      },
+      "energyBefore": 50,
+      "energyAfter": 25,
+      "durationMs": 500135,
+      "battleStates": [
+        "join",
+        "start",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "start_atb",
+        "action",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "battle_finish"
+      ]
+    },
+    {
+      "match": 5,
+      "roomId": null,
+      "outcome": "retry",
+      "reason": "create_timeout",
+      "battleStarted": false,
+      "players": [],
+      "actions": [],
+      "energyBefore": 25,
+      "energyAfter": 25,
+      "durationMs": 104807,
+      "battleStates": []
+    },
+    {
+      "match": 6,
+      "roomId": "7024",
+      "outcome": "lose",
+      "reason": "battle_battle_finish",
+      "battleStarted": true,
+      "players": [
+        {
+          "id": "00080180",
+          "name": "Madara",
+          "level": 81,
+          "status": "valid"
+        },
+        {
+          "id": "00075128",
+          "name": "Prskavela",
+          "level": 82,
+          "status": "valid"
+        }
+      ],
+      "actions": [],
+      "score": {
+        "84542": 0
+      },
+      "reward": {
+        "84542": [
+          "gold46000"
+        ]
+      },
+      "energyBefore": 25,
+      "energyAfter": 0,
+      "durationMs": 565599,
+      "battleStates": [
+        "join",
+        "start",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "start_atb",
+        "action",
+        "start_atb",
+        "action",
+        "battle_action",
+        "continue",
+        "start_atb",
+        "action",
+        "battle_action",
+        "battle_finish"
       ]
     }
   ],
