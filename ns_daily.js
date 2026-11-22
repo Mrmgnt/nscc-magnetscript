@@ -8,6 +8,9 @@
  *   NS_USER=... NS_PASS=... node ns_daily.js                   # Claim HH + Eudemon Dragon + TP & SS (+ Grade S jika Lv>=80)
  *   NS_USER=... NS_PASS=... node ns_daily.js --pure            # Murni: Claim HH (tanpa battle HH) + Eudemon Dragon + TP + SS
  *   NS_USER=... NS_PASS=... node ns_daily.js --with-hh-battle  # Tambah battle Boss Hunting House juga
+ *   NS_USER=... NS_PASS=... node ns_daily.js --with-thanksgiving-battle    # Tambah event battle Thanksgiving
+ *   NS_USER=... NS_PASS=... node ns_daily.js --with-thanksgiving-minigame  # Tambah mini-game Thanksgiving
+ *   NS_USER=... NS_PASS=... node ns_daily.js --with-thanksgiving-full      # Tambah battle + mini-game Thanksgiving
  *   NS_USER=... NS_PASS=... node ns_daily.js --level 85        # Tambah auto misi/ujian ke target level
  *
  * Urutan Jatah Harian:
@@ -30,6 +33,9 @@ const iLv = argv.indexOf('--level');
 const targetLevel = iLv >= 0 ? Number(argv[iLv + 1] || 0) : (process.env.NS_TARGET_LEVEL ? Number(process.env.NS_TARGET_LEVEL) : 0);
 const isPureDaily = argv.includes('--pure');
 const withHhBattle = argv.includes('--with-hh-battle');
+const thanksgivingMode = argv.includes('--with-thanksgiving-full') ? 'full'
+    : argv.includes('--with-thanksgiving-battle') ? 'battle'
+        : argv.includes('--with-thanksgiving-minigame') ? 'minigame' : '';
 
 if (!process.env.NS_USER || !process.env.NS_PASS) { line('Butuh NS_USER dan NS_PASS.'); process.exit(1); }
 
@@ -119,6 +125,14 @@ function sebab(out) {
     line('################ ' + trainTitle + ' ################');
     const trainRes = await runTrainSession({ mode: 'all', maks: 5, jeda: 11, shared });
     hasil.push([trainTitle, trainRes.exitCode, trainRes.kredit || 0, trainRes.exitCode === 0 ? 'Selesai' : 'Ada kegagalan']);
+
+    if (thanksgivingMode) {
+        const eventTitle = 'Thanksgiving Event: ' + thanksgivingMode;
+        line('');
+        line('################ ' + eventTitle + ' ################');
+        const eventRes = await runTahap([process.execPath, 'ns_thanksgiving.js', thanksgivingMode]);
+        hasil.push([eventTitle, eventRes.status, angka(eventRes.stdout), sebab(eventRes.stdout)]);
+    }
 
     if (!isPureDaily) {
         const charLevel = Number(shared.st.level || 1);

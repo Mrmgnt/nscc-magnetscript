@@ -100,9 +100,9 @@ echo         3. Eudemon Dragon Saja (Auto 3x Emblem / 1x Free Sampai Habis)
 echo         4. Hunting House Saja (Auto Claim 5/10 Tiket + Battle Boss / Claim)
 echo         5. Menu Gabungan Hunting House ^& Eudemon Dragon (Semua Mode)
 echo.
-echo   [ 2 ] EVENT HALLOWEEN (FAST BATTLE ^& SCHEDULER)
-echo         6. Auto Halloween Battle (Cepat, Claim Reward, Single/Multi-Akun)
-echo         7. Halloween Scheduler Loop (Auto Match Tiap Heart Terisi)
+echo   [ 2 ] EVENT THANKSGIVING 2026
+echo         6. Thanksgiving Event (Battle / Mini-game / Full)
+echo         7. Capture Protokol Thanksgiving (Developer)
 echo.
 echo   [ 3 ] MISI ^& GRINDING LEVEL
 echo         8. Misi Grade S (Auto Selesaikan Misi 1-4 Sampai Energi Habis)
@@ -132,8 +132,8 @@ if "%PILIH%"=="2" goto TRAIN
 if "%PILIH%"=="3" goto EUDEMON
 if "%PILIH%"=="4" goto HUNTINGHOUSE
 if "%PILIH%"=="5" goto HUNT
-if "%PILIH%"=="6" goto HALLOWEEN
-if "%PILIH%"=="7" goto HALLOWEEN_SCHED
+if "%PILIH%"=="6" goto THANKSGIVING
+if "%PILIH%"=="7" goto THANKSGIVING_CAPTURE
 if "%PILIH%"=="8" goto GRADES
 if "%PILIH%"=="9" goto LEVEL
 if "%PILIH%"=="10" goto MISSIONONLY
@@ -159,11 +159,14 @@ echo     1. Jatah Harian Murni (Claim Tiket HH + TP + SS + Eudemon Dragon)
 echo        [Tanpa battle Hunting House ^& tanpa grinding misi level]
 echo     2. Jatah Harian + Sekalian Battle Boss Hunting House
 echo     3. Jatah Harian + Lanjut Auto Leveling / Ujian / Grade S
+echo     4. Jatah Harian + Thanksgiving Battle
+echo     5. Jatah Harian + Thanksgiving Mini-game
+echo     6. Jatah Harian + Thanksgiving Full Event
 echo.
 echo   Tips: Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti ke menu.
 echo.
 set "DOPT="
-set /p "DOPT=Pilih mode [1/2/3, Enter = 1]: "
+set /p "DOPT=Pilih mode [1-6, Enter = 1]: "
 if "%DOPT%"=="" set "DOPT=1"
 echo.
 if "%DOPT%"=="1" (
@@ -179,6 +182,12 @@ if "%DOPT%"=="1" (
   ) else (
     node ns_daily.js --level %TARGET%
   )
+) else if "%DOPT%"=="4" (
+  node ns_daily.js --pure --with-thanksgiving-battle
+) else if "%DOPT%"=="5" (
+  node ns_daily.js --pure --with-thanksgiving-minigame
+) else if "%DOPT%"=="6" (
+  node ns_daily.js --pure --with-thanksgiving-full
 ) else (
   node ns_daily.js --pure
 )
@@ -295,80 +304,52 @@ echo.
 pause
 goto MENU
 
-:HALLOWEEN
+:THANKSGIVING
 cls
 echo ======================================================================
-echo           AUTO HALLOWEEN BATTLE (ULTRA FAST + CLAIM REWARD)
+echo                    THANKSGIVING EVENT 2026
 echo                     cc: MagnetScript(Razki)
 echo ======================================================================
-echo   - Menjalankan battle Halloween secara cepat (~1-1.5 detik per match)
-echo   - 100%% Mengklaim Reward Boss (Heart of Kari item1027, XP +30k, Gold +30k)
-echo   - Otomatis berhenti ketika Heart habis (atau sesuai batas battle)
-echo.
-echo   Pilih target akun yang ingin dijalankan:
-echo     1. Akun Aktif Saat Ini (%NS_USER% - %NS_CHAR_NAME%)
-echo     2. Multiple Akun (Semua akun ^& karakter di accounts.txt)
-echo     3. Cek Status Heart of Kari ^& Waktu Refill Saja
+echo   1. Cek Status Event
+echo   2. Auto Battle: rotasi 5 musuh sampai Heart habis
+echo   3. Auto Mini-game: habiskan Ammo termasuk Werewolf
+echo   4. Full Event: Battle lalu Mini-game
 echo     0. Kembali ke Menu Utama
 echo.
 echo   Tips: Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti ke menu.
 echo.
-set "HW_OPT="
-set /p "HW_OPT=Pilih mode [0-3, default: 1]: "
-if "%HW_OPT%"=="" set "HW_OPT=1"
-if "%HW_OPT%"=="0" goto MENU
-if "%HW_OPT%"=="3" (
-  echo.
-  node ns_halloween.js status
-  echo.
-  pause
-  goto MENU
-)
-if "%HW_OPT%"=="2" (
-  set "HW_MAX="
-  set /p "HW_MAX=Batas maks battle per karakter (default: sampai heart habis / 99): "
-  if "%HW_MAX%"=="" set "HW_MAX=99"
-  echo.
-  node ns_halloween.js multi %HW_MAX%
-) else (
-  set "HW_MAX="
-  set /p "HW_MAX=Batas maks battle (default: sampai heart habis / 99): "
-  if "%HW_MAX%"=="" set "HW_MAX=99"
-  echo.
-  node ns_halloween.js run %HW_MAX%
-)
+set "TG_OPT="
+set /p "TG_OPT=Pilih mode [0-4, default: 1]: "
+if "%TG_OPT%"=="" set "TG_OPT=1"
+if "%TG_OPT%"=="0" goto MENU
+if "%TG_OPT%"=="1" node ns_thanksgiving.js status
+if "%TG_OPT%"=="2" node ns_thanksgiving.js battle
+if "%TG_OPT%"=="3" node ns_thanksgiving.js minigame
+if "%TG_OPT%"=="4" node ns_thanksgiving.js full
 echo.
 pause
 goto MENU
 
-:HALLOWEEN_SCHED
+:THANKSGIVING_CAPTURE
 cls
 echo ======================================================================
-echo             HALLOWEEN AUTO MATCH SCHEDULER (LOOP CONTINUOUS)
+echo                CAPTURE PROTOKOL THANKSGIVING
 echo                     cc: MagnetScript(Razki)
 echo ======================================================================
-echo   - Bot berjalan terus di background/terminal:
-echo       1. Langsung bertarung jika Heart tersedia (Auto Claim Reward)
-echo       2. Saat Heart habis (0/8), mendeteksi waktu refill dari server
-echo       3. Standby & hitung mundur otomatis
-echo       4. Begitu Heart terisi (>= 1), langsung instant mulai match kembali!
+echo   1. Live Capture Runtime AIR (Proxy Lokal 127.0.0.1:8888)
+echo   2. Import ^& Decode Fiddler Classic (.saz / .har / .jsonl)
+echo   0. Kembali ke Menu Utama
 echo.
-echo   Pilih mode scheduler:
-echo     1. Scheduler untuk Akun Aktif (%NS_USER% - %NS_CHAR_NAME%)
-echo     2. Scheduler untuk Multiple Akun (accounts.txt)
-echo     0. Kembali ke Menu Utama
-echo.
-echo   Tips: Tekan tombol [Q] atau [Ctrl+C] kapan saja untuk stop ke menu.
-echo.
-set "SCH_OPT="
-set /p "SCH_OPT=Pilih mode [0-2, default: 1]: "
-if "%SCH_OPT%"=="" set "SCH_OPT=1"
-if "%SCH_OPT%"=="0" goto MENU
-echo.
-if "%SCH_OPT%"=="2" (
-  node ns_halloween.js multi_loop
-) else (
-  node ns_halloween.js loop
+set "TGC_OPT="
+set /p "TGC_OPT=Pilih mode [0-2, default: 1]: "
+if "%TGC_OPT%"=="" set "TGC_OPT=1"
+if "%TGC_OPT%"=="0" goto MENU
+if "%TGC_OPT%"=="1" (
+  node tools\capture_thanksgiving_amf.js
+) else if "%TGC_OPT%"=="2" (
+  set "SAZ_PATH="
+  set /p "SAZ_PATH=Masukkan path file .saz/.har/.jsonl: "
+  if not "%SAZ_PATH%"=="" node tools\import_thanksgiving_saz.js "%SAZ_PATH%"
 )
 echo.
 pause

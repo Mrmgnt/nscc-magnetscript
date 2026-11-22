@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "capturedAt": "",
+  "status": { "service": "", "params": [] },
+  "battle": { "service": "", "params": [] },
+  "minigame": { "service": "", "params": [] },
+  "werewolf": { "service": "", "params": [] },
+  "enemies": [
+    { "id": "", "name": "Giant Rainbow Turkey" },
+    { "id": "", "name": "Monster Pumpkin" },
+    { "id": "", "name": "Cranberry Fairy" },
+    { "id": "", "name": "Human Face Yam" },
+    { "id": "", "name": "Giant Corn Humanoid" }
+  ]
+}

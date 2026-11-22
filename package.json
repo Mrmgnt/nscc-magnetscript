@@ -10,7 +10,8 @@
     "captcha:test": "node tools/captcha_runner.js",
     "captcha:review": "node tools/captcha_review_server.js",
     "captcha:cli": "node tools/captcha_cli_review.js",
-    "pvp:test": "node ns_pvp_duel.test.js"
+    "pvp:test": "node ns_pvp_duel.test.js",
+    "thanksgiving:test": "node ns_thanksgiving.test.js"
   },
   "dependencies": {
     "playwright-core": "^1.48.0"

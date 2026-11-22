@@ -322,15 +322,17 @@ async function runBulk(action, extraArgs = [], delaySec = 3) {
             targetScript = 'ns_level.js';
             actionLabel = 'AUTO GRINDING LEVEL + UJIAN HARD';
             break;
-        case 'halloween':
-        case 'event':
-            targetScript = 'ns_halloween.js';
-            actionLabel = 'HALLOWEEN EVENT BATTLE (AUTO-FARM HEART OF KARI + REWARD)';
+        case 'thanksgiving_battle':
+            targetScript = 'ns_thanksgiving.js';
+            actionLabel = 'THANKSGIVING BATTLE (HABISKAN HEART)';
             break;
-        case 'halloween_loop':
-        case 'scheduler':
-            targetScript = 'ns_halloween.js';
-            actionLabel = 'HALLOWEEN AUTO MATCH SCHEDULER LOOP';
+        case 'thanksgiving_minigame':
+            targetScript = 'ns_thanksgiving.js';
+            actionLabel = 'THANKSGIVING MINI-GAME (HABISKAN AMMO + WEREWOLF)';
+            break;
+        case 'thanksgiving_full':
+            targetScript = 'ns_thanksgiving.js';
+            actionLabel = 'THANKSGIVING FULL EVENT (BATTLE + MINI-GAME)';
             break;
         default:
             targetScript = 'ns_daily.js';
@@ -393,10 +395,12 @@ async function runBulk(action, extraArgs = [], delaySec = 3) {
             scriptArgs = ['1-4', '8'];
         } else if (action === 'level') {
             scriptArgs = [String(acc.targetLevel || 60), '8'];
-        } else if (action === 'halloween' || action === 'event') {
-            scriptArgs = ['run', '99'];
-        } else if (action === 'halloween_loop' || action === 'scheduler') {
-            scriptArgs = ['loop'];
+        } else if (action === 'thanksgiving_battle') {
+            scriptArgs = ['battle'];
+        } else if (action === 'thanksgiving_minigame') {
+            scriptArgs = ['minigame'];
+        } else if (action === 'thanksgiving_full') {
+            scriptArgs = ['full'];
         } else {
             scriptArgs = ['--pure'];
         }
@@ -508,17 +512,18 @@ async function interactiveMenu() {
     console.log('  5. Hunting House Saja (Auto Claim Daily Passport + Battle Boss)');
     console.log('  6. Claim Daily Hunting House Saja (Tanpa Battle - Ambil 5/10 Tiket)');
     console.log('  7. Training TP & SS Saja');
-    console.log('  [ EVENT KHUSUS (HALLOWEEN) ]');
-    console.log('  8. Auto Halloween Battle Multi-Akun (Cepat & Claim Reward Heart of Kari)');
-    console.log('  9. Halloween Scheduler Loop Multi-Akun (Standby Auto Match saat Heart Terisi)');
+    console.log('  [ EVENT KHUSUS (THANKSGIVING 2026) ]');
+    console.log('  8. Farming Battle Thanksgiving (Sampai Heart Habis)');
+    console.log('  9. Farming Mini-game Thanksgiving (Ammo + Werewolf)');
+    console.log(' 10. Full Thanksgiving Event (Battle + Mini-game)');
     console.log('');
     console.log('  [ MISI & LEVELING MULTI-AKUN ]');
-    console.log(' 10. Misi Grade S Saja (Auto Stamina Runner - Stage 1-4)');
-    console.log(' 11. Auto Grinding Level + Ujian Saja (Target level di accounts.txt)');
+    console.log(' 11. Misi Grade S Saja (Auto Stamina Runner - Stage 1-4)');
+    console.log(' 12. Auto Grinding Level + Ujian Saja (Target level di accounts.txt)');
     console.log('  0. Kembali ke Menu Utama');
     console.log('======================================================================');
 
-    const choice = (await ask('Pilih menu [0-11, Enter = 1] : ')).trim() || '1';
+    const choice = (await ask('Pilih menu [0-12, Enter = 1] : ')).trim() || '1';
     if (choice === '0') {
         rl.close();
         return;
@@ -554,17 +559,18 @@ async function interactiveMenu() {
             await runBulk('train', [], delay);
             break;
         case '8':
-            await runBulk('halloween', [], delay);
+            await runBulk('thanksgiving_battle', [], delay);
             break;
         case '9':
-            // Scheduler loop multi-akun langsung panggil runner halloween scheduler
-            const hwMod = require('./ns_halloween.js');
-            await hwMod.runSchedulerLoop(true, { accountDelay: delay });
+            await runBulk('thanksgiving_minigame', [], delay);
             break;
         case '10':
-            await runBulk('grades', [], delay);
+            await runBulk('thanksgiving_full', [], delay);
             break;
         case '11':
+            await runBulk('grades', [], delay);
+            break;
+        case '12':
             await runBulk('level', [], delay);
             break;
         default:
