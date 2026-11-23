@@ -314,6 +314,53 @@ async function readPveInit(session) {
         status: body.status, pveStatus: body.pve_status,
     };
 }
+function parsePveRankingResponse(body) {
+    const data = body && body.latest_ranking_data;
+    if (!data || typeof data !== 'object') return null;
+    const rank = Number(data.player_own_ranking);
+    const score = Number(data.player_score);
+    return {
+        rank: Number.isFinite(rank) && rank > 0 ? rank : null,
+        score: Number.isFinite(score) ? score : null,
+        seasonDate: body.season_date || null,
+    };
+}
+async function readPveRanking(session) {
+    try {
+        const result = await c.amf('PVEService.getRankingList', [session.sessionKey]);
+        return parsePveRankingResponse(result && result.body);
+    } catch (_) {
+        return null;
+    }
+}
+function extractScoreForChar(scoreObj, charId) {
+    if (!scoreObj || typeof scoreObj !== 'object') return null;
+    const target = normCharId(charId);
+    for (const [k, v] of Object.entries(scoreObj)) {
+        if (normCharId(k) === target && Number.isFinite(Number(v))) return Number(v);
+    }
+    return null;
+}
+function fmtIdNum(n) { return Number.isFinite(Number(n)) ? Number(n).toLocaleString('id-ID') : '-'; }
+function updateRankingMeta(meta, ranking, prevRanking, matchScore) {
+    if (!ranking) return null;
+    if (meta.totalScoreStart == null && ranking.score != null) meta.totalScoreStart = ranking.score;
+    if (meta.rankStart == null && ranking.rank != null) meta.rankStart = ranking.rank;
+    if (ranking.score != null) meta.totalScoreEnd = ranking.score;
+    if (ranking.rank != null) meta.rankEnd = ranking.rank;
+    const parts = [];
+    if (matchScore != null) parts.push('Match Score: +' + fmtIdNum(matchScore));
+    if (ranking.score != null) {
+        const deltaScore = prevRanking && prevRanking.score != null ? ranking.score - prevRanking.score : null;
+        parts.push('Total Score: ' + fmtIdNum(ranking.score) + (deltaScore ? ' (+' + fmtIdNum(deltaScore) + ')' : ''));
+    }
+    if (ranking.rank != null) {
+        const deltaRank = prevRanking && prevRanking.rank != null ? prevRanking.rank - ranking.rank : 0;
+        const move = deltaRank > 0 ? ' (naik ' + deltaRank + ')' : (deltaRank < 0 ? ' (turun ' + Math.abs(deltaRank) + ')' : '');
+        parts.push('Rank: #' + ranking.rank + move);
+    }
+    return parts.join(' | ');
+}
 
 function boolEmblem(value) {
     return value === true || String(value || '').toLowerCase() === 'emblem';
@@ -547,7 +594,7 @@ async function runLive(args, account) {
     const { solver } = solverSession;
     let socket = null;
     const report = { generatedAt: new Date().toISOString(), mode: 'public-room', account: account.username, matches: [], scans: [], error: null };
-    const meta = { charName: account.username, energyStart: null, energyEnd: null, stopReason: null };
+    const meta = { charName: account.username, energyStart: null, energyEnd: null, totalScoreStart: null, totalScoreEnd: null, rankStart: null, rankEnd: null, stopReason: null };
     const saveReport = () => fs.writeFileSync(path.join(process.cwd(), 'coop_report.json'), JSON.stringify(report, null, 2));
     try {
         // Web login binds CAPTCHA solver and PvE socket to same account session.
@@ -563,8 +610,11 @@ async function runLive(args, account) {
         const botId = normCharId(result.charId);
         meta.energyStart = Number(pve.energy);
         meta.energyEnd = Number(pve.energy);
+        let latestRanking = await readPveRanking(result.session);
+        const initialRankText = updateRankingMeta(meta, latestRanking, null, null);
         divider('AKUN & DECK');
         line('  QUICKMATCH ' + result.charName + ' Lv' + result.level + ' ID=' + botId + ' energy=' + pve.energy + ' skills=' + result.skills.map(s => s.id + (s.action === 'senjutsu' ? '(senjutsu)' : '')).join(','));
+        if (initialRankText) line('  OK RANKING AWAL ' + initialRankText);
         const joinCost = Number(quest.energy[1]);
         if (!(joinCost > 0)) throw new Error('Biaya energy join tidak valid.');
         socket = await connectPve({ server: pve.pvpServer[0], sessionKey: result.session.sessionKey, charId: botId, handoffToken: pve.handoffToken, handoffNonce: pve.handoffNonce, ver: pve.ver });
@@ -790,7 +840,14 @@ async function runLive(args, account) {
                 markBattleStarted();
                 line('  #' + active.match + ' RECV ' + (message.event || '') + '/' + (message.state || ''));
             }
-            if (message.state === 'battle_finish' || message.state === 'battle_win') { clearBattleTimers(active); active.outcome = message.state; active.done = true; return; }
+            if (message.state === 'battle_finish' || message.state === 'battle_win') {
+                clearBattleTimers(active);
+                active.score = message.score;
+                active.reward = message.reward;
+                active.outcome = message.state;
+                active.done = true;
+                return;
+            }
             if (message.state === 'battle_lose') { clearBattleTimers(active); active.outcome = 'battle_lose'; active.done = true; return; }
             if (message.state === 'battle_action' && normCharId(message.charId) === botId) {
                 active.myBattleActions = (active.myBattleActions || 0) + 1;
@@ -882,14 +939,21 @@ async function runLive(args, account) {
             }
             if (active.room && !active.outcome) socket.leaveRoom(active.room.id);
             else if (active.outcome) socket.joinLobby();
-            const summary = { match: active.match, roomId: active.room.id, otherEmblems: active.otherEmblems, emblemStatusUnknown: active.emblemStatusUnknown, rosterConfirmed: active.rosterConfirmed, rosterFields: active.rosterFields, roomEvents: active.roomEvents, ready: active.ready, outcome: active.outcome || 'retry', reason: active.reason, joinAcceptedToReadyMs: active.joinAcceptedToReadyMs, latencyWarning: active.latencyWarning, lastAction: active.lastAction, battleCommandLatencyMs: active.battleCommandLatencyMs, durationMs: Date.now() - active.startedAt, battle: bufferedBattle.splice(0) };
-            report.matches.push(summary);
+            const matchScore = extractScoreForChar(active.score, botId);
+            const summary = { match: active.match, roomId: active.room.id, otherEmblems: active.otherEmblems, emblemStatusUnknown: active.emblemStatusUnknown, rosterConfirmed: active.rosterConfirmed, rosterFields: active.rosterFields, roomEvents: active.roomEvents, ready: active.ready, outcome: active.outcome || 'retry', reason: active.reason, joinAcceptedToReadyMs: active.joinAcceptedToReadyMs, latencyWarning: active.latencyWarning, lastAction: active.lastAction, battleCommandLatencyMs: active.battleCommandLatencyMs, matchScore, score: active.score, reward: active.reward, durationMs: Date.now() - active.startedAt, battle: bufferedBattle.splice(0) };
             // Force a fresh energy read after every joined room/battle attempt.
             lastEnergyCheckAt = 0;
-            saveReport();
-            if (summary.outcome === 'battle_finish' || summary.outcome === 'battle_win') line('  #' + summary.match + ' WIN ' + String(args.boss).toUpperCase() + ' (' + summary.outcome + ')');
+            if (summary.outcome === 'battle_finish' || summary.outcome === 'battle_win') {
+                line('  #' + summary.match + ' WIN ' + String(args.boss).toUpperCase() + ' (' + summary.outcome + ')');
+                const updatedRanking = await readPveRanking(result.session);
+                const rankText = updateRankingMeta(meta, updatedRanking, latestRanking, matchScore);
+                if (updatedRanking) { summary.totalScoreAfter = updatedRanking.score; summary.rankAfter = updatedRanking.rank; latestRanking = updatedRanking; }
+                if (rankText) line('  #' + summary.match + ' OK ' + rankText);
+            }
             else if (summary.outcome === 'battle_lose') line('  #' + summary.match + ' LOSE ' + String(args.boss).toUpperCase());
             else line('  #' + summary.match + ' RETRY (' + (summary.reason || summary.outcome) + ')');
+            report.matches.push(summary);
+            saveReport();
             line('');
             active = null;
         }
@@ -982,7 +1046,7 @@ async function runHostRoom(args, account) {
     const say = message => { line(message); try { fs.appendFileSync(logFile, stamp() + ' ' + message + '\n'); } catch (_) {} };
     const trace = (tag, data) => { try { fs.appendFileSync(logFile, stamp() + ' [raw] ' + tag + ' ' + JSON.stringify(data).slice(0, 1500) + '\n'); } catch (_) {} };
     const report = { generatedAt: stamp(), mode: 'host-room', boss: args.boss, level: args.level, minLevel: args.minLevel, account: account.username, matches: [], attempts: [], error: null };
-    const meta = { charName: account.username, energyStart: null, energyEnd: null, stopReason: null };
+    const meta = { charName: account.username, energyStart: null, energyEnd: null, totalScoreStart: null, totalScoreEnd: null, rankStart: null, rankEnd: null, stopReason: null };
     const reportFile = path.join(process.cwd(), 'cerberus_host_report.json');
     const saveReport = () => { try { fs.writeFileSync(reportFile, JSON.stringify(report, null, 2)); } catch (_) {} };
     const solverSession = createSolverSession(args, account, say);
@@ -1006,9 +1070,12 @@ async function runHostRoom(args, account) {
         const hostId = normCharId(result.charId);
         meta.energyStart = Number(pve.energy);
         meta.energyEnd = Number(pve.energy);
+        let latestRanking = await readPveRanking(result.session);
+        const initialRankText = updateRankingMeta(meta, latestRanking, null, null);
         divider('AKUN & DECK HOST');
         say('  HOST ' + result.charName + ' Lv' + result.level + ' energy=' + pve.energy + ' biaya_room=' + hostCost + ' quest=' + quest.quest);
         say('  DECK ' + describeDeck(result.equipped));
+        if (initialRankText) say('  OK RANKING AWAL ' + initialRankText);
         if (!(pve.energy >= hostCost)) throw new Error('Energy host kurang (' + pve.energy + ' < ' + hostCost + ').');
         socket = await connectPve({ server: pve.pvpServer[0], sessionKey: result.session.sessionKey, charId: hostId, handoffToken: pve.handoffToken, handoffNonce: pve.handoffNonce, ver: pve.ver });
         let active = null;
@@ -1269,14 +1336,21 @@ async function runHostRoom(args, account) {
             }
             if (active.roomId && active.outcome == null) socket.leaveRoom(active.roomId);
             const after = await readPveInit(result.session);
-            const summary = { match: roomNo, roomId: active.roomId, outcome: active.outcome || 'retry', reason: active.reason, battleStarted: active.battleStarted, players: [...active.players.entries()].map(([id, p]) => ({ id, name: p.name, level: p.level, status: p.status })), actions: active.actions, score: active.score, reward: active.reward, energyBefore: energyNow, energyAfter: after && after.energy, durationMs: Date.now() - matchStartedAt, battleStates: active.battleStates.slice(-60) };
-            report.attempts.push(summary);
-            if (active.battleStarted) report.matches.push(summary);
+            const matchScore = extractScoreForChar(active.score, hostId);
+            const summary = { match: roomNo, roomId: active.roomId, outcome: active.outcome || 'retry', reason: active.reason, battleStarted: active.battleStarted, players: [...active.players.entries()].map(([id, p]) => ({ id, name: p.name, level: p.level, status: p.status })), actions: active.actions, matchScore, score: active.score, reward: active.reward, energyBefore: energyNow, energyAfter: after && after.energy, durationMs: Date.now() - matchStartedAt, battleStates: active.battleStates.slice(-60) };
             if (after && Number.isFinite(Number(after.energy))) meta.energyEnd = Number(after.energy);
-            saveReport();
-            if (active.outcome === 'win') say('  #' + roomNo + ' WIN CERBERUS');
+            if (active.outcome === 'win') {
+                say('  #' + roomNo + ' WIN CERBERUS');
+                const updatedRanking = await readPveRanking(result.session);
+                const rankText = updateRankingMeta(meta, updatedRanking, latestRanking, matchScore);
+                if (updatedRanking) { summary.totalScoreAfter = updatedRanking.score; summary.rankAfter = updatedRanking.rank; latestRanking = updatedRanking; }
+                if (rankText) say('  #' + roomNo + ' OK ' + rankText);
+            }
             else if (active.outcome === 'lose') say('  #' + roomNo + ' LOSE CERBERUS');
             else say('  #' + roomNo + ' RETRY (' + (active.reason || active.outcome) + ')');
+            report.attempts.push(summary);
+            if (active.battleStarted) report.matches.push(summary);
+            saveReport();
             line('');
             active = null;
             await sleep(1500);
@@ -1321,4 +1395,4 @@ async function runHostRoom(args, account) {
     }
 })().catch(error => { line('STOP: ' + error.message); process.exitCode = 1; });
 
-module.exports = { parseArgs, parseAccountsFile, resolveMinStartEnergy, acquireRunLock, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, buildSkillDeck, describeDeck, normCharId, idList, evaluateLevel, runDryRun, runLive, runHostRoom };
+module.exports = { parseArgs, parseAccountsFile, resolveMinStartEnergy, acquireRunLock, parsePveRankingResponse, extractScoreForChar, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, buildSkillDeck, describeDeck, normCharId, idList, evaluateLevel, runDryRun, runLive, runHostRoom };
