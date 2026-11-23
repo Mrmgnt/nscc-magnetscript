@@ -439,7 +439,7 @@ async function runForAccount(user, pass, slotOrId, mode, config = loadConfig(), 
     const startedAt = new Date().toISOString();
     try {
         const needCharData = mode === 'battle' || mode === 'full';
-        const context = await getContext(user, pass, slotOrId, { loadCharacterData: needCharData });
+        const context = (options && options.context) || await getContext(user, pass, slotOrId, { loadCharacterData: needCharData });
         line(`Akun: ${user} | Karakter: ${context.charName} (Lv.${context.level}, ID: ${context.charId})`);
 
         let result;
@@ -465,6 +465,55 @@ async function runForAccount(user, pass, slotOrId, mode, config = loadConfig(), 
         appendReport(entry);
         return entry;
     }
+}
+
+async function runThanksgivingSession(opts = {}) {
+    const mode = String(opts.mode || 'full').toLowerCase();
+    const shared = opts.shared || null;
+    const user = (shared && shared.user) || process.env.NS_USER;
+    const pass = (shared && shared.pass) || process.env.NS_PASS;
+    const slot = process.env.NS_CHAR_ID || process.env.NS_CHAR_SLOT || '1';
+    if (!user || !pass) {
+        return { exitCode: 1, kredit: 0, summary: 'Butuh NS_USER dan NS_PASS' };
+    }
+
+    const config = opts.config || loadConfig();
+    let context = null;
+    if (shared && shared.s && shared.charId && shared.st) {
+        context = {
+            sessionKey: shared.s.sessionKey,
+            token: shared.s.token || '',
+            charId: String(shared.charId),
+            charName: (shared.row && shared.row[1]) || 'Ninja',
+            level: Number(shared.st.level) || 1,
+            slotOrId: slot,
+            gk: String(shared.st.gk || ''),
+            ivg: shared.ex && shared.ex.z9t ? String(shared.ex.z9t) : '',
+            ivn: '',
+            materialsInitial: parseMaterialCounts(shared.st.raw && shared.st.raw.character_material)
+        };
+    }
+
+    const entry = await runForAccount(user, pass, slot, mode, config, {
+        maxBattles: opts.maxBattles,
+        maxMiniGames: opts.maxMiniGames,
+        enemyId: opts.enemyId,
+        context
+    });
+    if (!entry.ok) {
+        return { exitCode: 1, kredit: 0, summary: entry.error || 'Thanksgiving gagal' };
+    }
+
+    const r = entry.result || {};
+    const battles = r.battles ?? (r.battle && r.battle.battles) ?? 0;
+    const minigames = r.minigames ?? (r.minigame && r.minigame.minigames) ?? 0;
+    return {
+        exitCode: 0,
+        battles,
+        minigames,
+        kredit: battles + minigames,
+        summary: `Battle ${battles}x | Werewolf ${minigames}x`
+    };
 }
 
 function parseCliArgs(argv) {
@@ -607,6 +656,7 @@ module.exports = {
     runBattle,
     runMiniGame,
     runForAccount,
+    runThanksgivingSession,
     formatTime,
     releaseTerminalInput,
     main

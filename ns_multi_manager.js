@@ -287,6 +287,17 @@ async function runBulk(action, extraArgs = [], delaySec = 3) {
             targetScript = 'ns_daily.js';
             actionLabel = 'JATAH HARIAN LENGKAP + AUTO LEVELING / GRADE S';
             break;
+        case 'daily_thanksgiving_battle':
+        case 'daily_thanksgiving':
+        case 'daily_tg_battle':
+            targetScript = 'ns_daily.js';
+            actionLabel = 'JATAH HARIAN FULL + THANKSGIVING BATTLE (TANPA BATTLE HH)';
+            break;
+        case 'daily_thanksgiving_full':
+        case 'daily_tg_full':
+            targetScript = 'ns_daily.js';
+            actionLabel = 'JATAH HARIAN FULL + THANKSGIVING FULL EVENT (BATTLE + WEREWOLF)';
+            break;
         case 'eudemon':
         case 'dragon':
             targetScript = 'ns_hunt.js';
@@ -379,6 +390,10 @@ async function runBulk(action, extraArgs = [], delaySec = 3) {
             scriptArgs = ['--pure', '--with-hh-battle'];
         } else if (action === 'daily_level' || action === 'full') {
             scriptArgs = acc.targetLevel ? ['--level', String(acc.targetLevel)] : [];
+        } else if (action === 'daily_thanksgiving_battle' || action === 'daily_thanksgiving' || action === 'daily_tg_battle') {
+            scriptArgs = ['--pure', '--with-thanksgiving-battle'];
+        } else if (action === 'daily_thanksgiving_full' || action === 'daily_tg_full') {
+            scriptArgs = ['--pure', '--with-thanksgiving-full'];
         } else if (action === 'eudemon' || action === 'dragon') {
             scriptArgs = ['eudemon', '10', '10.5'];
         } else if (action === 'house' || action === 'hunting') {
@@ -506,24 +521,26 @@ async function interactiveMenu() {
     console.log('  1. Jatah Harian Full (TP + SS + Eudemon Dragon + Claim HH Tanpa Battle)');
     console.log('  2. Jatah Harian Full + Battle Boss Hunting House');
     console.log('  3. Jatah Harian Lengkap + Auto Leveling / Grade S (Sesuai accounts.txt)');
+    console.log('  4. Jatah Harian Full + Thanksgiving Battle (Tanpa Battle HH)');
+    console.log('  5. Jatah Harian Full + Thanksgiving Full Event (Battle + Werewolf)');
     console.log('');
     console.log('  [ FARMING SPESIFIK MULTI-AKUN ]');
-    console.log('  4. Eudemon Dragon Saja (Auto 3x Emblem / 1x Free per Room)');
-    console.log('  5. Hunting House Saja (Auto Claim Daily Passport + Battle Boss)');
-    console.log('  6. Claim Daily Hunting House Saja (Tanpa Battle - Ambil 5/10 Tiket)');
-    console.log('  7. Training TP & SS Saja');
+    console.log('  6. Eudemon Dragon Saja (Auto 3x Emblem / 1x Free per Room)');
+    console.log('  7. Hunting House Saja (Auto Claim Daily Passport + Battle Boss)');
+    console.log('  8. Claim Daily Hunting House Saja (Tanpa Battle - Ambil 5/10 Tiket)');
+    console.log('  9. Training TP & SS Saja');
     console.log('  [ EVENT KHUSUS (THANKSGIVING 2026) ]');
-    console.log('  8. Farming Battle Thanksgiving (Sampai Heart Habis)');
-    console.log('  9. Farming Mini-game Thanksgiving (Ammo + Werewolf)');
-    console.log(' 10. Full Thanksgiving Event (Battle + Mini-game)');
+    console.log(' 10. Farming Battle Thanksgiving (Sampai Heart Habis)');
+    console.log(' 11. Farming Mini-game Thanksgiving (Ammo + Werewolf)');
+    console.log(' 12. Full Thanksgiving Event (Battle + Mini-game)');
     console.log('');
     console.log('  [ MISI & LEVELING MULTI-AKUN ]');
-    console.log(' 11. Misi Grade S Saja (Auto Stamina Runner - Stage 1-4)');
-    console.log(' 12. Auto Grinding Level + Ujian Saja (Target level di accounts.txt)');
+    console.log(' 13. Misi Grade S Saja (Auto Stamina Runner - Stage 1-4)');
+    console.log(' 14. Auto Grinding Level + Ujian Saja (Target level di accounts.txt)');
     console.log('  0. Kembali ke Menu Utama');
     console.log('======================================================================');
 
-    const choice = (await ask('Pilih menu [0-12, Enter = 1] : ')).trim() || '1';
+    const choice = (await ask('Pilih menu [0-14, Enter = 1] : ')).trim() || '1';
     if (choice === '0') {
         rl.close();
         return;
@@ -547,30 +564,36 @@ async function interactiveMenu() {
             await runBulk('daily_level', [], delay);
             break;
         case '4':
-            await runBulk('eudemon', [], delay);
+            await runBulk('daily_thanksgiving_battle', [], delay);
             break;
         case '5':
-            await runBulk('house', [], delay);
+            await runBulk('daily_thanksgiving_full', [], delay);
             break;
         case '6':
-            await runBulk('claim', [], delay);
+            await runBulk('eudemon', [], delay);
             break;
         case '7':
-            await runBulk('train', [], delay);
+            await runBulk('house', [], delay);
             break;
         case '8':
-            await runBulk('thanksgiving_battle', [], delay);
+            await runBulk('claim', [], delay);
             break;
         case '9':
-            await runBulk('thanksgiving_minigame', [], delay);
+            await runBulk('train', [], delay);
             break;
         case '10':
-            await runBulk('thanksgiving_full', [], delay);
+            await runBulk('thanksgiving_battle', [], delay);
             break;
         case '11':
-            await runBulk('grades', [], delay);
+            await runBulk('thanksgiving_minigame', [], delay);
             break;
         case '12':
+            await runBulk('thanksgiving_full', [], delay);
+            break;
+        case '13':
+            await runBulk('grades', [], delay);
+            break;
+        case '14':
             await runBulk('level', [], delay);
             break;
         default:

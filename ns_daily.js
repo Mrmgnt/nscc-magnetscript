@@ -27,6 +27,7 @@ const c = require('./nsclient.js');
 const { runHuntSession } = require('./ns_hunt.js');
 const { runTrainSession } = require('./ns_train.js');
 const { runGradeSSession } = require('./ns_grade_s.js');
+const { runThanksgivingSession } = require('./ns_thanksgiving.js');
 
 const argv = process.argv.slice(2);
 const iLv = argv.indexOf('--level');
@@ -130,8 +131,8 @@ function sebab(out) {
         const eventTitle = 'Thanksgiving Event: ' + thanksgivingMode;
         line('');
         line('################ ' + eventTitle + ' ################');
-        const eventRes = await runTahap([process.execPath, 'ns_thanksgiving.js', thanksgivingMode]);
-        hasil.push([eventTitle, eventRes.status, angka(eventRes.stdout), sebab(eventRes.stdout)]);
+        const eventRes = await runThanksgivingSession({ mode: thanksgivingMode, shared });
+        hasil.push([eventTitle, eventRes.exitCode, eventRes.kredit || 0, eventRes.summary || '']);
     }
 
     if (!isPureDaily) {

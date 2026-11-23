@@ -102,30 +102,29 @@ echo         5. Menu Gabungan Hunting House ^& Eudemon Dragon (Semua Mode)
 echo.
 echo   [ 2 ] EVENT THANKSGIVING 2026
 echo         6. Thanksgiving Event (Battle / Mini-game / Full)
-echo         7. Capture Protokol Thanksgiving (Developer)
 echo.
 echo   [ 3 ] MISI ^& GRINDING LEVEL
-echo         8. Misi Grade S (Auto Selesaikan Misi 1-4 Sampai Energi Habis)
-echo         9. Auto Leveling + Ujian Hard (Chunin / Jounin / Sennin)
-echo        10. Murni Grinding Misi Grade Level (C / B / A / S)
-echo        11. Cek Daftar Misi ^& Status Selesai (Per Grade)
+echo         7. Misi Grade S (Auto Selesaikan Misi 1-4 Sampai Energi Habis)
+echo         8. Auto Leveling + Ujian Hard (Chunin / Jounin / Sennin)
+echo         9. Murni Grinding Misi Grade Level (C / B / A / S)
+echo        10. Cek Daftar Misi ^& Status Selesai (Per Grade)
 echo.
 echo   [ 4 ] MULTI-ACCOUNT ^& TOOLS
-echo        12. Multi-Account ^& Multi-Character Runner (accounts.txt)
-echo        13. Dummy Farmer (Auto Register/Login Akun ^& Kirim Gift Harian)
-echo        14. Test Local Feed (Multi-Threaded Dev Test)
+echo        11. Multi-Account ^& Multi-Character Runner (accounts.txt)
+echo        12. Dummy Farmer (Auto Register/Login Akun ^& Kirim Gift Harian)
+echo        13. Test Local Feed (Multi-Threaded Dev Test)
 echo.
 echo   [ 5 ] INFORMASI ^& KARAKTER
-echo        15. Cek Status Karakter (Level, XP, Gold, Token, Ujian, Hunting, Heart)
-echo        16. Ganti Karakter Aktif (Pilih karakter lain di akun ini)
-echo        17. Ganti Akun / Logout
-echo        18. Auto Live PvP Duel (pvpduel.txt)
-echo        19. Auto Co-op Cerberus Public Room (1 Akun)
+echo        14. Cek Status Karakter (Level, XP, Gold, Token, Ujian, Hunting, Heart)
+echo        15. Ganti Karakter Aktif (Pilih karakter lain di akun ini)
+echo        16. Ganti Akun / Logout
+echo        17. Auto Live PvP Duel (pvpduel.txt)
+echo        18. Auto Co-op Cerberus Public Room (1 Akun)
 echo.
 echo         0. Keluar
 echo ======================================================================
 set "PILIH="
-set /p "PILIH=Pilih menu [0-19]: "
+set /p "PILIH=Pilih menu [0-18]: "
 
 if "%PILIH%"=="1" goto DAILY
 if "%PILIH%"=="2" goto TRAIN
@@ -133,19 +132,18 @@ if "%PILIH%"=="3" goto EUDEMON
 if "%PILIH%"=="4" goto HUNTINGHOUSE
 if "%PILIH%"=="5" goto HUNT
 if "%PILIH%"=="6" goto THANKSGIVING
-if "%PILIH%"=="7" goto THANKSGIVING_CAPTURE
-if "%PILIH%"=="8" goto GRADES
-if "%PILIH%"=="9" goto LEVEL
-if "%PILIH%"=="10" goto MISSIONONLY
-if "%PILIH%"=="11" goto MISSIONS
-if "%PILIH%"=="12" goto MULTIMANAGER
-if "%PILIH%"=="13" goto DUMMYFARMER
-if "%PILIH%"=="14" goto LOCALFEED
-if "%PILIH%"=="15" goto STATE
-if "%PILIH%"=="16" goto GANTICHAR
-if "%PILIH%"=="17" goto GANTI
-if "%PILIH%"=="18" goto PVPDUEL
-if "%PILIH%"=="19" goto COOPCERBERUS
+if "%PILIH%"=="7" goto GRADES
+if "%PILIH%"=="8" goto LEVEL
+if "%PILIH%"=="9" goto MISSIONONLY
+if "%PILIH%"=="10" goto MISSIONS
+if "%PILIH%"=="11" goto MULTIMANAGER
+if "%PILIH%"=="12" goto DUMMYFARMER
+if "%PILIH%"=="13" goto LOCALFEED
+if "%PILIH%"=="14" goto STATE
+if "%PILIH%"=="15" goto GANTICHAR
+if "%PILIH%"=="16" goto GANTI
+if "%PILIH%"=="17" goto PVPDUEL
+if "%PILIH%"=="18" goto COOPCERBERUS
 if "%PILIH%"=="0" goto END
 goto MENU
 
@@ -329,31 +327,6 @@ if "%TG_OPT%"=="4" node ns_thanksgiving.js full
 echo.
 pause
 goto THANKSGIVING
-
-:THANKSGIVING_CAPTURE
-cls
-echo ======================================================================
-echo                CAPTURE PROTOKOL THANKSGIVING
-echo                     cc: MagnetScript(Razki)
-echo ======================================================================
-echo   1. Live Capture Runtime AIR (Proxy Lokal 127.0.0.1:8888)
-echo   2. Import ^& Decode Fiddler Classic (.saz / .har / .jsonl)
-echo   0. Kembali ke Menu Utama
-echo.
-set "TGC_OPT="
-set /p "TGC_OPT=Pilih mode [0-2, default: 1]: "
-if "%TGC_OPT%"=="" set "TGC_OPT=1"
-if "%TGC_OPT%"=="0" goto MENU
-if "%TGC_OPT%"=="1" (
-  node tools\capture_thanksgiving_amf.js
-) else if "%TGC_OPT%"=="2" (
-  set "SAZ_PATH="
-  set /p "SAZ_PATH=Masukkan path file .saz/.har/.jsonl: "
-  if not "%SAZ_PATH%"=="" node tools\import_thanksgiving_saz.js "%SAZ_PATH%"
-)
-echo.
-pause
-goto MENU
 
 :GRADES
 cls
