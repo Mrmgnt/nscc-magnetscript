@@ -2,7 +2,7 @@
 
 Terakhir diperbarui: 23 November 2026, UTC+7.
 
-Dokumen ini mencatat seluruh status implementasi, log pengujian, dan rencana lanjutan untuk Thanksgiving Event 2026 di `nscc-magnetscript`.
+Dokumen ini mencatat seluruh status implementasi, hasil verifikasi protokol SWF & live AMF, serta penggantian event Halloween ke Thanksgiving 2026 di `nscc-magnetscript`.
 
 ---
 
@@ -10,91 +10,45 @@ Dokumen ini mencatat seluruh status implementasi, log pengujian, dan rencana lan
 
 | Komponen / Gate | Status | Catatan & Bukti |
 |---|---|---|
-| Menu `nscc.bat` (Thanksgiving & Capture) | **SELESAI** | Menu 6 (Status, Auto Battle, Auto Mini-game, Full Event), Menu 7 (Live Capture Runtime AIR / Import `.saz`), serta integrasi menu Harian. |
-| Flag `ns_daily.js` | **SELESAI** | Tersedia `--with-thanksgiving-battle`, `--with-thanksgiving-minigame`, `--with-thanksgiving-full`. |
-| Multi-account `ns_multi_manager.js` | **SELESAI** | Tersedia opsi 8 (Battle), 9 (Mini-game), 10 (Full Event), sekuensial per karakter dengan cooldown akun. |
-| Runner dasar `ns_thanksgiving.js` | **SIAP (MENUNGGU PROTOKOL)** | Mendukung `status`, `battle` (rotasi 5 musuh), `minigame` (+ werewolf), `full`, tanpa parallel request dalam akun yang sama. |
-| Decoder AMF0/AMF3 & Parser HTTP | **SELESAI & LULUS TEST** | `lib/amf_decoder.js` mendukung AMF0, nested AMF3 (`0x11`), `Transfer-Encoding: chunked`, dan `gzip`/`deflate`/`br`. |
-| Importer & Analyzer Fiddler `.saz` | **SELESAI & LULUS TEST** | `lib/saz_reader.js` + `tools/import_thanksgiving_saz.js` membaca ZIP `.saz` tanpa dependency eksternal dan menganalisis pola hash/token (`sha1 + SALT + sessionKey`, `ucDecode`, field respons). |
-| Live Capture Runtime AIR | **SELESAI (SIAP DICOBA LIVE)** | `tools/capture_thanksgiving_amf.js` menggantikan CDP port 8088 dengan local HTTPS proxy `127.0.0.1:8888` khusus `amf.ninjasaga.cc` + backup/restore proxy Windows otomatis. |
-| `thanksgiving_event_config.json` | **BELUM TERISI (PLACEHOLDER)** | Sengaja dikosongkan; menunggu hasil capture asli (dilarang menebak endpoint). |
-| Kompatibilitas Runner Halloween | **AMAN / TIDAK RUSAK** | `ns_halloween.js` dan `ns_event.js` tidak diubah dan lolos `node -c`. |
+| Protokol AMF Thanksgiving (SWF Live + Live Server) | **TERVERIFIKASI** | Diekstrak langsung dari SWF live CDN (`Popup_Thanksgiving_2015_Menu.swf`, `thanksgiving_battle.swf`, `Panel_thanksgiving_2015_MinigameCover.swf`, `Popup_Thanksgiving_2015_mini_game.swf`, `code_library.swf`, `data_library_en.swf`) & diuji live pada `amf.ninjasaga.cc`. |
+| Konfigurasi `thanksgiving_event_config.json` | **SELESAI & AKTIF** | Berisi 5 enemy ID resmi (`enemy477`-`enemy481`), service status, battle, claim reward, dan mini-game Werewolf. |
+| Runner `ns_thanksgiving.js` | **SELESAI & LULUS UJI LIVE** | Mendukung `status`, `battle [max]`, `minigame [max]`, `full [maxBattle] [maxMini]`, `loop [mode]`, sekuensial per akun dengan retry cooldown & `ns_crypto`/`nscrypt` (`getHash`, `br`, `zrb`). |
+| Penggantian Event Halloween | **SELESAI** | `ns_event.js` (wrapper ke `ns_thanksgiving.js`), `ns_state.js` (cek status Battle Heart & Werewolf Bullet + material `item923`-`item925`), dan `README.md` telah diganti ke Thanksgiving 2026. |
+| Menu `nscc.bat`, `ns_daily.js`, `ns_multi_manager.js` | **SELESAI** | Menu 6 Thanksgiving, opsi Daily 4-6 (`--with-thanksgiving-*`), dan Multi-Account opsi 8-10 (`thanksgiving_*`). |
+| Test Suite & Syntax Check | **SELESAI & LULUS** | `npm run thanksgiving:test` (`ns_thanksgiving.test.js OK`), `nscrypt.js --test`, `ns_crypto.js --test`, dan `node -c` semua file terkait lulus. |
 
 ---
 
-## 2. Masalah Awal yang Ditemukan
+## 2. Protokol AMF Terverifikasi (Dari Live SWF & Live Server)
 
-1. `tools/capture_thanksgiving_amf.js` sebelumnya memakai Playwright CDP `http://127.0.0.1:8088`, sehingga `logs/thanksgiving_amf_capture.jsonl` kosong (`0 bytes`).
-2. `ninja_saga.exe` berjalan di runtime Adobe AIR dan mengirim traffic HTTPS langsung port `443` ke `amf.ninjasaga.cc`, di luar WebView CEF DevTools.
-3. File game lokal (`E:\game\Ninja Saga\files\swf` hanya berisi `skills`, dan `ninja_saga_game_decompiled` tidak memiliki modul event Thanksgiving 2026).
+1. **Menu Panel**: `Popup_Thanksgiving_2015_Menu.swf` (judul in-game `"Thanksgiving 2026"`) membuka `thanksgiving_battle.swf` dan `Panel_thanksgiving_2015_MinigameCover.swf` -> `Popup_Thanksgiving_2015_mini_game.swf`.
+2. **Status Event**:
+   - Battle: `Thanksgiving2015.getBattleStatus([sessionKey])` -> mengembalikan `result.remain_heart`, `result.heart_max`, `result.heart_refill_remain`, `z9f`.
+   - Mini-game Werewolf: `Thanksgiving2015.getMiniGameStatus([sessionKey])` -> mengembalikan `result.remain_heart` (Bullet), `result.heart_max`, `result.heart_refill_remain`.
+3. **Battle & Klaim Reward (2-Step)**:
+   - Rotasi 5 Boss:
+     - `enemy477` — `Giant Rainbow Turkey` (`item918`, `item925`)
+     - `enemy478` — `Monster Pumpkin` (`item919`, `item925`)
+     - `enemy479` — `Cranberry Fairy` (`item920`, `item925`)
+     - `enemy480` — `Human Face Yam` (`item921`, `item925`)
+     - `enemy481` — `Giant Corn Humanoid` (`item922`, `item925`)
+   - Step 1: `Thanksgiving2015.startBattle([sessionKey, enemyId, getHash(sessionKey, enemyId)])`
+   - Step 2: `ItemDAO.getBossReward([sessionKey, getHash(sessionKey, enemyId + '|0|token,0'), enemyId, 0, ['token', 0], '', '1', startBattleId, '{"battles":[]}', getHash(sessionKey, '1' + startBattleId + '{"battles":[]}'), br(enemyId + '~0~' + startBattleId), zrb(ivg, ivn)])`
+   - Reward server teramati: `+30.000 XP`, `+30.000 Gold`, bahan event (`item918`-`item922`), dan `Turkey Coin` (`item925`).
+4. **Mini-game Werewolf (2-Step)**:
+   - Step 1: `Thanksgiving2015.startMiniGame([sessionKey])`
+   - Step 2: `Thanksgiving2015.finishMiniGame([sessionKey, 0, 3, getHash(sessionKey, '03')])` (Stage 1-3 clear, `resultStatus = 0`)
+   - Reward mini-game pada cover: `item923` (`Wolf Teeth`), `item924` (`Gunpowder`), tukar skill `skill596` (`Kinjutsu: Gun Blasting`); drop item di `update_inventory.add_item_id` bersifat peluang (RNG).
 
 ---
 
 ## 3. Log Pengujian & Verifikasi (23 November 2026)
 
 - **Unit Test & Self-Test:**
-  - `npm run thanksgiving:test` (`node ns_thanksgiving.test.js`): **LULUS (`ns_thanksgiving.test.js OK`)** — menguji `parseStatus`, `renderParam`, `isConfigured`, `loadConfig` (5 nama musuh), decoder AMF0 & AMF3, parser HTTP `chunked` + `gzip`, pembaca `.saz` sintetis + deteksi formula `sha1` & `ucEncode`, parser `.jsonl`, dan argumen CLI capture.
+  - `npm run thanksgiving:test` (`node ns_thanksgiving.test.js`): **LULUS (`ns_thanksgiving.test.js OK`)** — memverifikasi `thanksgiving_event_config.json` (5 enemy ID + service), `parseCliArgs`, `summarizeBattleReward`, `formatTime`, `parseStatus`, decoder AMF0/AMF3, parser HTTP, pembaca `.saz`, dan deteksi crypto.
   - `node nscrypt.js --test`: **SEMUA LULUS**.
   - `node ns_crypto.js --test`: **SEMUA LULUS**.
-- **Syntax Check (`node -c`):**
-  - Lulus pada: `lib/amf_decoder.js`, `lib/saz_reader.js`, `tools/import_thanksgiving_saz.js`, `tools/capture_thanksgiving_amf.js`, `ns_thanksgiving.js`, `ns_halloween.js`, `ns_event.js`, `ns_daily.js`, `ns_multi_manager.js`.
-- **Uji Login & Runner dengan Akun `Mrmgnt1`:**
-  - `nsclient.js` login `Mrmgnt1`: **BERHASIL** (`chars count = 1`, slot 1: `00084612` — `Uzumaki Magnet`, Lv 100).
-  - `node ns_thanksgiving.js status` dengan `Mrmgnt1`: **BERHENTI AMAN** di validasi config (`exitCode = 1`, `FATAL Protokol Thanksgiving belum diisi. Jalankan capture lalu isi thanksgiving_event_config.json.`).
-  - Catatan: Saat inspeksi awal, terdeteksi `ninja_saga.exe` aktif (PID `16196`), namun belum ada capture transaksi Thanksgiving dari UI game.
-
----
-
-## 4. Plan Lanjutan (Untuk Besok)
-
-### Tahap 1 — Ambil Capture Traffic AMF Asli
-Pilih salah satu metode saat memainkan event Thanksgiving di `ninja_saga.exe` (pakai `Mrmgnt1`):
-- **Opsi A (Fiddler Classic `.saz` — paling aman jika AIR menolak cert lokal):**
-  1. Buka Fiddler Classic (HTTPS decryption aktif).
-  2. Jalankan `ninja_saga.exe`, login, masuk panel **Thanksgiving 2026**:
-     - Cek status event (lihat jumlah heart, ammo, kuota werewolf).
-     - Lawan 5 musuh masing-masing minimal 1x:
-       1. Giant Rainbow Turkey
-       2. Monster Pumpkin
-       3. Cranberry Fairy
-       4. Human Face Yam
-       5. Giant Corn Humanoid
-     - Jalankan Mini-game minimal 1x.
-     - Jalankan Misi Werewolf minimal 1x.
-  3. Simpan capture: `File -> Save -> All Sessions...` menjadi `.saz`.
-  4. Jalankan decoder:
-     ```bat
-     node tools\import_thanksgiving_saz.js path\ke\thanksgiving.saz
-     ```
-- **Opsi B (Live Proxy Lokal dari `nscc.bat`):**
-  1. Jalankan `nscc.bat` -> Menu `7` -> Opsi `1` (`node tools\capture_thanksgiving_amf.js`).
-  2. Setujui dialog pemasangan Root CA lokal jika muncul.
-  3. Restart/buka `ninja_saga.exe` dan lakukan urutan klik event di atas.
-  4. Tekan `Q` atau `Enter` di terminal capture untuk menyimpan `logs\thanksgiving_amf_capture.jsonl` dan `logs\thanksgiving_amf_decoded.json`.
-
-### Tahap 2 — Decode Protokol dari `logs/thanksgiving_amf_decoded.json`
-Ekstrak fakta dari hasil capture (tanpa menebak):
-1. Nama AMF service untuk status, battle, mini-game, dan werewolf (serta claim reward jika terpisah seperti `HalloweenEvent2016.startBattle` + `ItemDAO.getBossReward`).
-2. Urutan parameter tiap service.
-3. Formula hash/token/sequence (`sha1`, `zra`/`zrb`, `br`, `msk`/`urk`, `ucEncode`, `tokenBoss`/`tokenLog`, dll.).
-4. ID asli kelima musuh:
-   - Giant Rainbow Turkey
-   - Monster Pumpkin
-   - Cranberry Fairy
-   - Human Face Yam
-   - Giant Corn Humanoid
-5. Field respons server untuk `heart`, `heartMax`, `ammo`, `kuota/werewolf`, dan `reward` (plus `startBattleId` / `z9f` / `cooldown` jika ada).
-
-### Tahap 3 — Isi Konfigurasi & Sesuaikan Runner
-1. Isi `thanksgiving_event_config.json` sesuai hasil decode.
-2. Perbarui `ns_thanksgiving.js` jika ada:
-   - Langkah 2-step per battle/minigame/werewolf (`start` -> `claim`/`finish`),
-   - Perhitungan hash/token/sequence dinamis (`ns_crypto.js` / `nscrypt.js`),
-   - Jeda aman, retry cooldown, atau struktur `parseStatus` khusus.
-3. Pastikan tetap tidak ada parallel request dalam akun yang sama.
-4. Tambah unit test pada `ns_thanksgiving.test.js` untuk format payload & respons Thanksgiving yang sebenarnya.
-
-### Tahap 4 — Verifikasi Akhir
-1. Jalankan `npm run thanksgiving:test` dan `node -c` seluruh file terkait.
-2. Uji live `node ns_thanksgiving.js status` lalu 1 siklus uji pada `Mrmgnt1`.
-3. Pastikan `ns_halloween.js` dan `ns_event.js` tetap berjalan normal tanpa regresi.
+- **Uji Live dengan Akun `Mrmgnt1` (`00084612` — `Uzumaki Magnet`, Lv 100):**
+  - `node ns_state.js`: **BERHASIL** menampilkan `Thanksgiving Battle` & `Thanksgiving Werewolf` beserta material `item923`-`item925`.
+  - `node ns_thanksgiving.js full 1 1`: **BERHASIL** menjalankan 1x Battle (`Giant Rainbow Turkey` `enemy477`, reward `item918` + `item925` Turkey Coin + `30.000 XP` + `30.000 Gold`) dan 1x Mini-game Werewolf (`Stage 3 WIN`, Bullet berkurang normal `4/5 -> 3/5`).
+  - `node ns_event.js status`: **BERHASIL** menampilkan status Thanksgiving via wrapper `ns_event.js`.

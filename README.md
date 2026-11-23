@@ -22,12 +22,10 @@
   - Misi level tertinggi yang terbuka otomatis.
   - Exam otomatis: Chunin (Lv 20), Jounin (Lv 40), Special Jounin (Lv 60), Sennin (Lv 80 - 12 mode hard).
   - Misi Grade S Stage 1-5 (Lv 80+, 82k-100k XP per battle).
-- **Auto Halloween Event (`ns_halloween.js` & Scheduler)**:
-  - Panel Halloween_battle_2016 (Furious Zombie `enemy535` & 4 musuh lainnya).
-  - Eksekusi ultra cepat (~1-1.5 detik per match) dengan verifikasi token boss AMF langsung ke server.
-  - 100% Mengklaim Boss Reward: Heart of Kari (`item1027`), XP (+30.000), Gold (+30.000).
-  - Dukungan **Multiple Akun & Multi-Character** secara sekuensial dari `accounts.txt`.
-  - **Halloween Auto Match Scheduler**: berjalan terus di background, otomatis membaca timer refill server (`heart_refill_remain`), dan seketika Heart terisi langsung otomatis mulai match kembali!
+- **Auto Thanksgiving 2026 Event (`ns_thanksgiving.js` & Scheduler)**:
+  - Panel `Popup_Thanksgiving_2015_Menu` / `thanksgiving_battle` (rotasi 5 boss: `enemy477` Giant Rainbow Turkey, `enemy478` Monster Pumpkin, `enemy479` Cranberry Fairy, `enemy480` Human Face Yam, `enemy481` Giant Corn Humanoid) + Mini-game Werewolf (`Panel_thanksgiving_2015_MinigameCover` / `Popup_Thanksgiving_2015_mini_game`).
+  - Klaim reward resmi server: Battle (`item918`-`item922`, `item925` Turkey Coin, +30.000 XP, +30.000 Gold) dan Mini-game Werewolf (`item923` Wolf Teeth, `item924` Gunpowder).
+  - Mendukung mode `status`, `battle`, `minigame`, `full`, scheduler `loop`, serta multi-akun melalui `ns_multi_manager.js` (`thanksgiving_battle`, `thanksgiving_minigame`, `thanksgiving_full`).
 - **Auto Co-op Hunting Minotaur Extreme (`ns_coop_minotaur.js`)**:
   - Tiga akun unik: host round-robin, dua akun lain join; duplikat host/main digabung.
   - Captcha slider/drag melalui Edge masih eksperimental; rotate/grid berhenti tanpa menebak.
@@ -130,22 +128,25 @@ node ns_multi_manager.js house --delay 6
 node ns_multi_manager.js claim --delay 5
 ```
 
-#### Event Halloween Battle & Scheduler (`ns_halloween.js`):
+#### Thanksgiving 2026 Event & Scheduler (`ns_thanksgiving.js` / `ns_event.js`):
 ```cmd
-:: Jalankan akun aktif hingga Heart habis (Cepat & Claim Reward)
-node ns_halloween.js run
+:: Cek Status Battle Heart, Werewolf Bullet & Waktu Refill
+node ns_thanksgiving.js status
 
-:: Jalankan untuk SEMUA akun di accounts.txt
-node ns_halloween.js multi
+:: Jalankan Auto Battle (rotasi 5 musuh sampai Heart habis, atau maks N battle)
+node ns_thanksgiving.js battle
+node ns_thanksgiving.js battle 1
 
-:: Scheduler Loop Akun Aktif (Auto-Match terus tiap Heart terisi)
-node ns_halloween.js loop
+:: Jalankan Auto Mini-game Werewolf (sampai Bullet habis, atau maks N run)
+node ns_thanksgiving.js minigame
+node ns_thanksgiving.js minigame 1
 
-:: Scheduler Loop Multi-Akun (Auto-Match terus untuk semua akun di accounts.txt)
-node ns_halloween.js multi_loop
+:: Jalankan Full Event (1 Battle + 1 Mini-game Werewolf, atau habiskan semua)
+node ns_thanksgiving.js full 1 1
+node ns_thanksgiving.js full
 
-:: Cek Status Heart & Waktu Refill Saja
-node ns_halloween.js status
+:: Scheduler Loop Akun Aktif (otomatis tunggu timer refill lalu lanjut lagi)
+node ns_thanksgiving.js loop full
 ```
 
 

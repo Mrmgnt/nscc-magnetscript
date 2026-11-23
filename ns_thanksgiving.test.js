@@ -6,7 +6,7 @@ const os = require('os');
 const path = require('path');
 const zlib = require('zlib');
 
-const { parseStatus, renderParam, isConfigured, loadConfig } = require('./ns_thanksgiving.js');
+const { parseStatus, renderParam, isConfigured, loadConfig, parseCliArgs, summarizeBattleReward, formatTime } = require('./ns_thanksgiving.js');
 const { decodeAmfPacket, parseHttpMessage, dechunkHttpBody } = require('./lib/amf_decoder.js');
 const { readZipEntries, groupRawSessionEntries } = require('./lib/saz_reader.js');
 const { decodeSazFile, decodeJsonlCapture, inspectCryptoParam } = require('./tools/import_thanksgiving_saz.js');
@@ -120,6 +120,42 @@ assert.deepStrictEqual(
     cfg.enemies.map(e => e.name),
     ['Giant Rainbow Turkey', 'Monster Pumpkin', 'Cranberry Fairy', 'Human Face Yam', 'Giant Corn Humanoid']
 );
+assert.deepStrictEqual(
+    cfg.enemies.map(e => e.id),
+    ['enemy477', 'enemy478', 'enemy479', 'enemy480', 'enemy481']
+);
+assert.strictEqual(cfg.status.service, 'Thanksgiving2015.getBattleStatus');
+assert.strictEqual(cfg.miniGameStatus.service, 'Thanksgiving2015.getMiniGameStatus');
+assert.strictEqual(cfg.battle.service, 'Thanksgiving2015.startBattle');
+assert.strictEqual(cfg.battle.rewardService, 'ItemDAO.getBossReward');
+assert.strictEqual(cfg.minigame.service, 'Thanksgiving2015.startMiniGame');
+assert.strictEqual(cfg.minigame.finishService, 'Thanksgiving2015.finishMiniGame');
+assert.deepStrictEqual(parseCliArgs(['node', 'ns_thanksgiving.js', 'full', '1', '1']), {
+    mode: 'full',
+    subMode: '1',
+    maxBattles: 1,
+    maxMiniGames: 1,
+    enemyId: ''
+});
+assert.deepStrictEqual(parseCliArgs(['node', 'ns_thanksgiving.js', 'minigame', '--max-minigame', '2']), {
+    mode: 'minigame',
+    subMode: 'full',
+    maxBattles: null,
+    maxMiniGames: 2,
+    enemyId: ''
+});
+assert.deepStrictEqual(
+    summarizeBattleReward({ reward: ['xp_30000', 'gold_30000', 'item918', 'item925'], reward_get: ['item918', 'item925'] }, cfg),
+    {
+        xp: 30000,
+        gold: 30000,
+        items: ['Thanksgiving Limited (item918)', 'Turkey Coin (item925)'],
+        rawReward: ['xp_30000', 'gold_30000', 'item918', 'item925'],
+        rewardGet: ['item918', 'item925']
+    }
+);
+assert.strictEqual(formatTime(125), '2m 5s');
+assert.strictEqual(formatTime(45), '45s');
 
 // 2. Test AMF0 packet decoding (request + response + reference)
 const reqPktBuf = buildAmf0Packet('SampleService.doAction', '/1', ['gs_test123', 42, true, { a: 'x', b: null }]);

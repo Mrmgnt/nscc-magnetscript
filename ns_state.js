@@ -136,10 +136,11 @@ function countItemInString(rawStr, itemId) {
     // Hunting Passport & Material
     console.log(' Item & Material Penting:');
     console.log(`   - Hunting Passport (item509)   : ${tickets} Tiket`);
-    const kariHeart = mat[1027] !== undefined ? mat[1027] : (cur[1027] !== undefined ? cur[1027] : '-');
-    const kariCrystal = mat[1026] !== undefined ? mat[1026] : (cur[1026] !== undefined ? cur[1026] : '-');
-    console.log(`   - Heart of Kari (Item 1027)    : ${kariHeart}`);
-    console.log(`   - Crystal of Kari (Item 1026)  : ${kariCrystal}`);
+    const tgCoin = mat[925] !== undefined ? mat[925] : (cur[925] !== undefined ? cur[925] : '-');
+    const tgWolf = mat[923] !== undefined ? mat[923] : (cur[923] !== undefined ? cur[923] : '-');
+    const tgPowder = mat[924] !== undefined ? mat[924] : (cur[924] !== undefined ? cur[924] : '-');
+    console.log(`   - Turkey Coin (item925)        : ${tgCoin}`);
+    console.log(`   - Wolf Teeth (item923)         : ${tgWolf} | Gunpowder (item924): ${tgPowder}`);
 
     // Senjutsu Missions
     const mis = String(x.character_mission || '');
@@ -149,7 +150,7 @@ function countItemInString(rawStr, itemId) {
     const ssOut = ssMissions.map(m => `msn${m}: ${cariMsn(m)}`).join('  ');
     console.log(`   ${ssOut}`);
 
-    // Hunting House, Eudemon Dragon & Halloween Status
+    // Hunting House, Eudemon Dragon & Thanksgiving 2026 Status
     try {
         const hh = await c.amf('ItemDAO.getCharacterHuntingList', [s.sessionKey]);
         if (hh.body && Number(hh.body.status) === 1) {
@@ -168,15 +169,24 @@ function countItemInString(rawStr, itemId) {
     } catch (_) { }
 
     try {
-        const hw = await c.amf('HalloweenEvent2016.getBattleStatus', [s.sessionKey]);
-        if (hw.body && hw.body.result) {
-            const rHeart = hw.body.result.remain_heart || 0;
-            const mHeart = hw.body.result.heart_max || 8;
-            const rRefill = hw.body.result.heart_refill_remain || 0;
-            const m = Math.floor(rRefill / 60);
-            const sRemain = rRefill % 60;
-            const refillStr = m > 0 ? `${m}m ${sRemain}s` : `${sRemain}s`;
-            console.log(` Event Halloween: Sisa ${rHeart}/${mHeart} Hearts (Refill: ${refillStr}) | ${rHeart > 0 ? 'SIAP BATTLE' : 'Menunggu refill'}`);
+        const fmtSec = sec => {
+            const m = Math.floor(sec / 60);
+            const sRemain = sec % 60;
+            return m > 0 ? `${m}m ${sRemain}s` : `${sRemain}s`;
+        };
+        const tgBattle = await c.amf('Thanksgiving2015.getBattleStatus', [s.sessionKey]);
+        if (tgBattle.body && tgBattle.body.result) {
+            const rHeart = tgBattle.body.result.remain_heart || 0;
+            const mHeart = tgBattle.body.result.heart_max || 5;
+            const rRefill = tgBattle.body.result.heart_refill_remain || 0;
+            console.log(` Thanksgiving Battle  : Sisa ${rHeart}/${mHeart} Hearts (Refill: ${fmtSec(rRefill)}) | ${rHeart > 0 ? 'SIAP BATTLE' : 'Menunggu refill'}`);
+        }
+        const tgMini = await c.amf('Thanksgiving2015.getMiniGameStatus', [s.sessionKey]);
+        if (tgMini.body && tgMini.body.result) {
+            const rBullet = tgMini.body.result.remain_heart || 0;
+            const mBullet = tgMini.body.result.heart_max || 5;
+            const rRefill = tgMini.body.result.heart_refill_remain || 0;
+            console.log(` Thanksgiving Werewolf: Sisa ${rBullet}/${mBullet} Bullets (Refill: ${fmtSec(rRefill)}) | ${rBullet > 0 ? 'SIAP MINI-GAME' : 'Menunggu refill'}`);
         }
     } catch (_) { }
 

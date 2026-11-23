@@ -328,7 +328,7 @@ if "%TG_OPT%"=="3" node ns_thanksgiving.js minigame
 if "%TG_OPT%"=="4" node ns_thanksgiving.js full
 echo.
 pause
-goto MENU
+goto THANKSGIVING
 
 :THANKSGIVING_CAPTURE
 cls

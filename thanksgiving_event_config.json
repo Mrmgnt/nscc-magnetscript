@@ -1,15 +1,57 @@
 {
-  "version": 1,
-  "capturedAt": "",
-  "status": { "service": "", "params": [] },
-  "battle": { "service": "", "params": [] },
-  "minigame": { "service": "", "params": [] },
-  "werewolf": { "service": "", "params": [] },
+  "event": "thanksgiving-2026",
+  "panel": "Popup_Thanksgiving_2015_Menu",
+  "status": {
+    "service": "Thanksgiving2015.getBattleStatus",
+    "params": ["{sessionKey}"]
+  },
+  "battleStatus": {
+    "service": "Thanksgiving2015.getBattleStatus",
+    "params": ["{sessionKey}"]
+  },
+  "miniGameStatus": {
+    "service": "Thanksgiving2015.getMiniGameStatus",
+    "params": ["{sessionKey}"]
+  },
   "enemies": [
-    { "id": "", "name": "Giant Rainbow Turkey" },
-    { "id": "", "name": "Monster Pumpkin" },
-    { "id": "", "name": "Cranberry Fairy" },
-    { "id": "", "name": "Human Face Yam" },
-    { "id": "", "name": "Giant Corn Humanoid" }
-  ]
+    { "id": "enemy477", "name": "Giant Rainbow Turkey", "rewards": ["item918", "item925"] },
+    { "id": "enemy478", "name": "Monster Pumpkin", "rewards": ["item919", "item925"] },
+    { "id": "enemy479", "name": "Cranberry Fairy", "rewards": ["item920", "item925"] },
+    { "id": "enemy480", "name": "Human Face Yam", "rewards": ["item921", "item925"] },
+    { "id": "enemy481", "name": "Giant Corn Humanoid", "rewards": ["item922", "item925"] }
+  ],
+  "battle": {
+    "service": "Thanksgiving2015.startBattle",
+    "params": ["{sessionKey}", "{enemyId}", "{enemyHash}"],
+    "rewardService": "ItemDAO.getBossReward",
+    "eventBattleMethod": "token",
+    "fastDelayMs": 550,
+    "interDelayMs": 750
+  },
+  "minigame": {
+    "service": "Thanksgiving2015.startMiniGame",
+    "params": ["{sessionKey}"],
+    "finishService": "Thanksgiving2015.finishMiniGame",
+    "finishParams": ["{sessionKey}", 0, 3, "{finishHash}"],
+    "resultStatus": 0,
+    "stage": 3,
+    "fastDelayMs": 600,
+    "interDelayMs": 750
+  },
+  "werewolf": {
+    "service": "Thanksgiving2015.finishMiniGame",
+    "params": ["{sessionKey}", 0, 3, "{finishHash}"],
+    "resultStatus": 0,
+    "stage": 3
+  },
+  "materialNames": {
+    "item918": "Thanksgiving Limited",
+    "item919": "Pumpkin Piece",
+    "item920": "Cranberry",
+    "item921": "Sweet Yam",
+    "item922": "Sweet Corn",
+    "item923": "Wolf Teeth",
+    "item924": "Gunpowder",
+    "item925": "Turkey Coin"
+  }
 }
