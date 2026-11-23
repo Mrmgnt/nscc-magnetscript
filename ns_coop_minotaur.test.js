@@ -1,15 +1,36 @@
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const http = require('http');
+const crypto = require('crypto');
 const vm = require('vm');
 const assert = require('assert');
+const { formatCerberusReport, sendHermesReport } = require('./lib/ns_hermes_notify.js');
+const { PveSocket } = require('./lib/ns_pve_socket.js');
 const source = fs.readFileSync(path.join(__dirname, 'ns_coop_minotaur.js'), 'utf8');
 const cut = source.indexOf('\n(async () => {');
-const context = { module: { exports: {} }, require(name) { if (name === 'fs') return fs; if (name === 'path') return path; if (name === './nsclient.js') return {}; if (name.includes('ns_pve_socket')) return { PveSocket: {} }; if (name.includes('ns_pve_battle')) return { PveBattle: class {} }; throw new Error(name); }, console, process: { hrtime: process.hrtime }, setTimeout, clearTimeout };
-vm.runInNewContext(source.slice(0, cut) + '\nmodule.exports = { parseArgs, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, describeDeck, normCharId, idList, evaluateLevel };', context);
-const { parseArgs, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, describeDeck, normCharId, idList, evaluateLevel } = context.module.exports;
+const context = { module: { exports: {} }, require(name) { if (name === 'fs') return fs; if (name === 'os') return os; if (name === 'path') return path; if (name === './nsclient.js') return {}; if (name.includes('ns_pve_socket')) return { PveSocket: {} }; if (name.includes('ns_pve_battle')) return { PveBattle: class {} }; if (name.includes('ns_hermes_notify')) return { formatCerberusReport, sendHermesReport }; throw new Error(name); }, console, process: { hrtime: process.hrtime, env: {}, stdout: {} }, setTimeout, clearTimeout };
+vm.runInNewContext(source.slice(0, cut) + '\nmodule.exports = { parseArgs, resolveMinStartEnergy, acquireRunLock, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, describeDeck, normCharId, idList, evaluateLevel, handleBattlePreTurnStep, clearBattleTimers };', context);
+const { parseArgs, resolveMinStartEnergy, acquireRunLock, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, describeDeck, normCharId, idList, evaluateLevel, handleBattlePreTurnStep, clearBattleTimers } = context.module.exports;
 assert.equal(parseArgs([]).maxMatches, Infinity);
 assert.equal(parseArgs(['--max-matches', '2']).maxMatches, 2);
 assert.equal(parseArgs(['--host-room']).hostRoom, true);
+assert.deepEqual({ stb: parseArgs(['--stb']).stb, headless: parseArgs(['--stb']).headless, notify: parseArgs(['--stb']).notify, lock: parseArgs(['--stb']).lock }, { stb: true, headless: true, notify: true, lock: true });
+assert.equal(parseArgs(['--stb', '--headful', '--no-notify']).headless, false);
+assert.equal(parseArgs(['--stb', '--no-notify']).notify, false);
+assert.equal(parseArgs(['--half-energy']).minStartEnergy, 'auto');
+assert.equal(parseArgs(['--min-start-energy', 'auto']).minStartEnergy, 'auto');
+assert.equal(parseArgs(['--min-start-energy', '40']).minStartEnergy, 40);
+assert.equal(parseArgs(['--lock']).lock, true);
+assert.equal(resolveMinStartEnergy('auto', true), 50);
+assert.equal(resolveMinStartEnergy('auto', false), 25);
+assert.equal(resolveMinStartEnergy(40, true), 40);
+const testLockUser = 'test_lock_' + process.pid;
+const testLockFile = path.join(os.tmpdir(), `ns_pve_cerberus_${testLockUser}.lock`);
+const releaseTestLock = acquireRunLock({ username: testLockUser }, true);
+assert.equal(fs.existsSync(testLockFile), true);
+releaseTestLock();
+assert.equal(fs.existsSync(testLockFile), false);
 assert.equal(findQuestId([{ display_boss: ['enemy533'], quest_obj: [{ quest: 13, energy: [25, 5] }] }], 'cerberus', 'extreme').quest, 13);
 assert.equal(findQuestId([{ display_boss: ['enemy501'], quest_obj: [{ quest: 3, energy: [25, 5] }] }], 'minotaur', 'extreme').quest, 3);
 assert.equal(findQuestId([{ display_boss: ['enemy546'], quest_obj: [{ quest: 23, energy: [25, 5] }] }], 'griffin', 'extreme').quest, 23);
@@ -74,16 +95,68 @@ assert.ok(!Array.from({ length: 20 }, (_, i) => chooseCerberusTurn(razq, ['h'], 
 assert.equal(chooseCerberusTurn([], ['h'], 0).skill, null);
 assert.ok(describeDeck(razq).includes('defense=39,854'));
 const razqNamed = [
-    { id: '345', skillId: 'skill345', name: 'Kinjutsu Five Elements Consuming Seal', damage: 90 },
-    { id: '633', skillId: 'skill633', name: 'Kinjutsu Thunder Explosion', damage: 80 },
-    { id: '632', skillId: 'skill632', name: 'Electric Smash', damage: 70 },
-    { id: '900', skillId: 'skill900', name: 'Senjutsu Dragon Sublimation', damage: 60 },
-    { id: '901', skillId: 'skill901', name: 'Senjutsu Special Snakes Scales', damage: 50 },
-    { id: '854', skillId: 'skill854', name: 'Kinjutsu Advanced Aphrodite Blessing', damage: 40 },
-    { id: '39', skillId: 'skill39', name: 'Kinjutsu Evasion', damage: 30 },
-    { id: '652', skillId: 'skill652', name: 'Flute of God Killing', damage: 1000 },
+    { id: '345', skillId: 'skill345', action: 'skill', name: 'Kinjutsu Five Elements Consuming Seal', damage: 90 },
+    { id: '633', skillId: 'skill633', action: 'skill', name: 'Kinjutsu Thunder Explosion', damage: 80 },
+    { id: '629', skillId: 'skill629', action: 'skill', name: 'Kinjutsu Flame Armor', damage: 75 },
+    { id: '632', skillId: 'skill632', action: 'skill', name: 'Electric Smash', damage: 70 },
+    { id: '3110', skillId: 'skill3110', action: 'senjutsu', name: 'Senjutsu Dragon Sublimation', damage: 60 },
+    { id: '151', skillId: 'skill151', action: 'skill', name: 'Kinjutsu Dance of Fujin', damage: 50 },
+    { id: '854', skillId: 'skill854', action: 'skill', name: 'Kinjutsu Advanced Aphrodite Blessing', damage: 40 },
+    { id: '39', skillId: 'skill39', action: 'skill', name: 'Kinjutsu Evasion', damage: 30 },
+    { id: '652', skillId: 'skill652', action: 'skill', name: 'Flute of God Killing', damage: 1000 },
 ];
-assert.deepEqual(Array.from({ length: 5 }, (_, turn) => chooseQuickmatchTurn('Uchiha Razq', razqNamed, ['h'], turn).skill.skillId), ['skill345', 'skill633', 'skill632', 'skill900', 'skill901']);
-assert.deepEqual(Array.from({ length: 4 }, (_, turn) => chooseCerberusTurn(razqNamed, ['h'], turn, 'Uchiha Razq').skill.skillId), ['skill39', 'skill633', 'skill632', 'skill854']);
+assert.deepEqual(
+    Array.from({ length: 9 }, (_, turn) => chooseQuickmatchTurn('Uchiha Razq', razqNamed, ['h'], turn).skill.skillId),
+    ['skill345', 'skill633', 'skill629', 'skill632', 'skill3110', 'skill151', 'skill854', 'skill345', 'skill633']
+);
+assert.equal(chooseQuickmatchTurn('Uchiha Razq', razqNamed, ['h'], 4).skill.action, 'senjutsu');
+assert.deepEqual(
+    Array.from({ length: 10 }, (_, turn) => chooseCerberusTurn(razqNamed, ['h'], turn, 'Uchiha Razq').skill.skillId),
+    ['skill39', 'skill345', 'skill633', 'skill629', 'skill632', 'skill854', 'skill3110', 'skill151', 'skill39', 'skill345']
+);
+assert.equal(chooseCerberusTurn(razqNamed, ['h'], 6, 'Uchiha Razq').skill.action, 'senjutsu');
 assert.equal(chooseQuickmatchTurn('Other', [{ id: '652', skillId: 'skill652', damage: 999 }, { id: '22', skillId: 'skill22', damage: 10 }], ['h'], 0).skill.skillId, 'skill22');
+const sent = [];
+const fakeSock = {
+    battleInit: () => sent.push('init'),
+    battleReady: () => sent.push('ready'),
+    startAtb: cid => sent.push(['start_atb', cid]),
+    actionReady: cid => sent.push(['action_ready', cid]),
+    actionFinish: (dead, cid) => sent.push(['action_finish', dead, cid]),
+};
+const activeSim = { done: false, battle: { battleCharId: '84542' } };
+assert.equal(handleBattlePreTurnStep(fakeSock, activeSim, { type: 'init' }), true);
+assert.equal(handleBattlePreTurnStep(fakeSock, activeSim, { type: 'ready' }), true);
+assert.equal(handleBattlePreTurnStep(fakeSock, activeSim, { type: 'ready' }), true);
+assert.equal(handleBattlePreTurnStep(fakeSock, activeSim, { type: 'startAtb' }), true);
+assert.equal(handleBattlePreTurnStep(fakeSock, activeSim, { type: 'actionReady' }), true);
+assert.equal(handleBattlePreTurnStep(fakeSock, activeSim, { type: 'actionFinish', charDead: false }), true);
+assert.deepEqual(sent, ['init', 'ready', ['start_atb', '84542'], ['action_ready', '84542'], ['action_finish', false, '84542']]);
+clearBattleTimers(activeSim);
+const sentCmds = [];
+const mockPveSock = new PveSocket({ charId: '00084542' });
+mockPveSock.sendBattleMessage = m => sentCmds.push(m);
+mockPveSock.battleCommand('84542', 'senjutsu', 'skill3110', '5331');
+mockPveSock.battleCommand('84542', 'skill', 'skill345', '5331');
+assert.deepEqual(sentCmds[0], { event: 'info', state: 'battle_command', charId: '84542', battleAction: { action: 'senjutsu', SENSKILLID: 'skill3110' }, targetId: '5331' });
+assert.deepEqual(sentCmds[1], { event: 'info', state: 'battle_command', charId: '84542', battleAction: { action: 'skill', skillId: 'skill345' }, targetId: '5331' });
 console.log('OK: cerberus host roster, level filter, per-account skill planning');
+const waPayload = formatCerberusReport({ mode: 'public-room', account: 'Mrmgnt', matches: [{ outcome: 'battle_win', reward: { 84542: ['gold46000'] } }] }, { charName: 'Uchiha Razq', energyStart: 100, energyEnd: 0, stopReason: 'Energy habis (0 < 5)' });
+assert.equal(waPayload.status, '✅ SUCCESS');
+assert.ok(waPayload.summary.includes('Energy: 100 -> 0'));
+assert.ok(waPayload.summary.includes('gold46000'));
+(async () => {
+    let seenSig = '', seenBody = '';
+    const srv = http.createServer((req, res) => {
+        seenSig = req.headers['x-hub-signature-256'];
+        req.on('data', c => { seenBody += c; });
+        req.on('end', () => { res.writeHead(200); res.end('ok'); });
+    });
+    await new Promise(r => srv.listen(0, '127.0.0.1', r));
+    const port = srv.address().port;
+    const delivery = await sendHermesReport(waPayload, { url: `http://127.0.0.1:${port}/webhooks/agent-task-reports`, secret: 'testsecret' });
+    srv.close();
+    assert.equal(delivery.ok, true);
+    assert.equal(seenSig, 'sha256=' + crypto.createHmac('sha256', 'testsecret').update(seenBody).digest('hex'));
+    console.log('OK: STB flags & Hermes WhatsApp HMAC webhook delivery');
+})();

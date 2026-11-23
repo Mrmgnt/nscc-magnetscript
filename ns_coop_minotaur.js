@@ -6,25 +6,61 @@
  * live target and skill mappings are captured and verified.
  */
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const c = require('./nsclient.js');
 const { PveSocket } = require('./lib/ns_pve_socket.js');
 const { PveBattle } = require('./lib/ns_pve_battle.js');
+const { sendHermesReport, formatCerberusReport } = require('./lib/ns_hermes_notify.js');
 
-const line = message => console.log(message);
+const USE_COLOR = Boolean(process && process.stdout && process.stdout.isTTY);
+function nowTime() {
+    const d = new Date();
+    const p = v => String(v).padStart(2, '0');
+    return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+function paint(code, text) { return USE_COLOR ? `\x1b[${code}m${text}\x1b[0m` : text; }
+function formatLogLine(message) {
+    const raw = String(message ?? '');
+    const trimmed = raw.trim();
+    if (!trimmed) return '';
+    let color = '37';
+    if (/\b(WIN|OK|terkirim|CAPTCHA OK)\b/i.test(trimmed)) color = '1;32';
+    else if (/\b(LOSE|STOP:|ERROR|gagal|ditolak|putus|terputus)\b/i.test(trimmed)) color = '1;31';
+    else if (/\b(START|READY|HOST|QUICKMATCH|DECK|CREATE ROOM|HERMES)\b/i.test(trimmed)) color = '1;36';
+    else if (/\b(CAPTCHA|captcha:)\b/i.test(trimmed)) color = '35';
+    else if (/\b(JOIN|WAIT|VALID|KICK|LEAVE|ROOM|SERVER|SKIP)\b/i.test(trimmed)) color = '33';
+    else if (/\b(SKILL|TURN|RECV|SENT)\b/i.test(trimmed)) color = '34';
+    else if (/\bREFRESH\b/i.test(trimmed)) color = '90';
+    return `${paint('90', '[' + nowTime() + ']')}  ${paint(color, trimmed)}`;
+}
+const line = message => {
+    const out = formatLogLine(message);
+    if (!out) { console.log(''); return; }
+    console.log(out);
+};
+const divider = label => {
+    console.log('');
+    if (label) console.log(paint('90', '---------------------------------------------------------------------- ' + label));
+    else console.log(paint('90', '----------------------------------------------------------------------'));
+};
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 // Live room list maps public Co-op bosses to their enemy IDs.
 const BOSS_ENEMY_ID = { minotaur: 'enemy501', cerberus: 'enemy533', griffin: 'enemy546', wanyudo: 'enemy561', gashadokuro: 'enemy570' };
 const LEVEL_INDEX = { normal: 1, hard: 2, extreme: 3, extream: 3 };
-const AUTO_SKILL_PRIORITY = ['633', '632', '638', '623', '728', '345', '854', '151', '39'];
+const AUTO_SKILL_PRIORITY = ['633', '632', '638', '623', '728', '345', '629', '854', '151', '39'];
 const AOE_SKILL_IDS = String((process.env && process.env.NS_COOP_AOE_SKILL_IDS) || '632,638,623,728').split(',').map(id => id.trim()).filter(Boolean);
 const STUN_SKILL_ID = String((process.env && process.env.NS_COOP_STUN_SKILL_ID) || '345').trim();
 
 function parseArgs(argv) {
+    const envNotify = process.env && (process.env.NS_HERMES_NOTIFY === '1' || Boolean(process.env.HERMES_NOTIFY_URL));
     const args = {
         boss: 'cerberus', level: 'extreme', accounts: 'coop_accounts.txt', maxMatches: Infinity,
-        roomPollMs: 1500, hostStartTimeout: 180000, minLevel: 80, hostWait: 1800000, startTimeout: 60000, dryRun: false, captureBattle: false, hostRoom: false, headful: false,
+        roomPollMs: 1500, hostStartTimeout: 180000, minLevel: 80, hostWait: 1800000, startTimeout: 60000,
+        dryRun: false, captureBattle: false, hostRoom: false, headful: false, headless: false, stb: false,
+        notify: envNotify, minStartEnergy: null, lock: false,
     };
+    let explicitNotify = null;
     for (let i = 0; i < argv.length; i++) {
         const key = argv[i];
         if (key === '--boss') args.boss = argv[++i];
@@ -40,13 +76,111 @@ function parseArgs(argv) {
         else if (key === '--capture-battle') args.captureBattle = true;
         else if (key === '--host-room') args.hostRoom = true;
         else if (key === '--headful') args.headful = true;
+        else if (key === '--headless') args.headless = true;
+        else if (key === '--stb') { args.stb = true; args.headless = true; args.lock = true; if (explicitNotify === null) explicitNotify = true; }
+        else if (key === '--notify') explicitNotify = true;
+        else if (key === '--no-notify') explicitNotify = false;
+        else if (key === '--half-energy') args.minStartEnergy = 'auto';
+        else if (key === '--min-start-energy') {
+            const raw = String(argv[++i] || '').trim().toLowerCase();
+            args.minStartEnergy = raw === 'auto' ? 'auto' : Number(raw);
+        }
+        else if (key === '--lock') args.lock = true;
         else throw new Error('Argumen tidak dikenal: ' + key);
+    }
+    if (explicitNotify !== null) args.notify = explicitNotify;
+    if (args.headful) args.headless = false;
+    if (args.minStartEnergy !== null && args.minStartEnergy !== 'auto' && (!(args.minStartEnergy > 0) || !Number.isFinite(args.minStartEnergy))) {
+        throw new Error('--min-start-energy harus angka positif atau auto.');
     }
     if (!(args.maxMatches > 0) || (!Number.isFinite(args.maxMatches) && args.maxMatches !== Infinity)) throw new Error('--max-matches harus angka positif.');
     for (const [key, value] of [['--room-poll-ms', args.roomPollMs], ['--host-start-timeout', args.hostStartTimeout], ['--min-level', args.minLevel], ['--host-wait', args.hostWait], ['--start-timeout', args.startTimeout]]) {
         if (!(value > 0) || !Number.isFinite(value)) throw new Error(key + ' harus angka positif.');
     }
     return args;
+}
+
+function resolveMinStartEnergy(spec, isEmblem) {
+    if (spec === null || spec === undefined) return 0;
+    if (spec === 'auto') return isEmblem ? 50 : 25;
+    return Number(spec) || 0;
+}
+
+function acquireRunLock(account, enabled) {
+    if (!enabled) return () => {};
+    const safeUser = String(account && account.username || 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const lockFile = path.join(os.tmpdir(), `ns_pve_cerberus_${safeUser}.lock`);
+    if (fs.existsSync(lockFile)) {
+        try {
+            const oldPid = Number(fs.readFileSync(lockFile, 'utf8').trim());
+            if (oldPid && oldPid !== process.pid) {
+                process.kill(oldPid, 0);
+                throw new Error('SKIP: proses Cerberus lain masih berjalan (PID ' + oldPid + ').');
+            }
+        } catch (err) {
+            if (err && String(err.message || '').startsWith('SKIP:')) throw err;
+        }
+    }
+    fs.writeFileSync(lockFile, String(process.pid));
+    return () => { try { if (fs.existsSync(lockFile)) fs.unlinkSync(lockFile); } catch (_) {} };
+}
+
+async function checkPreRunEnergyGate(args, account) {
+    if (args.minStartEnergy === null || args.minStartEnergy === undefined || args.dryRun) return true;
+    const session = await c.login(account.username, account.password);
+    if (!session || !session.ok) throw new Error('Login gagal saat cek energy: ' + ((session && session.message) || 'unknown'));
+    const pve = await readPveInit(session);
+    if (!pve || !Number.isFinite(pve.energy)) throw new Error('Gagal membaca energy akun.');
+    const threshold = resolveMinStartEnergy(args.minStartEnergy, session.isEmblem);
+    if (pve.energy < threshold) {
+        line('SKIP: Energy saat ini ' + pve.energy + ' (< minimal setengah ' + threshold + '). Tunggu refill berikutnya.');
+        return false;
+    }
+    line('OK ENERGY: ' + pve.energy + ' >= minimal ' + threshold + '; lanjut jalankan Cerberus.');
+    return true;
+}
+
+function createSolverSession(args, account, logFn) {
+    const { CaptchaSolver } = require('./lib/ns_captcha_solver.js');
+    const solver = new CaptchaSolver({
+        headful: args.headful,
+        headless: args.headless && !args.headful,
+        log: logFn,
+        username: account.username,
+        password: account.password,
+    });
+    let opened = false;
+    return {
+        solver,
+        async ensure() {
+            if (opened) return;
+            await solver.open();
+            opened = true;
+        },
+        async releaseIfStb() {
+            if (!args.stb || !opened) return;
+            await solver.releaseBrowser();
+            opened = false;
+        },
+        async close() {
+            opened = false;
+            await solver.close();
+        },
+    };
+}
+
+async function notifyCerberusSummary(args, report, meta, logFn) {
+    if (!args || !args.notify) return;
+    try {
+        const payload = formatCerberusReport(report, meta);
+        const res = await sendHermesReport(payload);
+        if (logFn) {
+            if (res && res.ok) logFn('  HERMES WA report terkirim (HTTP ' + res.status + ')');
+            else logFn('  HERMES WA report gagal: ' + ((res && (res.error || ('HTTP ' + res.status))) || 'unknown'));
+        }
+    } catch (err) {
+        if (logFn) logFn('  HERMES WA report gagal: ' + (err && err.message || err));
+    }
 }
 
 function parseAccountsFile(file, requiredCount = 1) {
@@ -116,14 +250,53 @@ async function loginAccount(account, webData) {
         const skillDetails = new Map(rawSkills.map(raw => {
             const id = String(raw && typeof raw === 'object' ? (raw.skill_id ?? raw.skillId ?? raw.id ?? raw.value) : raw);
             const name = raw && typeof raw === 'object' ? String(raw.skill_name ?? raw.skillName ?? raw.name ?? raw.title ?? '') : '';
-            return [id, { id, name }];
+            return [id, { id, name, action: 'skill' }];
         }));
+        let senjutsuList = Array.isArray(data.senjutsu) ? data.senjutsu : [];
+        if (detail && detail.body && detail.body.gk && typeof c.getExtraDataWithRetry === 'function') {
+            try {
+                const exRes = await c.getExtraDataWithRetry(session.sessionKey, row[0], session.token, detail.body.gk, 3);
+                if (exRes && exRes.ok && exRes.result && Array.isArray(exRes.result.senjutsu)) {
+                    senjutsuList = exRes.result.senjutsu;
+                }
+            } catch (_) {}
+        }
+        const senjutsuIds = new Set();
+        for (const raw of senjutsuList) {
+            const id = String(raw && typeof raw === 'object' ? (raw.skill_id ?? raw.skillId ?? raw.id ?? '') : raw || '');
+            if (!id) continue;
+            senjutsuIds.add(id);
+            const name = raw && typeof raw === 'object' ? String(raw.skill_name ?? raw.skillName ?? raw.name ?? raw.title ?? '') : '';
+            if (!skillDetails.has(id)) {
+                skillDetails.set(id, { id, name: name || (id === '3110' ? 'Senjutsu: Dragon Sublimation' : ''), action: 'senjutsu' });
+            } else {
+                const cur = skillDetails.get(id);
+                cur.action = 'senjutsu';
+                if (!cur.name && name) cur.name = name;
+            }
+        }
+        const rawEquipped = (data.character_equipped_skills || []).map(String);
+        for (const id of rawEquipped) {
+            if (Number(id) >= 3100 && !skillDetails.has(id)) {
+                senjutsuIds.add(id);
+                skillDetails.set(id, { id, name: id === '3110' ? 'Senjutsu: Dragon Sublimation' : '', action: 'senjutsu' });
+            }
+        }
         const owned = new Set(skillDetails.keys());
-        const equipped = (data.character_equipped_skills || []).map(String).filter(id => owned.has(id));
-        const ordered = [...AUTO_SKILL_PRIORITY.filter(id => owned.has(id)), ...equipped.filter(id => !AUTO_SKILL_PRIORITY.includes(id))];
-        skills = [...new Set(ordered)].map((id, index) => ({ skillId: 'skill' + id, id, name: (skillDetails.get(id) || {}).name || '', damage: 1000 - index, once: id === '2004' }));
+        const equipped = rawEquipped.filter(id => owned.has(id));
+        const ordered = [
+            ...AUTO_SKILL_PRIORITY.filter(id => owned.has(id)),
+            ...equipped.filter(id => !AUTO_SKILL_PRIORITY.includes(id)),
+            ...[...senjutsuIds].filter(id => !AUTO_SKILL_PRIORITY.includes(id) && !equipped.includes(id)),
+        ];
+        const toEntry = (id, damage) => {
+            const info = skillDetails.get(id) || {};
+            const action = info.action || (senjutsuIds.has(id) ? 'senjutsu' : 'skill');
+            return { skillId: 'skill' + id, id, name: info.name || '', action, damage, once: id === '2004' };
+        };
+        skills = [...new Set(ordered)].map((id, index) => toEntry(id, 1000 - index));
         // Default in-game deck (same source as PvP arena script); Cerberus host mode ranks it per role.
-        equippedDeck = [...new Set(equipped)].map(id => ({ skillId: 'skill' + id, id, name: (skillDetails.get(id) || {}).name || '' }));
+        equippedDeck = [...new Set(equipped)].map(id => toEntry(id, undefined));
     } catch (_) {}
     return {
         ok: true, session, charId: String(row[0]), charName: row[1], level: Number(row[2]) || null,
@@ -173,7 +346,7 @@ function normalizeRoom(raw, questId) {
 }
 function findRoomMaster(data, rawPlayers, players) {
     const masterId = data && (data.master_id ?? data.masterId ?? data.host_id ?? data.hostId ?? data.owner_id ?? data.ownerId ?? data.room_master_id ?? data.roomMasterId);
-    if (masterId != null) return (players || []).find(player => player.charId === String(masterId)) || null;
+    if (masterId != null) return (players || []).find(player => normCharId(player.charId) === normCharId(masterId)) || null;
     const index = (rawPlayers || []).findIndex(player => player && typeof player === 'object' && Boolean(player.is_master ?? player.isMaster ?? player.is_host ?? player.isHost ?? player.is_owner ?? player.isOwner));
     return (players || [])[index >= 0 ? index : 0] || null;
 }
@@ -194,7 +367,8 @@ function pickRoom(rooms, questId, botCharId, blockedRoomIds = new Set()) {
         if (!room.schemaComplete) { evaluated.push({ roomId: room.id, reason: 'verify_after_join', room, otherEmblems: null }); continue; }
         const master = findRoomMaster(room.raw, room.raw.character_array || room.raw.characters || room.raw.players || [], room.players);
         if (!master || !(master.level >= 80)) { evaluated.push({ roomId: room.id, reason: master && master.level != null ? 'master_level_' + master.level : 'master_level_unknown' }); continue; }
-        const otherEmblems = room.players.filter(player => player.charId !== String(botCharId) && player.isEmblem).length;
+        const botNorm = normCharId(botCharId);
+        const otherEmblems = room.players.filter(player => normCharId(player.charId) !== botNorm && player.isEmblem).length;
         if (otherEmblems < 1) { evaluated.push({ roomId: room.id, reason: 'need_second_emblem' }); continue; }
         evaluated.push({ roomId: room.id, reason: 'accepted', room, otherEmblems });
     }
@@ -214,15 +388,61 @@ function scanSummary(evaluated) {
 }
 function countOtherEmblems(players, botCharId) {
     const ids = new Set();
+    const botNorm = normCharId(botCharId);
     let count = 0;
     for (const player of players || []) {
-        if (!player || player.charId === String(botCharId) || ids.has(player.charId)) continue;
-        ids.add(player.charId);
+        const pid = normCharId(player && player.charId);
+        if (!player || !pid || pid === botNorm || ids.has(pid)) continue;
+        ids.add(pid);
         if (player.isEmblem) count++;
     }
     return count;
 }
 function roomArray(data) { return data && (data.room_array || data.rooms || data.roomArray); }
+function clearBattleTimers(active) {
+    if (active && active.initFallbackTimer) {
+        clearTimeout(active.initFallbackTimer);
+        active.initFallbackTimer = null;
+    }
+}
+function sendBattleReadyOnce(socket, active, logFn) {
+    clearBattleTimers(active);
+    if (!active || active.done || active.battleReadySent) return;
+    active.battleReadySent = true;
+    socket.battleReady();
+    if (logFn) logFn('SENT battle_ready');
+}
+function handleBattlePreTurnStep(socket, active, step, logFn) {
+    if (step.type === 'init') {
+        if (!active.battleInitSent) {
+            active.battleInitSent = true;
+            socket.battleInit();
+            if (logFn) logFn('SENT battle_init');
+            clearBattleTimers(active);
+            active.initFallbackTimer = setTimeout(() => {
+                if (active && !active.done && !active.battleReadySent && !active.atbStarted) {
+                    sendBattleReadyOnce(socket, active, msg => logFn && logFn(msg + ' (fallback)'));
+                }
+            }, 1200);
+        }
+        return true;
+    }
+    if (step.type === 'ready') {
+        sendBattleReadyOnce(socket, active, logFn);
+        return true;
+    }
+    if (step.type === 'startAtb') {
+        active.atbStarted = true;
+        clearBattleTimers(active);
+        const cid = active && active.battle && active.battle.battleCharId;
+        socket.startAtb(cid);
+        if (logFn) logFn('SENT start_atb');
+        return true;
+    }
+    if (step.type === 'actionReady') { socket.actionReady(active && active.battle && active.battle.battleCharId); return true; }
+    if (step.type === 'actionFinish') { socket.actionFinish(step.charDead, active && active.battle && active.battle.battleCharId); return true; }
+    return false;
+}
 function messageValue(raw) {
     const message = raw && raw.message ? raw.message : raw;
     if (typeof message !== 'string') return message;
@@ -242,20 +462,25 @@ function rankedSkills(skills, excludedIds = []) {
         .filter(skill => !excluded.has(String(skill.id)) && !AVOID_SKILLS.has(String(skill.id)))
         .sort((left, right) => (Number(right.damage) || 0) - (Number(left.damage) || 0));
 }
+function cycleSequenceTurn(sequence, skills, head, turn, priorityLabel, fallbackLabel) {
+    if (sequence.length) return { skill: sequence[turn % sequence.length], targetId: head, label: priorityLabel };
+    const fallback = rankedSkills(skills);
+    const skill = fallback.length ? fallback[turn % fallback.length] : null;
+    return skill ? { skill, targetId: head, label: fallbackLabel } : { skill: null, targetId: head, label: 'weapon' };
+}
 function chooseQuickmatchTurn(charName, skills, enemyIds, turn) {
     const head = enemyIds && enemyIds[0];
     if (isUchihaRazq(charName)) {
         const sequence = [
             pickNamedSkill(skills, ['five element consuming seal', 'five elements seal'], '345'),
             pickNamedSkill(skills, ['thunder explosion'], '633'),
+            pickNamedSkill(skills, ['flame armor'], '629'),
             pickNamedSkill(skills, ['electric smash'], '632'),
-            pickNamedSkill(skills, ['dragon sublimation']),
-            pickNamedSkill(skills, ['special snakes scales', 'special snake scales']),
+            pickNamedSkill(skills, ['dragon sublimation'], '3110'),
+            pickNamedSkill(skills, ['dance of fujin'], '151'),
+            pickNamedSkill(skills, ['advanced aphrodite s blessing', 'aphrodite s blessing'], '854'),
         ].filter(Boolean);
-        if (turn < sequence.length) return { skill: sequence[turn], targetId: head, label: 'razq_priority' };
-        const fallback = rankedSkills(skills, sequence.map(skill => skill.id));
-        const skill = fallback.length ? fallback[(turn - sequence.length) % fallback.length] : sequence.at(-1);
-        return skill ? { skill, targetId: head, label: 'razq_fallback' } : { skill: null, targetId: head, label: 'weapon' };
+        return cycleSequenceTurn(sequence, skills, head, turn, 'razq_priority', 'razq_fallback');
     }
     const fallback = rankedSkills(skills, ['2004']);
     const skill = fallback.length ? fallback[turn % fallback.length] : pickSkill(skills, '2004');
@@ -318,29 +543,31 @@ async function runDryRun(args, account) {
 
 async function runLive(args, account) {
     if (String(args.boss).toLowerCase() !== 'cerberus') throw new Error('Quickmatch hanya mendukung boss Cerberus.');
-    const { CaptchaSolver } = require('./lib/ns_captcha_solver.js');
-    const solver = new CaptchaSolver({ headful: args.headful, log: line, username: account.username, password: account.password });
-    let solverOpened = false;
-    const ensureSolver = async () => {
-        if (solverOpened) return;
-        await solver.open();
-        solverOpened = true;
-    };
+    const solverSession = createSolverSession(args, account, line);
+    const { solver } = solverSession;
     let socket = null;
     const report = { generatedAt: new Date().toISOString(), mode: 'public-room', account: account.username, matches: [], scans: [], error: null };
+    const meta = { charName: account.username, energyStart: null, energyEnd: null, stopReason: null };
     const saveReport = () => fs.writeFileSync(path.join(process.cwd(), 'coop_report.json'), JSON.stringify(report, null, 2));
     try {
         // Web login binds CAPTCHA solver and PvE socket to same account session.
-        await ensureSolver();
+        await solverSession.ensure();
         const result = await loginAccount(account, solver.webLoginData);
+        await solverSession.releaseIfStb();
         if (!result.ok) throw new Error('Login gagal: ' + result.error);
+        meta.charName = result.charName || account.username;
         const pve = await readPveInit(result.session);
         const quest = pve && findQuestId(pve.questList, args.boss, args.level);
         if (!pve || !quest || !pve.pvpServer || !pve.pvpServer[0]) throw new Error('PvE boss Extreme tidak tersedia.');
         if (!result.skills.length) throw new Error('Skill karakter tidak terbaca; battle otomatis dihentikan.');
+        const botId = normCharId(result.charId);
+        meta.energyStart = Number(pve.energy);
+        meta.energyEnd = Number(pve.energy);
+        divider('AKUN & DECK');
+        line('  QUICKMATCH ' + result.charName + ' Lv' + result.level + ' ID=' + botId + ' energy=' + pve.energy + ' skills=' + result.skills.map(s => s.id + (s.action === 'senjutsu' ? '(senjutsu)' : '')).join(','));
         const joinCost = Number(quest.energy[1]);
         if (!(joinCost > 0)) throw new Error('Biaya energy join tidak valid.');
-        socket = await connectPve({ server: pve.pvpServer[0], sessionKey: result.session.sessionKey, charId: result.charId, handoffToken: pve.handoffToken, handoffNonce: pve.handoffNonce, ver: pve.ver });
+        socket = await connectPve({ server: pve.pvpServer[0], sessionKey: result.session.sessionKey, charId: botId, handoffToken: pve.handoffToken, handoffNonce: pve.handoffNonce, ver: pve.ver });
 
         let rooms = null;
         let active = null;
@@ -360,6 +587,7 @@ async function runLive(args, account) {
         const resetActive = reason => {
             if (!active) return;
             if (joinRejectTimer) { clearTimeout(joinRejectTimer); joinRejectTimer = null; }
+            clearBattleTimers(active);
             active.reason = active.reason || reason;
             active.done = true;
         };
@@ -371,9 +599,19 @@ async function runLive(args, account) {
                 if (active && !active.done && !active.joinAccepted) resetActive(reason);
             }, timeoutMs);
         };
-        socket.on('error', () => { fatal = fatal || new Error('Socket error'); });
-        socket.on('si_error', () => { fatal = fatal || new Error('Socket.IO error'); });
-        socket.on('close', () => { if (!fatal) fatal = new Error('Socket terputus'); });
+        socket.on('error', err => {
+            const msg = err && err.message ? err.message : 'Socket error';
+            fatal = fatal || new Error('Socket error: ' + msg);
+        });
+        socket.on('si_error', sp => {
+            fatal = fatal || new Error('Socket.IO error: ' + JSON.stringify(sp && sp.data));
+        });
+        socket.on('si_disconnect', () => {
+            if (!fatal) fatal = new Error('Socket.IO terputus oleh server');
+        });
+        socket.on('close', (code, reason) => {
+            if (!fatal) fatal = new Error('Socket terputus (code=' + (code ?? '?') + (reason ? ', ' + reason : '') + ')');
+        });
         socket.on('get_room_summary', data => {
             rooms = roomArray(data);
         });
@@ -384,7 +622,7 @@ async function runLive(args, account) {
             if (++captchaAttempts > 2) { fatal = new Error('CAPTCHA berulang; berhenti agar akun tidak terkunci.'); return; }
             solvingCaptcha = true;
             line('  #' + active.match + ' CAPTCHA verifikasi join...');
-            solver.solve('pve').then(async outcome => {
+            solverSession.ensure().then(() => solver.solve('pve')).then(async outcome => {
                 const decision = captchaRetryDecision(outcome);
                 if (decision.action === 'stop') {
                     fatal = new Error('CAPTCHA ditolak server. fails_left=' + (decision.failsLeft == null ? 'unknown' : decision.failsLeft) + '. Selesaikan manual sebelum lanjut.');
@@ -407,11 +645,14 @@ async function runLive(args, account) {
                 watchJoinResponse('captcha_join_timeout', 12000);
             }).catch(error => {
                 resetActive('captcha_error:' + String(error.message || error).slice(0, 80));
-            }).finally(() => { solvingCaptcha = false; });
+            }).finally(async () => {
+                await solverSession.releaseIfStb();
+                solvingCaptcha = false;
+            });
         });
         const applyRoster = async data => {
-            if (!active || active.done || !data) return false;
-            const raw = data.character_array || data.characters || data.players;
+            if (!active || active.done || active.started || !data) return false;
+            const raw = data.character_array || data.characters || data.players || data.ta;
             if (!Array.isArray(raw)) return false;
             const players = raw.map(normalizePlayer);
             if (players.some(player => !player)) {
@@ -424,19 +665,20 @@ async function runLive(args, account) {
             active.master = findRoomMaster(data, raw, players);
             if (active.master && active.master.level == null) {
                 const rosterActive = active;
-                const cached = masterProfileCache.get(active.master.charId);
+                const masterId = normCharId(active.master.charId);
+                const cached = masterProfileCache.get(masterId);
                 if (cached !== undefined) active.master.level = cached;
                 else {
                     try {
-                        const response = await c.amf('CharacterDAO.getCharacterProfileById', [result.session.sessionKey, rosterActive.master.charId, true]);
-                        if (active !== rosterActive || rosterActive.done) return false;
+                        const response = await c.amf('CharacterDAO.getCharacterProfileById', [result.session.sessionKey, masterId, true]);
+                        if (active !== rosterActive || rosterActive.done || rosterActive.started) return false;
                         const profile = (response && response.body && response.body.result) || {};
                         const level = Number(profile.character_level ?? profile.characterLevel ?? profile.level);
-                        masterProfileCache.set(rosterActive.master.charId, Number.isFinite(level) ? level : null);
+                        masterProfileCache.set(masterId, Number.isFinite(level) ? level : null);
                         rosterActive.master.level = Number.isFinite(level) ? level : null;
                     } catch (_) {
-                        if (active !== rosterActive || rosterActive.done) return false;
-                        masterProfileCache.set(rosterActive.master.charId, null);
+                        if (active !== rosterActive || rosterActive.done || rosterActive.started) return false;
+                        masterProfileCache.set(masterId, null);
                     }
                 }
             }
@@ -446,7 +688,7 @@ async function runLive(args, account) {
                 resetActive(reason);
                 return false;
             }
-            active.otherEmblems = countOtherEmblems(players, result.charId);
+            active.otherEmblems = countOtherEmblems(players, botId);
             active.emblemStatusUnknown = players.some(player => player.isEmblem == null);
             // Public rooms expose only character IDs on some PvE packets. User opted
             // to continue those rooms, while explicit non-Emblem rosters stay blocked.
@@ -454,7 +696,7 @@ async function runLive(args, account) {
             return true;
         };
         const sendReady = () => {
-            if (!active || active.done || active.ready) return;
+            if (!active || active.done || active.started || active.ready) return;
             if (!hasFullQuickmatchTeam(active.players)) {
                 if (!active.waitingFullTeam) {
                     active.waitingFullTeam = true;
@@ -462,7 +704,7 @@ async function runLive(args, account) {
                 }
                 return;
             }
-            socket.ready(result.charId);
+            socket.ready(botId);
             active.readySentNs = nowNs();
             active.joinAcceptedToReadyMs = elapsedMs(active.joinAcceptedNs);
             if (active.joinAcceptedToReadyMs > 250) active.latencyWarning = 'ready lambat';
@@ -470,10 +712,10 @@ async function runLive(args, account) {
             line('  #' + active.match + ' READY room=' + active.room.id + ' (' + active.joinAcceptedToReadyMs.toFixed(1) + ' ms)' + (active.rosterConfirmed ? '' : ' roster=menunggu') + '; tunggu host max ' + Math.round(args.hostStartTimeout / 1000) + ' dtk');
         };
         socket.on('join_room', async data => {
-            if (!active || active.done) return;
+            if (!active || active.done || active.started) return;
             if (active.joinAccepted) {
                 const applied = await applyRoster(data);
-                if (applied && active && !active.done) sendReady();
+                if (applied && active && !active.done && !active.started) sendReady();
                 return;
             }
             if (Number(data && data.status) !== 1 || data.room_name === 'lobby') {
@@ -486,24 +728,24 @@ async function runLive(args, account) {
             active.joinAccepted = true;
             active.joinAcceptedNs = nowNs();
             await applyRoster(data);
-            if (active && !active.done) sendReady();
+            if (active && !active.done && !active.started) sendReady();
         });
-        socket.on('ready', data => {
-            applyRoster(data)
-                .then(applied => { if (applied && active && !active.done) sendReady(); })
-                .catch(error => { resetActive('roster_error:' + String(error.message || error).slice(0, 80)); });
+        // `ready` packets carry only the subset of ready character IDs (or empty data on host startGame);
+        // never overwrite active.players from `ready` or kick ourselves out when battle is starting.
+        socket.on('ready', () => {
+            if (active && !active.done && !active.started) sendReady();
         });
         socket.on('leave_room', data => {
-            if (!active || active.done || !data) return;
-            const left = String(data.character_id ?? data.characterId ?? data.charId ?? data.id ?? '');
+            if (!active || active.done || active.started || !data) return;
+            const left = normCharId(data.character_id ?? data.characterId ?? data.charId ?? data.id ?? '');
             if (!active.rosterConfirmed) return;
-            if (left) active.players = active.players.filter(player => player.charId !== left);
-            const others = active.players.filter(player => player.charId !== String(result.charId));
+            if (left) active.players = active.players.filter(player => normCharId(player.charId) !== left);
+            const others = active.players.filter(player => normCharId(player.charId) !== botId);
             if (active.emblemStatusUnknown) {
                 if (!others.length) resetActive('all_other_players_left');
                 return;
             }
-            if (countOtherEmblems(active.players, result.charId) < 1) resetActive('emblem_player_left');
+            if (countOtherEmblems(active.players, botId) < 1) resetActive('emblem_player_left');
         });
         const roomEventDetail = data => {
             if (!data || typeof data !== 'object') return {};
@@ -528,28 +770,45 @@ async function runLive(args, account) {
         const markBattleStarted = () => {
             if (!active || active.started) return;
             active.started = true;
+            divider('BATTLE #' + active.match + ' ' + String(args.boss).toUpperCase());
             line('  #' + active.match + ' START ' + String(args.boss).toUpperCase());
         };
         socket.on('battle_start', markBattleStarted);
         socket.on('battle_msg', raw => {
             const message = messageValue(raw);
             if (!message || !active || active.done) return;
-            if (bufferedBattle.length < 100) bufferedBattle.push({ event: message.event, state: message.state, charId: message.charId });
-            if (['join', 'start', 'start_atb'].includes(message.state)) markBattleStarted();
-            if (message.state === 'battle_finish' || message.state === 'battle_win') { active.outcome = message.state; active.done = true; return; }
-            if (message.state === 'battle_lose') { active.outcome = 'battle_lose'; active.done = true; return; }
+            if (bufferedBattle.length < 100) {
+                const ba = message.battleAction;
+                bufferedBattle.push({
+                    event: message.event,
+                    state: message.state,
+                    charId: message.charId,
+                    ...(ba ? { action: ba.action, skillId: ba.skillId || ba.SENSKILLID || ba.BLSKILLID } : {}),
+                });
+            }
+            if (['join', 'init', 'start', 'start_atb'].includes(message.state)) {
+                markBattleStarted();
+                line('  #' + active.match + ' RECV ' + (message.event || '') + '/' + (message.state || ''));
+            }
+            if (message.state === 'battle_finish' || message.state === 'battle_win') { clearBattleTimers(active); active.outcome = message.state; active.done = true; return; }
+            if (message.state === 'battle_lose') { clearBattleTimers(active); active.outcome = 'battle_lose'; active.done = true; return; }
+            if (message.state === 'battle_action' && normCharId(message.charId) === botId) {
+                active.myBattleActions = (active.myBattleActions || 0) + 1;
+                const ba = message.battleAction || {};
+                line('  #' + active.match + ' OK BATTLE_ACTION ' + (ba.action || '') + ' ' + (ba.skillId || ba.SENSKILLID || ba.BLSKILLID || '') + ' (char=' + message.charId + ')');
+            }
             const step = active.battle.nextStep(message);
-            if (step.type === 'ready') socket.battleReady();
-            else if (step.type === 'startAtb') socket.startAtb();
-            else if (step.type === 'actionReady') socket.actionReady();
-            else if (step.type === 'actionFinish') socket.actionFinish(step.charDead);
-            else if (step.type === 'turn' && !args.captureBattle) {
+            const logBattle = msg => line('  #' + active.match + ' ' + msg);
+            if (handleBattlePreTurnStep(socket, active, step, logBattle)) return;
+            if (step.type === 'turn' && !args.captureBattle) {
                 active.commandReceivedNs = nowNs();
                 const turn = chooseQuickmatchTurn(result.charName, result.skills, active.battle.enemyIds, active.turn++);
-                socket.battleCommand(result.charId, turn.skill ? 'skill' : 'weapon_attack', turn.skill && turn.skill.skillId, turn.targetId);
-                active.lastAction = turn.label + ':' + (turn.skill ? turn.skill.skillId : 'weapon_attack');
+                const action = turn.skill ? (turn.skill.action || (Number(turn.skill.id) >= 3100 ? 'senjutsu' : 'skill')) : 'weapon_attack';
+                const actorId = step.charId || (active.battle && active.battle.battleCharId) || botId;
+                socket.battleCommand(actorId, action, turn.skill && turn.skill.skillId, turn.targetId);
+                active.lastAction = turn.label + ':' + action + ':' + (turn.skill ? turn.skill.skillId : 'weapon_attack');
                 active.battleCommandLatencyMs = elapsedMs(active.commandReceivedNs);
-                line('  #' + active.match + ' SKILL ' + active.lastAction + ' (' + active.battleCommandLatencyMs.toFixed(1) + ' ms)');
+                line('  #' + active.match + ' SKILL ' + active.lastAction + ' char=' + actorId + ' (' + active.battleCommandLatencyMs.toFixed(1) + ' ms)');
             }
         });
         socket.auth();
@@ -558,16 +817,23 @@ async function runLive(args, account) {
         socket.joinLobby();
         let knownEnergy = Number(pve.energy);
         let lastEnergyCheckAt = Date.now();
+        const battleTimeoutMs = Number(process.env.NS_COOP_BATTLE_TIMEOUT) || Math.max(args.hostStartTimeout * 2, 900000);
 
         while (report.matches.length < args.maxMatches) {
             // Room scan stays socket-only; avoid slow AMF refresh on every 1.5s poll.
             if (Date.now() - lastEnergyCheckAt >= 30000) {
                 const fresh = await readPveInit(result.session);
-                if (!fresh || !Number.isFinite(fresh.energy)) break;
+                if (!fresh || !Number.isFinite(fresh.energy)) { meta.stopReason = 'Gagal membaca sisa energy'; break; }
                 knownEnergy = fresh.energy;
+                meta.energyEnd = knownEnergy;
                 lastEnergyCheckAt = Date.now();
             }
-            if (!Number.isFinite(knownEnergy) || knownEnergy < joinCost) break;
+            if (!Number.isFinite(knownEnergy) || knownEnergy < joinCost) {
+                divider('SELESAI');
+                meta.stopReason = 'Energy habis (' + knownEnergy + ' < ' + joinCost + ')';
+                line('  STOP: ' + meta.stopReason);
+                break;
+            }
             requestRooms();
             const scanDeadline = Date.now() + 15000;
             while (!Array.isArray(rooms)) {
@@ -576,7 +842,7 @@ async function runLive(args, account) {
                 await sleep(25);
             }
             for (const [roomId, until] of rejectedRoomUntil) if (until <= Date.now()) rejectedRoomUntil.delete(roomId);
-            const picked = pickRoom(rooms, quest.quest, result.charId, new Set(rejectedRoomUntil.keys()));
+            const picked = pickRoom(rooms, quest.quest, botId, new Set(rejectedRoomUntil.keys()));
             const matchNo = report.matches.length + 1;
             report.scans.push({ at: new Date().toISOString(), rooms: rooms.length, candidate: picked.room && picked.room.id, rejects: picked.evaluated.filter(item => item.reason !== 'accepted') });
             if (!picked.room) {
@@ -584,8 +850,9 @@ async function runLive(args, account) {
                 await sleep(args.roomPollMs);
                 continue;
             }
-            active = { match: matchNo, room: picked.room, players: picked.room.players.slice(), rosterConfirmed: picked.room.schemaComplete, started: false, ready: false, done: false, reason: null, outcome: null, startedAt: Date.now(), turn: 0, battle: new PveBattle({ charId: result.charId, strategy: 'B', skills: result.skills }) };
+            active = { match: matchNo, room: picked.room, players: picked.room.players.slice(), rosterConfirmed: picked.room.schemaComplete, started: false, ready: false, done: false, reason: null, outcome: null, startedAt: Date.now(), turn: 0, battle: new PveBattle({ charId: botId, strategy: 'B', skills: result.skills }) };
             captchaAttempts = 0;
+            divider('MATCH #' + matchNo);
             line('  #' + matchNo + ' JOIN room=' + active.room.id + (picked.otherEmblems == null ? ' (verifikasi roster)' : ' emblem=' + picked.room.players.filter(player => player.isEmblem).length));
             socket.joinRoom(active.room.id, '', pve.ver);
             const readyDeadline = Date.now() + args.hostStartTimeout;
@@ -606,7 +873,7 @@ async function runLive(args, account) {
                 if (!active.done && !active.started) resetActive('host_start_timeout');
             }
             if (active && !active.done && active.started && !args.captureBattle) {
-                const battleDeadline = Date.now() + args.hostStartTimeout * 2;
+                const battleDeadline = Date.now() + battleTimeoutMs;
                 while (!active.done && Date.now() < battleDeadline) {
                     if (fatal) throw fatal;
                     await sleep(10);
@@ -614,6 +881,7 @@ async function runLive(args, account) {
                 if (!active.done) resetActive('battle_timeout');
             }
             if (active.room && !active.outcome) socket.leaveRoom(active.room.id);
+            else if (active.outcome) socket.joinLobby();
             const summary = { match: active.match, roomId: active.room.id, otherEmblems: active.otherEmblems, emblemStatusUnknown: active.emblemStatusUnknown, rosterConfirmed: active.rosterConfirmed, rosterFields: active.rosterFields, roomEvents: active.roomEvents, ready: active.ready, outcome: active.outcome || 'retry', reason: active.reason, joinAcceptedToReadyMs: active.joinAcceptedToReadyMs, latencyWarning: active.latencyWarning, lastAction: active.lastAction, battleCommandLatencyMs: active.battleCommandLatencyMs, durationMs: Date.now() - active.startedAt, battle: bufferedBattle.splice(0) };
             report.matches.push(summary);
             // Force a fresh energy read after every joined room/battle attempt.
@@ -622,16 +890,20 @@ async function runLive(args, account) {
             if (summary.outcome === 'battle_finish' || summary.outcome === 'battle_win') line('  #' + summary.match + ' WIN ' + String(args.boss).toUpperCase() + ' (' + summary.outcome + ')');
             else if (summary.outcome === 'battle_lose') line('  #' + summary.match + ' LOSE ' + String(args.boss).toUpperCase());
             else line('  #' + summary.match + ' RETRY (' + (summary.reason || summary.outcome) + ')');
+            line('');
             active = null;
         }
+        if (!meta.stopReason && report.matches.length >= args.maxMatches) meta.stopReason = 'Target ' + args.maxMatches + ' match tercapai';
     } catch (error) {
         report.error = error.message;
+        meta.stopReason = error.message;
         process.exitCode = 1;
         throw error;
     } finally {
         saveReport();
         if (socket) socket.close();
-        await solver.close();
+        await solverSession.close();
+        await notifyCerberusSummary(args, report, meta, line);
     }
 }
 
@@ -661,14 +933,15 @@ function chooseCerberusTurn(skills, enemyIds, turn, charName = '') {
     if (isUchihaRazq(charName)) {
         const sequence = [
             pickNamedSkill(skills, ['kinjutsu evasion', 'evasion'], '39'),
+            pickNamedSkill(skills, ['five element consuming seal', 'five elements seal'], '345'),
             pickNamedSkill(skills, ['thunder explosion'], '633'),
+            pickNamedSkill(skills, ['flame armor'], '629'),
             pickNamedSkill(skills, ['electric smash'], '632'),
             pickNamedSkill(skills, ['advanced aphrodite s blessing', 'aphrodite s blessing'], '854'),
+            pickNamedSkill(skills, ['dragon sublimation'], '3110'),
+            pickNamedSkill(skills, ['dance of fujin'], '151'),
         ].filter(Boolean);
-        if (turn < sequence.length) return { skill: sequence[turn], targetId: head, label: 'razq_host_priority' };
-        const fallback = rankedSkills(skills, sequence.map(skill => skill.id));
-        const skill = fallback.length ? fallback[(turn - sequence.length) % fallback.length] : sequence.at(-1);
-        return skill ? { skill, targetId: head, label: 'razq_host_fallback' } : { skill: null, targetId: head, label: 'weapon' };
+        return cycleSequenceTurn(sequence, skills, head, turn, 'razq_host_priority', 'razq_host_fallback');
     }
     const deck = buildSkillDeck(skills);
     const sequence = [];
@@ -702,7 +975,6 @@ function evaluateLevel(level, minLevel) {
 }
 
 async function runHostRoom(args, account) {
-    const { CaptchaSolver } = require('./lib/ns_captcha_solver.js');
     const logDir = path.join(process.cwd(), 'logs');
     fs.mkdirSync(logDir, { recursive: true });
     const logFile = path.join(logDir, 'cerberus_host_' + new Date().toISOString().replace(/[:.]/g, '-') + '.log');
@@ -710,17 +982,21 @@ async function runHostRoom(args, account) {
     const say = message => { line(message); try { fs.appendFileSync(logFile, stamp() + ' ' + message + '\n'); } catch (_) {} };
     const trace = (tag, data) => { try { fs.appendFileSync(logFile, stamp() + ' [raw] ' + tag + ' ' + JSON.stringify(data).slice(0, 1500) + '\n'); } catch (_) {} };
     const report = { generatedAt: stamp(), mode: 'host-room', boss: args.boss, level: args.level, minLevel: args.minLevel, account: account.username, matches: [], attempts: [], error: null };
+    const meta = { charName: account.username, energyStart: null, energyEnd: null, stopReason: null };
     const reportFile = path.join(process.cwd(), 'cerberus_host_report.json');
     const saveReport = () => { try { fs.writeFileSync(reportFile, JSON.stringify(report, null, 2)); } catch (_) {} };
-    const solver = new CaptchaSolver({ headful: args.headful, log: say, username: account.username, password: account.password });
-    const battleTimeoutMs = Number(process.env.NS_COOP_BATTLE_TIMEOUT) || 600000;
+    const solverSession = createSolverSession(args, account, say);
+    const { solver } = solverSession;
+    const battleTimeoutMs = Number(process.env.NS_COOP_BATTLE_TIMEOUT) || 900000;
     const profileCache = new Map();
     let socket = null;
     try {
         say('  LOG ' + logFile);
-        await solver.open();
+        await solverSession.ensure();
         const result = await loginAccount(account, solver.webLoginData);
+        await solverSession.releaseIfStb();
         if (!result.ok) throw new Error('Login gagal: ' + result.error);
+        meta.charName = result.charName || account.username;
         const hostLevel = evaluateLevel(result.level, args.minLevel);
         if (!hostLevel.ok) throw new Error('Level host tidak memenuhi syarat (' + hostLevel.reason + ').');
         const pve = await readPveInit(result.session);
@@ -728,6 +1004,9 @@ async function runHostRoom(args, account) {
         if (!pve || !quest || !pve.pvpServer || !pve.pvpServer[0]) throw new Error('PvE boss tidak tersedia.');
         const hostCost = Number(quest.energy[0]);
         const hostId = normCharId(result.charId);
+        meta.energyStart = Number(pve.energy);
+        meta.energyEnd = Number(pve.energy);
+        divider('AKUN & DECK HOST');
         say('  HOST ' + result.charName + ' Lv' + result.level + ' energy=' + pve.energy + ' biaya_room=' + hostCost + ' quest=' + quest.quest);
         say('  DECK ' + describeDeck(result.equipped));
         if (!(pve.energy >= hostCost)) throw new Error('Energy host kurang (' + pve.energy + ' < ' + hostCost + ').');
@@ -738,7 +1017,7 @@ async function runHostRoom(args, account) {
         let captchaAttempts = 0;
         let createRejectTimer = null;
         const clearCreateTimer = () => { if (createRejectTimer) { clearTimeout(createRejectTimer); createRejectTimer = null; } };
-        const finish = (reason, outcome) => { if (!active || active.done) return; active.reason = active.reason || reason; if (outcome) active.outcome = outcome; active.done = true; };
+        const finish = (reason, outcome) => { if (!active || active.done) return; clearBattleTimers(active); active.reason = active.reason || reason; if (outcome) active.outcome = outcome; active.done = true; };
         const sendCreate = () => socket.createRoom({ password: '', mode: 3, quest: quest.quest, ver: pve.ver });
 
         const evaluatePlayer = (rawId, info) => {
@@ -808,16 +1087,17 @@ async function runHostRoom(args, account) {
             socket.startGame();
         };
 
-        socket.on('error', () => { fatal = fatal || new Error('Socket error'); });
-        socket.on('si_error', () => { fatal = fatal || new Error('Socket.IO error'); });
-        socket.on('close', () => { if (!fatal) fatal = new Error('Socket terputus'); });
+        socket.on('error', err => { const msg = err && err.message ? err.message : 'Socket error'; fatal = fatal || new Error('Socket error: ' + msg); });
+        socket.on('si_error', sp => { fatal = fatal || new Error('Socket.IO error: ' + JSON.stringify(sp && sp.data)); });
+        socket.on('si_disconnect', () => { if (!fatal) fatal = new Error('Socket.IO terputus oleh server'); });
+        socket.on('close', (code, reason) => { if (!fatal) fatal = new Error('Socket terputus (code=' + (code ?? '?') + (reason ? ', ' + reason : '') + ')'); });
         socket.on('captcha_required', () => {
             if (!active || solvingCaptcha || active.done) return;
             clearCreateTimer();
             if (++captchaAttempts > 2) { fatal = new Error('CAPTCHA berulang; berhenti agar akun tidak terkunci.'); return; }
             solvingCaptcha = true;
             say('  CAPTCHA verifikasi create room...');
-            solver.solve('pve').then(async outcome => {
+            solverSession.ensure().then(() => solver.solve('pve')).then(async outcome => {
                 const decision = captchaRetryDecision(outcome);
                 if (decision.action === 'stop') {
                     fatal = new Error('CAPTCHA ditolak server. fails_left=' + (decision.failsLeft == null ? 'unknown' : decision.failsLeft) + '. Selesaikan manual sebelum lanjut.');
@@ -831,7 +1111,10 @@ async function runHostRoom(args, account) {
                 }
                 await sleep(750);
                 if (active && !active.done && !active.roomId) { say('  CAPTCHA OK; ulang create room'); sendCreate(); }
-            }).catch(error => finish('captcha_error:' + String(error.message || error).slice(0, 80))).finally(() => { solvingCaptcha = false; });
+            }).catch(error => finish('captcha_error:' + String(error.message || error).slice(0, 80))).finally(async () => {
+                await solverSession.releaseIfStb();
+                solvingCaptcha = false;
+            });
         });
         socket.on('join_room', data => {
             trace('join_room', data);
@@ -904,7 +1187,7 @@ async function runHostRoom(args, account) {
             finish('kick_user');
         });
         for (const event of ['force_lobby', 'destroy_battle']) socket.on(event, data => { trace(event, data); if (active && !active.done) finish(event + (data && (data.reason || data.message) ? ':' + (data.reason || data.message) : '')); });
-        const markBattleStarted = () => { if (active && !active.battleStarted) { active.battleStarted = true; active.battleStartedAt = Date.now(); say('  START CERBERUS (battle masuk)'); } };
+        const markBattleStarted = () => { if (active && !active.battleStarted) { active.battleStarted = true; active.battleStartedAt = Date.now(); divider('BATTLE #' + roomNo + ' ' + String(args.boss).toUpperCase()); say('  START CERBERUS (battle masuk)'); } };
         socket.on('battle_start', markBattleStarted);
         socket.on('battle_msg', raw => {
             const message = messageValue(raw);
@@ -914,24 +1197,23 @@ async function runHostRoom(args, account) {
             active.battleStates.push(message.state || message.event);
             if (active.battleStates.length > 400) active.battleStates.shift();
             if (message.state === 'battle_finish' || message.state === 'battle_win') {
+                clearBattleTimers(active);
                 const winners = idList(message.winnerIDs || message.winner_ids || message.winners).map(normCharId);
                 const outcome = winners.length ? (winners.includes(hostId) ? 'win' : 'lose') : (message.state === 'battle_win' ? 'win' : 'finish_unknown');
                 active.score = message.score; active.reward = message.reward;
                 finish('battle_' + message.state, outcome);
                 return;
             }
-            if (message.state === 'battle_lose') { finish('battle_lose', 'lose'); return; }
+            if (message.state === 'battle_lose') { clearBattleTimers(active); finish('battle_lose', 'lose'); return; }
             const step = active.battle.nextStep(message);
-            if (step.type === 'ready') socket.battleReady();
-            else if (step.type === 'startAtb') socket.startAtb();
-            else if (step.type === 'actionReady') socket.actionReady();
-            else if (step.type === 'actionFinish') socket.actionFinish(step.charDead);
-            else if (step.type === 'turn') {
+            if (handleBattlePreTurnStep(socket, active, step, msg => say('  ' + msg))) return;
+            if (step.type === 'turn') {
                 const turn = chooseCerberusTurn(result.equipped, active.battle.enemyIds, active.turn++, result.charName);
-                const action = turn.skill ? 'skill' : 'weapon_attack';
-                socket.battleCommand(hostId, action, turn.skill && turn.skill.skillId, turn.targetId);
+                const action = turn.skill ? (turn.skill.action || (Number(turn.skill.id) >= 3100 ? 'senjutsu' : 'skill')) : 'weapon_attack';
+                const actorId = step.charId || (active.battle && active.battle.battleCharId) || hostId;
+                socket.battleCommand(actorId, action, turn.skill && turn.skill.skillId, turn.targetId);
                 active.actions.push(turn.label + ':' + (turn.skill ? turn.skill.skillId : 'weapon_attack'));
-                say('  TURN ' + active.turn + ' ' + turn.label + ' ' + (turn.skill ? turn.skill.skillId : 'weapon_attack') + ' -> ' + turn.targetId);
+                say('  TURN ' + active.turn + ' ' + turn.label + ' ' + (turn.skill ? turn.skill.skillId : 'weapon_attack') + ' char=' + actorId + ' -> ' + turn.targetId);
             }
         });
 
@@ -943,10 +1225,17 @@ async function runHostRoom(args, account) {
         let roomNo = 0;
         while (!fatal && report.matches.length < args.maxMatches) {
             const energyNow = (await readPveInit(result.session) || {}).energy;
-            if (!(energyNow >= hostCost)) { say('  STOP: energy habis (' + energyNow + ' < ' + hostCost + ')'); break; }
+            if (Number.isFinite(Number(energyNow))) meta.energyEnd = Number(energyNow);
+            if (!(energyNow >= hostCost)) {
+                divider('SELESAI');
+                meta.stopReason = 'Energy habis (' + energyNow + ' < ' + hostCost + ')';
+                say('  STOP: ' + meta.stopReason);
+                break;
+            }
             captchaAttempts = 0;
             active = { roomId: null, createdAt: null, players: new Map(), readyIds: new Set(), pendingKicks: new Set(), missing: 0, started: false, startSentAt: null, battleStarted: false, battleStartedAt: null, done: false, outcome: null, reason: null, turn: 0, actions: [], battleStates: [], battle: new PveBattle({ charId: hostId, strategy: 'B', skills: result.equipped }) };
             const matchStartedAt = Date.now();
+            divider('HOST ROOM #' + (roomNo + 1));
             say('  #' + (++roomNo) + ' CREATE ROOM CERBERUS EXTREME (energy ' + energyNow + ')');
             sendCreate();
             let lastPoll = 0;
@@ -983,22 +1272,27 @@ async function runHostRoom(args, account) {
             const summary = { match: roomNo, roomId: active.roomId, outcome: active.outcome || 'retry', reason: active.reason, battleStarted: active.battleStarted, players: [...active.players.entries()].map(([id, p]) => ({ id, name: p.name, level: p.level, status: p.status })), actions: active.actions, score: active.score, reward: active.reward, energyBefore: energyNow, energyAfter: after && after.energy, durationMs: Date.now() - matchStartedAt, battleStates: active.battleStates.slice(-60) };
             report.attempts.push(summary);
             if (active.battleStarted) report.matches.push(summary);
+            if (after && Number.isFinite(Number(after.energy))) meta.energyEnd = Number(after.energy);
             saveReport();
             if (active.outcome === 'win') say('  #' + roomNo + ' WIN CERBERUS');
             else if (active.outcome === 'lose') say('  #' + roomNo + ' LOSE CERBERUS');
             else say('  #' + roomNo + ' RETRY (' + (active.reason || active.outcome) + ')');
+            line('');
             active = null;
             await sleep(1500);
         }
+        if (!meta.stopReason && report.matches.length >= args.maxMatches) meta.stopReason = 'Target ' + args.maxMatches + ' match tercapai';
         say('  SELESAI: ' + report.matches.length + ' match battle. Log: ' + logFile);
     } catch (error) {
         report.error = error.message;
+        meta.stopReason = error.message;
         process.exitCode = 1;
         throw error;
     } finally {
         saveReport();
         if (socket) socket.close();
-        await solver.close();
+        await solverSession.close();
+        await notifyCerberusSummary(args, report, meta, say);
     }
 }
 
@@ -1006,9 +1300,25 @@ async function runHostRoom(args, account) {
     if (process.argv.includes('--selftest')) return;
     const args = parseArgs(process.argv.slice(2));
     const accounts = parseAccountsFile(args.accounts, 1);
-    if (args.dryRun) await runDryRun(args, accounts[0]);
-    else if (args.hostRoom) await runHostRoom(args, accounts[0]);
-    else await runLive(args, accounts[0]);
+    let releaseLock = () => {};
+    try {
+        try {
+            releaseLock = acquireRunLock(accounts[0], args.lock);
+        } catch (err) {
+            if (err && String(err.message || '').startsWith('SKIP:')) {
+                line(err.message);
+                return;
+            }
+            throw err;
+        }
+        const shouldRun = await checkPreRunEnergyGate(args, accounts[0]);
+        if (!shouldRun) return;
+        if (args.dryRun) await runDryRun(args, accounts[0]);
+        else if (args.hostRoom) await runHostRoom(args, accounts[0]);
+        else await runLive(args, accounts[0]);
+    } finally {
+        releaseLock();
+    }
 })().catch(error => { line('STOP: ' + error.message); process.exitCode = 1; });
 
-module.exports = { parseArgs, parseAccountsFile, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, buildSkillDeck, describeDeck, normCharId, idList, evaluateLevel, runDryRun, runLive, runHostRoom };
+module.exports = { parseArgs, parseAccountsFile, resolveMinStartEnergy, acquireRunLock, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, buildSkillDeck, describeDeck, normCharId, idList, evaluateLevel, runDryRun, runLive, runHostRoom };

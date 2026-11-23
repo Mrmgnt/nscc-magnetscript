@@ -549,9 +549,11 @@ goto MENU
 
 :COOPCERBERUS
 cls
+echo.
 echo ======================================================================
 echo              AUTO CO-OP CERBERUS - PUBLIC ROOM
 echo ======================================================================
+echo.
 echo   Config : coop_accounts.txt
 echo   Format : main:username:password:slot
 echo   Syarat : room punya player lain; Emblem dicek bila status dikirim server.
@@ -562,10 +564,32 @@ echo   [ 0 ] Kembali
 echo.
 set "COOP_OPT="
 set /p "COOP_OPT=Pilih [0-2]: "
-if "%COOP_OPT%"=="1" node ns_coop_minotaur.js --accounts coop_accounts.txt
-if "%COOP_OPT%"=="2" node ns_coop_minotaur.js --host-room --headful --min-level 80 --accounts coop_accounts.txt
-
 if "%COOP_OPT%"=="0" goto MENU
+if "%COOP_OPT%"=="1" (
+  echo.
+  echo ======================================================================
+  echo   MODE [1] QUICKMATCH CERBERUS EXTREME - MEMULAI...
+  echo ======================================================================
+  echo.
+  node ns_coop_minotaur.js --accounts coop_accounts.txt
+) else if "%COOP_OPT%"=="2" (
+  echo.
+  echo ======================================================================
+  echo   MODE [2] HOST ROOM CERBERUS EXTREME ^(MIN LV 80^) - MEMULAI...
+  echo ======================================================================
+  echo.
+  node ns_coop_minotaur.js --host-room --headful --min-level 80 --accounts coop_accounts.txt
+) else (
+  echo.
+  echo   Pilihan tidak dikenal.
+  timeout /t 2 >nul
+  goto COOPCERBERUS
+)
+
+echo.
+echo ======================================================================
+echo   SESI CO-OP CERBERUS SELESAI
+echo ======================================================================
 echo.
 pause
 goto MENU

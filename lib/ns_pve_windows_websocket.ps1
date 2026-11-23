@@ -9,12 +9,15 @@ $stdout.AutoFlush = $true
 function Emit([hashtable]$Value) { $stdout.WriteLine(($Value | ConvertTo-Json -Compress)) }
 
 $socket = [System.Net.WebSockets.ClientWebSocket]::new()
+$socket.Options.KeepAliveInterval = [TimeSpan]::FromSeconds(20)
 $cts = [System.Threading.CancellationTokenSource]::new()
 $buffer = New-Object byte[] 65536
 $stdin = [Console]::OpenStandardInput()
 $inputBuffer = New-Object byte[] 4096
 $inputPending = ''
 $closing = $false
+$closeCode = $null
+$closeReason = ''
 
 try {
     [void] $socket.ConnectAsync([Uri]$Url, $cts.Token).GetAwaiter().GetResult()
@@ -43,19 +46,42 @@ try {
             if (-not $closing) { $inputTask = $stdin.BeginRead($inputBuffer, 0, $inputBuffer.Length, $null, $null) }
         }
         if ($receiveTask.IsCompleted) {
-            $result = $receiveTask.GetAwaiter().GetResult()
-            if ($result.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) { break }
-            $data = [Text.Encoding]::UTF8.GetString($buffer, 0, $result.Count)
-            Emit @{ type = 'message'; data = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($data)) }
-            $receiveTask = $socket.ReceiveAsync([ArraySegment[byte]]::new($buffer), $cts.Token)
+            $ms = [System.IO.MemoryStream]::new()
+            try {
+                do {
+                    $result = $receiveTask.GetAwaiter().GetResult()
+                    if ($result.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) {
+                        if ($null -ne $result.CloseStatus) { $closeCode = [int]$result.CloseStatus }
+                        if ($result.CloseStatusDescription) { $closeReason = [string]$result.CloseStatusDescription }
+                        $closing = $true
+                        break
+                    }
+                    if ($result.Count -gt 0) { $ms.Write($buffer, 0, $result.Count) }
+                    if (-not $result.EndOfMessage) {
+                        $receiveTask = $socket.ReceiveAsync([ArraySegment[byte]]::new($buffer), $cts.Token)
+                    }
+                } while (-not $result.EndOfMessage)
+                if (-not $closing) {
+                    if ($ms.Length -gt 0) {
+                        Emit @{ type = 'message'; data = [Convert]::ToBase64String($ms.ToArray()) }
+                    }
+                    $receiveTask = $socket.ReceiveAsync([ArraySegment[byte]]::new($buffer), $cts.Token)
+                }
+            } finally {
+                $ms.Dispose()
+            }
         }
         Start-Sleep -Milliseconds 2
     }
+    if ($null -eq $closeCode -and $socket.CloseStatus) { $closeCode = [int]$socket.CloseStatus }
+    if (-not $closeReason -and $socket.CloseStatusDescription) { $closeReason = [string]$socket.CloseStatusDescription }
 } catch {
-    Emit @{ type = 'error'; message = $_.Exception.GetBaseException().Message }
+    $closeCode = 1006
+    $closeReason = $_.Exception.GetBaseException().Message
+    Emit @{ type = 'error'; message = $closeReason }
 } finally {
     try { $cts.Cancel() } catch {}
     try { $socket.Dispose() } catch {}
     $cts.Dispose()
-    Emit @{ type = 'close' }
+    Emit @{ type = 'close'; code = $(if ($null -ne $closeCode) { $closeCode } else { 1000 }); reason = $closeReason }
 }
