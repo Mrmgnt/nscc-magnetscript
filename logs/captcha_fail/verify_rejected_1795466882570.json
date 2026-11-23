@@ -1,0 +1,93 @@
+{
+  "type": "slider",
+  "start_x": 0,
+  "max_x": 330,
+  "track_w": 380,
+  "dom": {},
+  "details": {
+    "target": {
+      "x": 45,
+      "y": 0,
+      "score": 129.35075757575757,
+      "borderMismatch": 86.28,
+      "histScore": 0.574,
+      "candidates": [
+        {
+          "x": 45,
+          "score": 129.35075757575757,
+          "borderMismatch": 86.28,
+          "histScore": 0.574,
+          "boundary": 27357,
+          "pattern": 0.16,
+          "checker": 0.0012
+        },
+        {
+          "x": 95,
+          "score": 200.40515151515152,
+          "borderMismatch": 109.06,
+          "histScore": 1.218,
+          "boundary": 16661,
+          "pattern": 4.3928,
+          "checker": 0.1188
+        },
+        {
+          "x": 140,
+          "score": 144.55060606060604,
+          "borderMismatch": 87.52,
+          "histScore": 0.76,
+          "boundary": 26278,
+          "pattern": 0.0488,
+          "checker": 0.0008
+        },
+        {
+          "x": 190,
+          "score": 158.45151515151514,
+          "borderMismatch": 96.97,
+          "histScore": 0.82,
+          "boundary": 16164,
+          "pattern": 3.0152,
+          "checker": 0.116
+        },
+        {
+          "x": 235,
+          "score": 158.1531818181818,
+          "borderMismatch": 96.67,
+          "histScore": 0.82,
+          "boundary": 15119,
+          "pattern": 2.3348,
+          "checker": 0.126
+        },
+        {
+          "x": 285,
+          "score": 168.39348484848483,
+          "borderMismatch": 105.55,
+          "histScore": 0.838,
+          "boundary": 27879,
+          "pattern": 0,
+          "checker": 0
+        }
+      ]
+    },
+    "images": {
+      "scaleX": 0.6926314504523027,
+      "scaleY": 0.692578125,
+      "initialX": 0,
+      "initialY": 0,
+      "trackWidth": 265.9999694824219,
+      "background": {
+        "width": 380,
+        "height": 140
+      },
+      "piece": {
+        "width": 50,
+        "height": 140
+      }
+    },
+    "deltaX": 31.16841527035362,
+    "deltaY": 0,
+    "position": {
+      "x": 31.5,
+      "y": 0
+    }
+  }
+}

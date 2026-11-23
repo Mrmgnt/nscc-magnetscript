@@ -26,10 +26,10 @@ function formatLogLine(message) {
     if (!trimmed) return '';
     let color = '37';
     if (/\b(WIN|OK|terkirim|CAPTCHA OK)\b/i.test(trimmed)) color = '1;32';
-    else if (/\b(LOSE|STOP:|ERROR|gagal|ditolak|putus|terputus)\b/i.test(trimmed)) color = '1;31';
-    else if (/\b(START|READY|HOST|QUICKMATCH|DECK|CREATE ROOM|HERMES)\b/i.test(trimmed)) color = '1;36';
+    else if (/\b(LOSE|STOP:|ERROR|gagal|ditolak|putus|terputus|SELF DEAD|TEAMMATE DEAD)\b/i.test(trimmed)) color = '1;31';
+    else if (/\b(START|READY|HOST|QUICKMATCH|DECK|CREATE ROOM|HERMES|SELF REVIVED)\b/i.test(trimmed)) color = '1;36';
     else if (/\b(CAPTCHA|captcha:)\b/i.test(trimmed)) color = '35';
-    else if (/\b(JOIN|WAIT|VALID|KICK|LEAVE|ROOM|SERVER|SKIP)\b/i.test(trimmed)) color = '33';
+    else if (/\b(JOIN|WAIT|VALID|KICK|LEAVE|LEAVE_BATTLE|ROOM|SERVER|SKIP|SPECTATE)\b/i.test(trimmed)) color = '33';
     else if (/\b(SKILL|TURN|RECV|SENT)\b/i.test(trimmed)) color = '34';
     else if (/\bREFRESH\b/i.test(trimmed)) color = '90';
     return `${paint('90', '[' + nowTime() + ']')}  ${paint(color, trimmed)}`;
@@ -51,12 +51,14 @@ const LEVEL_INDEX = { normal: 1, hard: 2, extreme: 3, extream: 3 };
 const AUTO_SKILL_PRIORITY = ['633', '632', '638', '623', '728', '345', '629', '854', '151', '39'];
 const AOE_SKILL_IDS = String((process.env && process.env.NS_COOP_AOE_SKILL_IDS) || '632,638,623,728').split(',').map(id => id.trim()).filter(Boolean);
 const STUN_SKILL_ID = String((process.env && process.env.NS_COOP_STUN_SKILL_ID) || '345').trim();
+const DEFAULT_BATTLE_TIMEOUT_MS = 3600000;
 
 function parseArgs(argv) {
     const envNotify = process.env && (process.env.NS_HERMES_NOTIFY === '1' || Boolean(process.env.HERMES_NOTIFY_URL));
     const args = {
         boss: 'cerberus', level: 'extreme', accounts: 'coop_accounts.txt', maxMatches: Infinity,
         roomPollMs: 1500, hostStartTimeout: 180000, minLevel: 80, hostWait: 1800000, startTimeout: 60000,
+        battleTimeout: null,
         dryRun: false, captureBattle: false, hostRoom: false, headful: false, headless: false, stb: false,
         notify: envNotify, minStartEnergy: null, lock: false,
     };
@@ -72,6 +74,7 @@ function parseArgs(argv) {
         else if (key === '--min-level') args.minLevel = Number(argv[++i]);
         else if (key === '--host-wait') args.hostWait = Number(argv[++i]);
         else if (key === '--start-timeout') args.startTimeout = Number(argv[++i]);
+        else if (key === '--battle-timeout') args.battleTimeout = Number(argv[++i]);
         else if (key === '--dry-run') args.dryRun = true;
         else if (key === '--capture-battle') args.captureBattle = true;
         else if (key === '--host-room') args.hostRoom = true;
@@ -97,7 +100,19 @@ function parseArgs(argv) {
     for (const [key, value] of [['--room-poll-ms', args.roomPollMs], ['--host-start-timeout', args.hostStartTimeout], ['--min-level', args.minLevel], ['--host-wait', args.hostWait], ['--start-timeout', args.startTimeout]]) {
         if (!(value > 0) || !Number.isFinite(value)) throw new Error(key + ' harus angka positif.');
     }
+    if (args.battleTimeout !== null && (!(args.battleTimeout > 0) || !Number.isFinite(args.battleTimeout))) {
+        throw new Error('--battle-timeout harus angka positif.');
+    }
     return args;
+}
+
+function resolveBattleTimeoutMs(args = {}, env = (typeof process !== 'undefined' && process.env) || {}) {
+    const cliVal = Number(args && args.battleTimeout);
+    if (Number.isFinite(cliVal) && cliVal > 0) return cliVal;
+    const envVal = Number(env && env.NS_COOP_BATTLE_TIMEOUT);
+    if (Number.isFinite(envVal) && envVal > 0) return envVal;
+    const hostStartTimeout = Number(args && args.hostStartTimeout) || 0;
+    return Math.max(hostStartTimeout * 2, DEFAULT_BATTLE_TIMEOUT_MS);
 }
 
 function resolveMinStartEnergy(spec, isEmblem) {
@@ -490,6 +505,52 @@ function handleBattlePreTurnStep(socket, active, step, logFn) {
     if (step.type === 'actionFinish') { socket.actionFinish(step.charDead, active && active.battle && active.battle.battleCharId); return true; }
     return false;
 }
+function traceBattleProgress(active, message, selfId, logFn) {
+    if (!active || !active.battle || typeof active.battle.getTeamStatus !== 'function') return null;
+    const status = active.battle.getTeamStatus();
+    const selfNorm = normCharId(selfId);
+    if (!active.knownDeadTeammates) active.knownDeadTeammates = new Set();
+    if (status.selfDead && !active.wasSelfDead) {
+        active.wasSelfDead = true;
+        active.selfDiedAt = active.selfDiedAt || Date.now();
+        if (logFn) {
+            if (status.aliveTeammates.length > 0) {
+                logFn('SELF DEAD (HP=0), sisa tim hidup=' + status.aliveTeammates.length + ' [' + status.aliveTeammates.join(',') + ']; match lanjut sampai selesai');
+            } else {
+                logFn('SELF DEAD (HP=0), tidak ada tim tersisa');
+            }
+        }
+    } else if (!status.selfDead && active.wasSelfDead) {
+        active.wasSelfDead = false;
+        if (logFn) logFn('SELF REVIVED (HP=' + status.selfHp + ')');
+    }
+    const leftSet = new Set((status.leftPlayers || []).map(normCharId));
+    for (const id of status.deadPlayers || []) {
+        const nid = normCharId(id);
+        if (!nid || nid === selfNorm || leftSet.has(nid)) continue;
+        if (!active.knownDeadTeammates.has(nid)) {
+            active.knownDeadTeammates.add(nid);
+            if (logFn) logFn('TEAMMATE DEAD char=' + id + ' (tim hidup=' + status.alivePlayers.length + '/' + status.totalPlayers + ')');
+        }
+    }
+    if (active.wasSelfDead && message && message.state === 'battle_action' && status.aliveTeammates.length > 0 && logFn) {
+        const ba = message.battleAction || {};
+        const act = [ba.action, ba.skillId || ba.SENSKILLID || ba.BLSKILLID].filter(Boolean).join(' ');
+        const bossHpText = (status.enemies || [])
+            .filter(e => e.hp != null)
+            .map(e => e.id + ':' + e.hp + (e.maxHp ? '/' + e.maxHp : ''))
+            .join(',');
+        logFn('SPECTATE char=' + (message.charId || '?') + (act ? ' ' + act : '') + ' | tim_hidup=' + status.alivePlayers.length + (bossHpText ? ' | bossHP=[' + bossHpText + ']' : ''));
+    }
+    return status;
+}
+function handleMidBattleLeave(active, rawCharId, logFn) {
+    const id = normCharId(rawCharId);
+    if (!active || !id || !active.battle || typeof active.battle.markPlayerLeft !== 'function') return;
+    active.battle.markPlayerLeft(id);
+    const status = typeof active.battle.getTeamStatus === 'function' ? active.battle.getTeamStatus() : null;
+    if (logFn) logFn('LEAVE_BATTLE char=' + id + (status ? ' (sisa tim hidup=' + status.alivePlayers.length + ')' : ''));
+}
 function messageValue(raw) {
     const message = raw && raw.message ? raw.message : raw;
     if (typeof message !== 'string') return message;
@@ -786,8 +847,12 @@ async function runLive(args, account) {
             if (active && !active.done && !active.started) sendReady();
         });
         socket.on('leave_room', data => {
-            if (!active || active.done || active.started || !data) return;
+            if (!active || active.done || !data) return;
             const left = normCharId(data.character_id ?? data.characterId ?? data.charId ?? data.id ?? '');
+            if (active.started) {
+                if (left && left !== botId) handleMidBattleLeave(active, left, msg => line('  #' + active.match + ' ' + msg));
+                return;
+            }
             if (!active.rosterConfirmed) return;
             if (left) active.players = active.players.filter(player => normCharId(player.charId) !== left);
             const others = active.players.filter(player => normCharId(player.charId) !== botId);
@@ -842,9 +907,12 @@ async function runLive(args, account) {
             }
             if (message.state === 'battle_finish' || message.state === 'battle_win') {
                 clearBattleTimers(active);
+                const winners = idList(message.winnerIDs || message.winner_ids || message.winners).map(normCharId);
                 active.score = message.score;
                 active.reward = message.reward;
-                active.outcome = message.state;
+                active.outcome = (message.state === 'battle_finish' && winners.length && !winners.includes(botId))
+                    ? 'battle_lose'
+                    : message.state;
                 active.done = true;
                 return;
             }
@@ -856,6 +924,7 @@ async function runLive(args, account) {
             }
             const step = active.battle.nextStep(message);
             const logBattle = msg => line('  #' + active.match + ' ' + msg);
+            traceBattleProgress(active, message, botId, logBattle);
             if (handleBattlePreTurnStep(socket, active, step, logBattle)) return;
             if (step.type === 'turn' && !args.captureBattle) {
                 active.commandReceivedNs = nowNs();
@@ -874,7 +943,7 @@ async function runLive(args, account) {
         socket.joinLobby();
         let knownEnergy = Number(pve.energy);
         let lastEnergyCheckAt = Date.now();
-        const battleTimeoutMs = Number(process.env.NS_COOP_BATTLE_TIMEOUT) || Math.max(args.hostStartTimeout * 2, 900000);
+        const battleTimeoutMs = resolveBattleTimeoutMs(args);
 
         while (report.matches.length < args.maxMatches) {
             // Room scan stays socket-only; avoid slow AMF refresh on every 1.5s poll.
@@ -940,11 +1009,12 @@ async function runLive(args, account) {
             if (active.room && !active.outcome) socket.leaveRoom(active.room.id);
             else if (active.outcome) socket.joinLobby();
             const matchScore = extractScoreForChar(active.score, botId);
-            const summary = { match: active.match, roomId: active.room.id, otherEmblems: active.otherEmblems, emblemStatusUnknown: active.emblemStatusUnknown, rosterConfirmed: active.rosterConfirmed, rosterFields: active.rosterFields, roomEvents: active.roomEvents, ready: active.ready, outcome: active.outcome || 'retry', reason: active.reason, joinAcceptedToReadyMs: active.joinAcceptedToReadyMs, latencyWarning: active.latencyWarning, lastAction: active.lastAction, battleCommandLatencyMs: active.battleCommandLatencyMs, matchScore, score: active.score, reward: active.reward, durationMs: Date.now() - active.startedAt, battle: bufferedBattle.splice(0) };
+            const finalTeam = typeof active.battle.getTeamStatus === 'function' ? active.battle.getTeamStatus() : null;
+            const summary = { match: active.match, roomId: active.room.id, otherEmblems: active.otherEmblems, emblemStatusUnknown: active.emblemStatusUnknown, rosterConfirmed: active.rosterConfirmed, rosterFields: active.rosterFields, roomEvents: active.roomEvents, ready: active.ready, outcome: active.outcome || 'retry', reason: active.reason, selfDied: Boolean(active.wasSelfDead), alivePlayersAtEnd: finalTeam ? finalTeam.alivePlayers.length : null, joinAcceptedToReadyMs: active.joinAcceptedToReadyMs, latencyWarning: active.latencyWarning, lastAction: active.lastAction, battleCommandLatencyMs: active.battleCommandLatencyMs, matchScore, score: active.score, reward: active.reward, durationMs: Date.now() - active.startedAt, battle: bufferedBattle.splice(0) };
             // Force a fresh energy read after every joined room/battle attempt.
             lastEnergyCheckAt = 0;
             if (summary.outcome === 'battle_finish' || summary.outcome === 'battle_win') {
-                line('  #' + summary.match + ' WIN ' + String(args.boss).toUpperCase() + ' (' + summary.outcome + ')');
+                line('  #' + summary.match + ' WIN ' + String(args.boss).toUpperCase() + ' (' + summary.outcome + (summary.selfDied ? '; carry tim, char sempat HP=0' : '') + ')');
                 const updatedRanking = await readPveRanking(result.session);
                 const rankText = updateRankingMeta(meta, updatedRanking, latestRanking, matchScore);
                 if (updatedRanking) { summary.totalScoreAfter = updatedRanking.score; summary.rankAfter = updatedRanking.rank; latestRanking = updatedRanking; }
@@ -1051,7 +1121,7 @@ async function runHostRoom(args, account) {
     const saveReport = () => { try { fs.writeFileSync(reportFile, JSON.stringify(report, null, 2)); } catch (_) {} };
     const solverSession = createSolverSession(args, account, say);
     const { solver } = solverSession;
-    const battleTimeoutMs = Number(process.env.NS_COOP_BATTLE_TIMEOUT) || 900000;
+    const battleTimeoutMs = resolveBattleTimeoutMs(args);
     const profileCache = new Map();
     let socket = null;
     try {
@@ -1231,11 +1301,15 @@ async function runHostRoom(args, account) {
             trace('leave_room', data);
             if (!active || !data) return;
             const id = normCharId(data.character_id ?? data.characterId ?? data.charId ?? data.id ?? '');
-            if (id && id !== hostId && !active.started) {
-                active.players.delete(id);
-                active.readyIds.delete(id);
-                active.pendingKicks.delete(id);
-                say('  LEAVE char=' + id);
+            if (id && id !== hostId) {
+                if (active.started) {
+                    handleMidBattleLeave(active, id, msg => say('  ' + msg));
+                } else {
+                    active.players.delete(id);
+                    active.readyIds.delete(id);
+                    active.pendingKicks.delete(id);
+                    say('  LEAVE char=' + id);
+                }
             }
         });
         socket.on('kick_user', data => {
@@ -1273,6 +1347,7 @@ async function runHostRoom(args, account) {
             }
             if (message.state === 'battle_lose') { clearBattleTimers(active); finish('battle_lose', 'lose'); return; }
             const step = active.battle.nextStep(message);
+            traceBattleProgress(active, message, hostId, msg => say('  ' + msg));
             if (handleBattlePreTurnStep(socket, active, step, msg => say('  ' + msg))) return;
             if (step.type === 'turn') {
                 const turn = chooseCerberusTurn(result.equipped, active.battle.enemyIds, active.turn++, result.charName);
@@ -1337,10 +1412,11 @@ async function runHostRoom(args, account) {
             if (active.roomId && active.outcome == null) socket.leaveRoom(active.roomId);
             const after = await readPveInit(result.session);
             const matchScore = extractScoreForChar(active.score, hostId);
-            const summary = { match: roomNo, roomId: active.roomId, outcome: active.outcome || 'retry', reason: active.reason, battleStarted: active.battleStarted, players: [...active.players.entries()].map(([id, p]) => ({ id, name: p.name, level: p.level, status: p.status })), actions: active.actions, matchScore, score: active.score, reward: active.reward, energyBefore: energyNow, energyAfter: after && after.energy, durationMs: Date.now() - matchStartedAt, battleStates: active.battleStates.slice(-60) };
+            const finalTeam = typeof active.battle.getTeamStatus === 'function' ? active.battle.getTeamStatus() : null;
+            const summary = { match: roomNo, roomId: active.roomId, outcome: active.outcome || 'retry', reason: active.reason, battleStarted: active.battleStarted, selfDied: Boolean(active.wasSelfDead), alivePlayersAtEnd: finalTeam ? finalTeam.alivePlayers.length : null, players: [...active.players.entries()].map(([id, p]) => ({ id, name: p.name, level: p.level, status: p.status })), actions: active.actions, matchScore, score: active.score, reward: active.reward, energyBefore: energyNow, energyAfter: after && after.energy, durationMs: Date.now() - matchStartedAt, battleStates: active.battleStates.slice(-60) };
             if (after && Number.isFinite(Number(after.energy))) meta.energyEnd = Number(after.energy);
             if (active.outcome === 'win') {
-                say('  #' + roomNo + ' WIN CERBERUS');
+                say('  #' + roomNo + ' WIN CERBERUS' + (summary.selfDied ? ' (carry tim, char sempat HP=0)' : ''));
                 const updatedRanking = await readPveRanking(result.session);
                 const rankText = updateRankingMeta(meta, updatedRanking, latestRanking, matchScore);
                 if (updatedRanking) { summary.totalScoreAfter = updatedRanking.score; summary.rankAfter = updatedRanking.rank; latestRanking = updatedRanking; }
@@ -1395,4 +1471,4 @@ async function runHostRoom(args, account) {
     }
 })().catch(error => { line('STOP: ' + error.message); process.exitCode = 1; });
 
-module.exports = { parseArgs, parseAccountsFile, resolveMinStartEnergy, acquireRunLock, parsePveRankingResponse, extractScoreForChar, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, buildSkillDeck, describeDeck, normCharId, idList, evaluateLevel, runDryRun, runLive, runHostRoom };
+module.exports = { parseArgs, parseAccountsFile, resolveMinStartEnergy, resolveBattleTimeoutMs, acquireRunLock, parsePveRankingResponse, extractScoreForChar, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, buildSkillDeck, describeDeck, normCharId, idList, evaluateLevel, traceBattleProgress, handleMidBattleLeave, runDryRun, runLive, runHostRoom };

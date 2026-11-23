@@ -7,11 +7,12 @@ const vm = require('vm');
 const assert = require('assert');
 const { formatCerberusReport, sendHermesReport } = require('./lib/ns_hermes_notify.js');
 const { PveSocket } = require('./lib/ns_pve_socket.js');
+const { PveBattle } = require('./lib/ns_pve_battle.js');
 const source = fs.readFileSync(path.join(__dirname, 'ns_coop_minotaur.js'), 'utf8');
 const cut = source.indexOf('\n(async () => {');
-const context = { module: { exports: {} }, require(name) { if (name === 'fs') return fs; if (name === 'os') return os; if (name === 'path') return path; if (name === './nsclient.js') return {}; if (name.includes('ns_pve_socket')) return { PveSocket: {} }; if (name.includes('ns_pve_battle')) return { PveBattle: class {} }; if (name.includes('ns_hermes_notify')) return { formatCerberusReport, sendHermesReport }; throw new Error(name); }, console, process: { hrtime: process.hrtime, env: {}, stdout: {} }, setTimeout, clearTimeout };
-vm.runInNewContext(source.slice(0, cut) + '\nmodule.exports = { parseArgs, resolveMinStartEnergy, acquireRunLock, parsePveRankingResponse, extractScoreForChar, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, describeDeck, normCharId, idList, evaluateLevel, handleBattlePreTurnStep, clearBattleTimers };', context);
-const { parseArgs, resolveMinStartEnergy, acquireRunLock, parsePveRankingResponse, extractScoreForChar, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, describeDeck, normCharId, idList, evaluateLevel, handleBattlePreTurnStep, clearBattleTimers } = context.module.exports;
+const context = { module: { exports: {} }, require(name) { if (name === 'fs') return fs; if (name === 'os') return os; if (name === 'path') return path; if (name === './nsclient.js') return {}; if (name.includes('ns_pve_socket')) return { PveSocket: {} }; if (name.includes('ns_pve_battle')) return { PveBattle }; if (name.includes('ns_hermes_notify')) return { formatCerberusReport, sendHermesReport }; throw new Error(name); }, console, process: { hrtime: process.hrtime, env: {}, stdout: {} }, setTimeout, clearTimeout };
+vm.runInNewContext(source.slice(0, cut) + '\nmodule.exports = { parseArgs, resolveMinStartEnergy, resolveBattleTimeoutMs, acquireRunLock, parsePveRankingResponse, extractScoreForChar, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, describeDeck, normCharId, idList, evaluateLevel, handleBattlePreTurnStep, clearBattleTimers, traceBattleProgress, handleMidBattleLeave };', context);
+const { parseArgs, resolveMinStartEnergy, resolveBattleTimeoutMs, acquireRunLock, parsePveRankingResponse, extractScoreForChar, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, describeDeck, normCharId, idList, evaluateLevel, handleBattlePreTurnStep, clearBattleTimers, traceBattleProgress, handleMidBattleLeave } = context.module.exports;
 assert.equal(parseArgs([]).maxMatches, Infinity);
 assert.equal(parseArgs(['--max-matches', '2']).maxMatches, 2);
 assert.equal(parseArgs(['--host-room']).hostRoom, true);
@@ -21,6 +22,12 @@ assert.equal(parseArgs(['--stb', '--no-notify']).notify, false);
 assert.equal(parseArgs(['--half-energy']).minStartEnergy, 'auto');
 assert.equal(parseArgs(['--min-start-energy', 'auto']).minStartEnergy, 'auto');
 assert.equal(parseArgs(['--min-start-energy', '40']).minStartEnergy, 40);
+assert.equal(parseArgs(['--battle-timeout', '2700000']).battleTimeout, 2700000);
+assert.throws(() => parseArgs(['--battle-timeout', '0']), /--battle-timeout/);
+assert.equal(resolveBattleTimeoutMs(parseArgs([]), {}), 3600000);
+assert.equal(resolveBattleTimeoutMs(parseArgs(['--host-start-timeout', '2000000']), {}), 4000000);
+assert.equal(resolveBattleTimeoutMs(parseArgs([]), { NS_COOP_BATTLE_TIMEOUT: '1200000' }), 1200000);
+assert.equal(resolveBattleTimeoutMs(parseArgs(['--battle-timeout', '2700000']), { NS_COOP_BATTLE_TIMEOUT: '1200000' }), 2700000);
 assert.equal(parseArgs(['--lock']).lock, true);
 assert.equal(resolveMinStartEnergy('auto', true), 50);
 assert.equal(resolveMinStartEnergy('auto', false), 25);
@@ -133,6 +140,30 @@ assert.equal(handleBattlePreTurnStep(fakeSock, activeSim, { type: 'actionReady' 
 assert.equal(handleBattlePreTurnStep(fakeSock, activeSim, { type: 'actionFinish', charDead: false }), true);
 assert.deepEqual(sent, ['init', 'ready', ['start_atb', '84542'], ['action_ready', '84542'], ['action_finish', false, '84542']]);
 clearBattleTimers(activeSim);
+// Self death + teammate still alive tracing
+const traceLogs = [];
+const activeTrace = { battle: new PveBattle({ charId: '00084542', strategy: 'B' }) };
+activeTrace.battle.nextStep({ event: 'info', state: 'join', ta: ['00084542', '00075128', '00072043'], tb: ['ene_533'] });
+const msgSelfDead = {
+    event: 'command',
+    state: 'battle_action',
+    charId: '5331',
+    battleAction: { action: 'attack' },
+    syncData: [
+        { type: 1, ID: '00084542', HP: 0, CP: 4060 },
+        { type: 1, ID: '00075128', HP: 2500, CP: 3000 },
+        { type: 1, ID: '00072043', HP: 0, CP: 1000 },
+        { type: 4, ID: '5330', HP: 64000, maxHP: 128420 },
+    ],
+};
+const deadStep = activeTrace.battle.nextStep(msgSelfDead);
+assert.equal(deadStep.charDead, true);
+traceBattleProgress(activeTrace, msgSelfDead, '00084542', m => traceLogs.push(m));
+assert.ok(traceLogs.some(l => l.includes('SELF DEAD (HP=0)') && l.includes('sisa tim hidup=1 [00075128]') && l.includes('lanjut sampai selesai')));
+assert.ok(traceLogs.some(l => l.includes('TEAMMATE DEAD char=00072043')));
+assert.ok(traceLogs.some(l => l.includes('SPECTATE') && l.includes('bossHP=[5330:64000/128420]')));
+handleMidBattleLeave(activeTrace, '00075128', m => traceLogs.push(m));
+assert.ok(traceLogs.some(l => l.includes('LEAVE_BATTLE char=00075128 (sisa tim hidup=0)')));
 const sentCmds = [];
 const mockPveSock = new PveSocket({ charId: '00084542' });
 mockPveSock.sendBattleMessage = m => sentCmds.push(m);
