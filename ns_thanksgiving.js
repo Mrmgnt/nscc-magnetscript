@@ -115,6 +115,10 @@ async function amfWithRetry(service, params, options = {}) {
     return { ok: false, empty: false, error: finalErr || 'Unknown AMF error', response: lastRes, body: finalBody };
 }
 
+const MATERIAL_LIMIT_FREE = 20;
+const MATERIAL_LIMIT_EMBLEM = 100;
+const GUN_BLASTING_REQUIREMENTS = { '923': 40, '924': 30 };
+
 function parseMaterialCounts(raw) {
     const mat = {};
     for (const part of String(raw || '').split(',')) {
@@ -122,6 +126,73 @@ function parseMaterialCounts(raw) {
         if (id) mat[id] = Number(val) || 0;
     }
     return mat;
+}
+
+function normalizeSkillSet(rawSkills) {
+    const out = new Set();
+    for (const s of (Array.isArray(rawSkills) ? rawSkills : [])) {
+        const id = String(s && typeof s === 'object' ? (s.skill_id ?? s.skillId ?? s.id ?? '') : s || '').trim();
+        if (id) out.add(id.startsWith('skill') ? id : 'skill' + id);
+    }
+    return out;
+}
+
+function checkWerewolfMaterialSpace(context) {
+    if (!context || !context.materialsInitial) {
+        return { ok: true, blocked: false, full: false, matKinds: 0, maxSlots: null, missingIds: [] };
+    }
+    const maxSlots = Number.isFinite(Number(context.materialMaxSlots))
+        ? Number(context.materialMaxSlots)
+        : (Number(context.accountType) === 2 ? MATERIAL_LIMIT_EMBLEM : (Number(context.accountType) === 1 ? MATERIAL_LIMIT_FREE : null));
+    const matKinds = Number.isFinite(Number(context.materialKinds))
+        ? Number(context.materialKinds)
+        : Object.keys(context.materialsInitial).length;
+    if (!maxSlots) {
+        return { ok: true, blocked: false, full: false, matKinds, maxSlots: null, missingIds: [] };
+    }
+    const missingIds = ['923', '924'].filter(id => !(Number(context.materialsInitial[id]) > 0));
+    const full = matKinds >= maxSlots && missingIds.length > 0;
+    const blocked = matKinds >= maxSlots && missingIds.length === 2;
+    return { ok: !blocked, blocked, full, matKinds, maxSlots, missingIds };
+}
+
+function summarizeMiniGameRewards(rewards) {
+    const dropCounts = { item923: 0, item924: 0 };
+    let emptyCount = 0;
+    for (const body of (Array.isArray(rewards) ? rewards : [])) {
+        const add = (body && body.update_inventory && Array.isArray(body.update_inventory.add_item_id))
+            ? body.update_inventory.add_item_id
+            : [];
+        if (!add.length) {
+            emptyCount++;
+            continue;
+        }
+        for (const entry of add) {
+            const [baseId, qtyRaw] = String(entry).split('_');
+            const qty = Math.max(1, Number(qtyRaw) || 1);
+            dropCounts[baseId] = (dropCounts[baseId] || 0) + qty;
+        }
+    }
+    return { dropCounts, emptyCount, totalDrops: (dropCounts.item923 || 0) + (dropCounts.item924 || 0) };
+}
+
+function diffMaterialProgress(before, after, dropCounts = {}) {
+    const b923 = Number(before && before['923']) || 0;
+    const b924 = Number(before && before['924']) || 0;
+    const a923 = Number(after && after['923']) || 0;
+    const a924 = Number(after && after['924']) || 0;
+    const d923 = a923 - b923;
+    const d924 = a924 - b924;
+    const exp923 = Number(dropCounts.item923) || 0;
+    const exp924 = Number(dropCounts.item924) || 0;
+    return {
+        before: { '923': b923, '924': b924 },
+        after: { '923': a923, '924': a924 },
+        delta: { '923': d923, '924': d924 },
+        expected: { '923': exp923, '924': exp924 },
+        verified: d923 >= exp923 && d924 >= exp924,
+        readyForGunBlasting: a923 >= GUN_BLASTING_REQUIREMENTS['923'] && a924 >= GUN_BLASTING_REQUIREMENTS['924'],
+    };
 }
 
 async function getContext(user, pass, slotOrId, options = {}) {
@@ -139,6 +210,10 @@ async function getContext(user, pass, slotOrId, options = {}) {
     const context = {
         sessionKey: session.sessionKey,
         token: session.token || '',
+        accountType: Number(session.accountType) || 1,
+        materialMaxSlots: Number(session.accountType) === 2 ? MATERIAL_LIMIT_EMBLEM : MATERIAL_LIMIT_FREE,
+        materialKinds: 0,
+        ownedSkills: new Set(),
         charId,
         charName,
         level,
@@ -168,6 +243,8 @@ async function getContext(user, pass, slotOrId, options = {}) {
     context.gk = chRes.gk;
     context.level = Number(chRes.result.character_level) || level;
     context.materialsInitial = parseMaterialCounts(chRes.result.character_material);
+    context.materialKinds = Object.keys(context.materialsInitial).length;
+    context.ownedSkills = normalizeSkillSet(chRes.result.character_skills);
 
     const exRes = await c.getExtraDataWithRetry(context.sessionKey, charId, context.token, context.gk, 3);
     if (exRes.ok && exRes.result && exRes.result.z9t) {
@@ -392,6 +469,20 @@ async function runBattle(context, config = loadConfig(), options = {}) {
     return { battles, totalXp, totalGold, status, rewards };
 }
 
+async function claimGunBlastingSkill(context, matAfter, ownedSkills, options = {}) {
+    if (!context || !context.sessionKey || options.autoClaimSkill === false) return { claimed: false, reason: 'disabled' };
+    if (ownedSkills && ownedSkills.has('skill596')) return { claimed: false, alreadyOwned: true, reason: 'already_owned' };
+    const c923 = Number(matAfter && matAfter['923']) || 0;
+    const c924 = Number(matAfter && matAfter['924']) || 0;
+    if (c923 < GUN_BLASTING_REQUIREMENTS['923'] || c924 < GUN_BLASTING_REQUIREMENTS['924']) {
+        return { claimed: false, reason: 'insufficient_materials' };
+    }
+    const res = await amfWithRetry('ItemDAO.forgeObject', [context.sessionKey, 'skill596', 'en']);
+    if (!res.ok) return { claimed: false, error: res.error, reason: 'forge_failed' };
+    if (ownedSkills) ownedSkills.add('skill596');
+    return { claimed: true, body: res.body };
+}
+
 async function runMiniGame(context, config = loadConfig(), options = {}) {
     if (!isConfigured(config.minigame)) {
         throw new Error('Protokol mini-game belum diisi.');
@@ -404,6 +495,24 @@ async function runMiniGame(context, config = loadConfig(), options = {}) {
     const interDelayMs = options.interDelayMs !== undefined ? options.interDelayMs : Number((config.minigame && config.minigame.interDelayMs) ?? 750);
 
     line(`Werewolf Mini-Game Status Awal: ${status.bullets}/${status.bulletMax} Bullet (Refill: ${formatTime(status.refillRemain)})`);
+    const space = checkWerewolfMaterialSpace(context);
+    if (space.full) {
+        const missingLabel = space.missingIds.map(id => `item${id}`).join(', ');
+        line(`  [PERINGATAN] Slot material penuh (${space.matKinds}/${space.maxSlots}); server dapat menolak drop baru (${missingLabel})!`);
+        if (space.blocked && !options.force) {
+            line(`  [SKIP] Werewolf dilewati agar bullet tidak terbuang sia-sia. Kosongkan minimal 2 slot material atau jalankan dengan --force.`);
+            return {
+                minigames: 0,
+                werewolves: 0,
+                status,
+                rewards: [],
+                dropCounts: { item923: 0, item924: 0 },
+                skippedReason: 'material_inventory_full',
+                space
+            };
+        }
+    }
+
     const limit = Math.min(status.bullets, maxMiniGames);
     let minigames = 0;
     const rewards = [];
@@ -418,14 +527,53 @@ async function runMiniGame(context, config = loadConfig(), options = {}) {
         minigames++;
         rewards.push(mRes.body);
         const curBullets = mRes.sisaBullets !== null ? mRes.sisaBullets : Math.max(0, status.bullets - minigames);
-        const itemText = mRes.items.length ? mRes.items.join(', ') : '0 item (RNG drop)';
+        const itemText = mRes.items.length ? mRes.items.join(', ') : '0 item (tidak drop / inventory penuh)';
         line(`  [Werewolf #${minigames}/${limit}] Stage ${mRes.stageCleared} WIN | Bullet: ${curBullets}/${status.bulletMax} | Drop: ${itemText}`);
 
         if (i < limit - 1 && interDelayMs > 0) await sleep(interDelayMs);
     }
 
     status = await getMiniGameStatus(context, config);
-    return { minigames, werewolves: minigames, status, rewards };
+    const dropSummary = summarizeMiniGameRewards(rewards);
+    let inventoryCheck = null;
+    let skillClaim = null;
+
+    if (minigames > 0 && context.materialsInitial && context.charId && context.sessionKey && !options.skipInventoryVerify && typeof c.getCharacterByIdWithWait === 'function') {
+        try {
+            const afterRes = await c.getCharacterByIdWithWait({ sessionKey: context.sessionKey, token: context.token || '' }, context.charId, {
+                maxWaitMs: 30000,
+                onCooldown: sec => line(`  [Verifikasi Inventori] Menunggu ${sec}s cooldown check material...`)
+            });
+            if (afterRes && afterRes.ok && afterRes.result) {
+                const afterMats = parseMaterialCounts(afterRes.result.character_material);
+                inventoryCheck = diffMaterialProgress(context.materialsInitial, afterMats, dropSummary.dropCounts);
+                const ownedNow = context.ownedSkills && context.ownedSkills.size ? context.ownedSkills : normalizeSkillSet(afterRes.result.character_skills);
+                line(
+                    `  [Werewolf Klaim] Wolf Teeth (item923): ${inventoryCheck.before['923']} -> ${inventoryCheck.after['923']} (+${inventoryCheck.delta['923']}) | ` +
+                    `Gunpowder (item924): ${inventoryCheck.before['924']} -> ${inventoryCheck.after['924']} (+${inventoryCheck.delta['924']}) | ` +
+                    `Status: ${inventoryCheck.verified ? 'TERVERIFIKASI MASUK' : 'SELISIH'}`
+                );
+                if (ownedNow.has('skill596')) {
+                    line('  [Kinjutsu: Gun Blasting] skill596 sudah dimiliki.');
+                    skillClaim = { claimed: false, alreadyOwned: true };
+                } else {
+                    line(`  [Kinjutsu: Gun Blasting] Progress material: Wolf Teeth ${inventoryCheck.after['923']}/40 | Gunpowder ${inventoryCheck.after['924']}/30`);
+                    if (inventoryCheck.readyForGunBlasting) {
+                        skillClaim = await claimGunBlastingSkill(context, afterMats, ownedNow, options);
+                        if (skillClaim.claimed) {
+                            line('  [AUTO CLAIM] Kinjutsu: Gun Blasting (skill596) berhasil ditempa/klaim!');
+                        } else if (skillClaim.error) {
+                            line('  [AUTO CLAIM] Gagal tempa skill596: ' + skillClaim.error);
+                        }
+                    }
+                }
+            }
+        } catch (err) {
+            line('  [Verifikasi Inventori] Lewati cek detail: ' + err.message);
+        }
+    }
+
+    return { minigames, werewolves: minigames, status, rewards, ...dropSummary, inventoryCheck, skillClaim };
 }
 
 function appendReport(entry) {
@@ -438,7 +586,7 @@ function appendReport(entry) {
 async function runForAccount(user, pass, slotOrId, mode, config = loadConfig(), options = {}) {
     const startedAt = new Date().toISOString();
     try {
-        const needCharData = mode === 'battle' || mode === 'full';
+        const needCharData = ['battle', 'minigame', 'werewolf', 'full'].includes(mode);
         const context = (options && options.context) || await getContext(user, pass, slotOrId, { loadCharacterData: needCharData });
         line(`Akun: ${user} | Karakter: ${context.charName} (Lv.${context.level}, ID: ${context.charId})`);
 
@@ -480,9 +628,15 @@ async function runThanksgivingSession(opts = {}) {
     const config = opts.config || loadConfig();
     let context = null;
     if (shared && shared.s && shared.charId && shared.st) {
+        const mats = parseMaterialCounts(shared.st.raw && shared.st.raw.character_material);
+        const accType = Number(shared.s.accountType) || 1;
         context = {
             sessionKey: shared.s.sessionKey,
             token: shared.s.token || '',
+            accountType: accType,
+            materialMaxSlots: accType === 2 ? MATERIAL_LIMIT_EMBLEM : MATERIAL_LIMIT_FREE,
+            materialKinds: Object.keys(mats).length,
+            ownedSkills: normalizeSkillSet(shared.st.raw && shared.st.raw.character_skills),
             charId: String(shared.charId),
             charName: (shared.row && shared.row[1]) || 'Ninja',
             level: Number(shared.st.level) || 1,
@@ -490,7 +644,7 @@ async function runThanksgivingSession(opts = {}) {
             gk: String(shared.st.gk || ''),
             ivg: shared.ex && shared.ex.z9t ? String(shared.ex.z9t) : '',
             ivn: '',
-            materialsInitial: parseMaterialCounts(shared.st.raw && shared.st.raw.character_material)
+            materialsInitial: mats
         };
     }
 
@@ -498,6 +652,7 @@ async function runThanksgivingSession(opts = {}) {
         maxBattles: opts.maxBattles,
         maxMiniGames: opts.maxMiniGames,
         enemyId: opts.enemyId,
+        force: opts.force,
         context
     });
     if (!entry.ok) {
@@ -507,12 +662,19 @@ async function runThanksgivingSession(opts = {}) {
     const r = entry.result || {};
     const battles = r.battles ?? (r.battle && r.battle.battles) ?? 0;
     const minigames = r.minigames ?? (r.minigame && r.minigame.minigames) ?? 0;
+    const mgDrops = (r.minigame && r.minigame.dropCounts) || r.dropCounts || {};
+    const d923 = Number(mgDrops.item923) || 0;
+    const d924 = Number(mgDrops.item924) || 0;
+    const skipReason = (r.minigame && r.minigame.skippedReason) || r.skippedReason || '';
+    const dropDetail = skipReason === 'material_inventory_full'
+        ? ' (slot material penuh)'
+        : ((d923 || d924) ? ` (Wolf Teeth +${d923}, Gunpowder +${d924})` : '');
     return {
         exitCode: 0,
         battles,
         minigames,
         kredit: battles + minigames,
-        summary: `Battle ${battles}x | Werewolf ${minigames}x`
+        summary: `Battle ${battles}x | Werewolf ${minigames}x${dropDetail}`
     };
 }
 
@@ -522,6 +684,7 @@ function parseCliArgs(argv) {
     let maxBattles = null;
     let maxMiniGames = null;
     let enemyId = '';
+    let force = false;
 
     for (let i = 0; i < args.length; i++) {
         const a = args[i];
@@ -533,6 +696,8 @@ function parseCliArgs(argv) {
             if (!Number.isNaN(val)) maxMiniGames = val;
         } else if (a === '--enemy' && args[i + 1] !== undefined) {
             enemyId = String(args[++i]).trim();
+        } else if (a === '--force') {
+            force = true;
         } else {
             positional.push(a);
         }
@@ -548,7 +713,7 @@ function parseCliArgs(argv) {
         maxMiniGames = parseInt(positional[2], 10);
     }
 
-    return { mode, subMode: (positional[1] || 'full').toLowerCase(), maxBattles, maxMiniGames, enemyId };
+    return { mode, subMode: (positional[1] || 'full').toLowerCase(), maxBattles, maxMiniGames, enemyId, force };
 }
 
 async function runSchedulerLoop(user, pass, slotOrId, subMode = 'full', config = loadConfig()) {
@@ -593,7 +758,7 @@ function releaseTerminalInput() {
 async function main() {
     c.enableGracefulStop('menu event');
     const parsed = parseCliArgs(process.argv);
-    const { mode, subMode, maxBattles, maxMiniGames, enemyId } = parsed;
+    const { mode, subMode, maxBattles, maxMiniGames, enemyId, force } = parsed;
 
     if (!['status', 'battle', 'minigame', 'werewolf', 'full', 'loop'].includes(mode)) {
         throw new Error('Pakai: status | battle [max] | minigame [max] | full [maxBattle] [maxMini] | loop [mode]');
@@ -610,7 +775,7 @@ async function main() {
         return;
     }
 
-    const result = await runForAccount(user, pass, slot, mode, config, { maxBattles, maxMiniGames, enemyId });
+    const result = await runForAccount(user, pass, slot, mode, config, { maxBattles, maxMiniGames, enemyId, force });
     if (!result.ok) throw new Error(result.error);
 
     if (mode === 'status') {
@@ -647,6 +812,12 @@ module.exports = {
     renderParam,
     parseCliArgs,
     summarizeBattleReward,
+    parseMaterialCounts,
+    normalizeSkillSet,
+    checkWerewolfMaterialSpace,
+    summarizeMiniGameRewards,
+    diffMaterialProgress,
+    claimGunBlastingSkill,
     getContext,
     getBattleStatus,
     getMiniGameStatus,

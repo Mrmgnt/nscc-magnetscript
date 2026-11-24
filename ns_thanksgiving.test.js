@@ -6,7 +6,7 @@ const os = require('os');
 const path = require('path');
 const zlib = require('zlib');
 
-const { parseStatus, renderParam, isConfigured, loadConfig, parseCliArgs, summarizeBattleReward, formatTime } = require('./ns_thanksgiving.js');
+const { parseStatus, renderParam, isConfigured, loadConfig, parseCliArgs, summarizeBattleReward, parseMaterialCounts, normalizeSkillSet, checkWerewolfMaterialSpace, summarizeMiniGameRewards, diffMaterialProgress, claimGunBlastingSkill, formatTime } = require('./ns_thanksgiving.js');
 const { decodeAmfPacket, parseHttpMessage, dechunkHttpBody } = require('./lib/amf_decoder.js');
 const { readZipEntries, groupRawSessionEntries } = require('./lib/saz_reader.js');
 const { decodeSazFile, decodeJsonlCapture, inspectCryptoParam } = require('./tools/import_thanksgiving_saz.js');
@@ -135,14 +135,16 @@ assert.deepStrictEqual(parseCliArgs(['node', 'ns_thanksgiving.js', 'full', '1', 
     subMode: '1',
     maxBattles: 1,
     maxMiniGames: 1,
-    enemyId: ''
+    enemyId: '',
+    force: false
 });
-assert.deepStrictEqual(parseCliArgs(['node', 'ns_thanksgiving.js', 'minigame', '--max-minigame', '2']), {
+assert.deepStrictEqual(parseCliArgs(['node', 'ns_thanksgiving.js', 'minigame', '--max-minigame', '2', '--force']), {
     mode: 'minigame',
     subMode: 'full',
     maxBattles: null,
     maxMiniGames: 2,
-    enemyId: ''
+    enemyId: '',
+    force: true
 });
 assert.deepStrictEqual(
     summarizeBattleReward({ reward: ['xp_30000', 'gold_30000', 'item918', 'item925'], reward_get: ['item918', 'item925'] }, cfg),
@@ -266,4 +268,54 @@ assert.deepStrictEqual(parseArgs(['--port', '9000', '--duration', '120', '--no-s
 });
 assert.strictEqual(inspectCryptoParam('plain', 0, ['plain'], sk), null);
 
-console.log('ns_thanksgiving.test.js OK');
+// 6. Test Werewolf material capacity guard, reward summary, inventory delta & Gun Blasting eligibility
+const fullFreeNoWolf = checkWerewolfMaterialSpace({
+    accountType: 1,
+    materialMaxSlots: 20,
+    materialKinds: 23,
+    materialsInitial: { '634': 10, '904': 50 }
+});
+assert.strictEqual(fullFreeNoWolf.ok, false);
+assert.strictEqual(fullFreeNoWolf.blocked, true);
+assert.strictEqual(fullFreeNoWolf.full, true);
+assert.deepStrictEqual(fullFreeNoWolf.missingIds, ['923', '924']);
+
+const fullFreeCanStack = checkWerewolfMaterialSpace({
+    accountType: 1,
+    materialMaxSlots: 20,
+    materialKinds: 23,
+    materialsInitial: { '923': 5, '924': 6 }
+});
+assert.strictEqual(fullFreeCanStack.ok, true);
+assert.strictEqual(fullFreeCanStack.blocked, false);
+
+const mgSummary = summarizeMiniGameRewards([
+    { status: 1, result: { win: 1, stage_cleared: 3 }, update_inventory: { showPopup: true, add_item_id: ['item924_1'] } },
+    { status: 1, result: { win: 1, stage_cleared: 3 }, update_inventory: { showPopup: true, add_item_id: ['item923_1'] } },
+    { status: 1, result: { win: 1, stage_cleared: 3 }, update_inventory: { showPopup: false, add_item_id: [] } }
+]);
+assert.deepStrictEqual(mgSummary, {
+    dropCounts: { item923: 1, item924: 1 },
+    emptyCount: 1,
+    totalDrops: 2
+});
+
+const deltaVerified = diffMaterialProgress({ '923': 8, '924': 9 }, { '923': 9, '924': 10 }, mgSummary.dropCounts);
+assert.strictEqual(deltaVerified.verified, true);
+assert.deepStrictEqual(deltaVerified.delta, { '923': 1, '924': 1 });
+assert.strictEqual(deltaVerified.readyForGunBlasting, false);
+
+const deltaReady = diffMaterialProgress({ '923': 39, '924': 29 }, { '923': 40, '924': 30 }, { item923: 1, item924: 1 });
+assert.strictEqual(deltaReady.readyForGunBlasting, true);
+assert.ok(normalizeSkillSet(['skill39', '596']).has('skill596'));
+
+(async () => {
+    const owned = new Set(['skill39', 'skill596']);
+    const already = await claimGunBlastingSkill({ sessionKey: 'gs_test' }, { '923': 45, '924': 35 }, owned);
+    assert.deepStrictEqual(already, { claimed: false, alreadyOwned: true, reason: 'already_owned' });
+
+    const notReady = await claimGunBlastingSkill({ sessionKey: 'gs_test' }, { '923': 8, '924': 10 }, new Set(['skill39']));
+    assert.deepStrictEqual(notReady, { claimed: false, reason: 'insufficient_materials' });
+
+    console.log('ns_thanksgiving.test.js OK');
+})();
