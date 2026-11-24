@@ -52,6 +52,22 @@ const AUTO_SKILL_PRIORITY = ['633', '632', '638', '623', '728', '345', '629', '8
 const AOE_SKILL_IDS = String((process.env && process.env.NS_COOP_AOE_SKILL_IDS) || '632,638,623,728').split(',').map(id => id.trim()).filter(Boolean);
 const STUN_SKILL_ID = String((process.env && process.env.NS_COOP_STUN_SKILL_ID) || '345').trim();
 const DEFAULT_BATTLE_TIMEOUT_MS = 3600000;
+const MAX_KICKS_PER_ROOM = 3;
+const KICK_SKIP_MS = 600000;
+
+function recordRoomKick(kickCounts, roomId, masterId = null, now = Date.now(), maxKicks = MAX_KICKS_PER_ROOM, ttlMs = KICK_SKIP_MS) {
+    const key = roomId == null ? '' : String(roomId).trim();
+    if (!key || !kickCounts || typeof kickCounts.get !== 'function' || typeof kickCounts.set !== 'function') return { count: 0, blocked: false };
+    const masterKey = masterId ? normCharId(masterId) : '';
+    const prev = kickCounts.get(key);
+    const expired = prev && Number.isFinite(prev.updatedAt) && (now - prev.updatedAt > ttlMs);
+    const masterChanged = Boolean(prev && prev.masterId && masterKey && prev.masterId !== masterKey);
+    const count = (!prev || expired || masterChanged) ? 1 : prev.count + 1;
+    const blocked = count > maxKicks;
+    if (blocked) kickCounts.delete(key);
+    else kickCounts.set(key, { count, masterId: masterKey || (prev && prev.masterId) || '', updatedAt: now });
+    return { count, blocked };
+}
 
 function parseArgs(argv) {
     const envNotify = process.env && (process.env.NS_HERMES_NOTIFY === '1' || Boolean(process.env.HERMES_NOTIFY_URL));
@@ -220,6 +236,39 @@ function parseAccountsFile(file, requiredCount = 1) {
     return accounts;
 }
 
+const MAX_SOCKET_RECONNECTS = 5;
+function isTransientSocketError(err) {
+    const msg = String(err && err.message || err || '');
+    return /Socket terputus|Socket\.IO terputus|Socket error|room summary timeout|connect timeout|WebSocket closed/i.test(msg);
+}
+async function reconnectPveSession({ oldSocket, session, charId, minEnergy, label, logFn, bindSocket }) {
+    if (logFn) logFn('  RECONNECT socket (' + label + ')...');
+    if (oldSocket) { try { oldSocket.close(); } catch (_) {} }
+    await sleep(3000);
+    const freshPve = await readPveInit(session);
+    if (!freshPve || !freshPve.pvpServer || !freshPve.pvpServer[0]) {
+        return { ok: false, stopReason: 'PvE server tidak tersedia saat reconnect', energy: freshPve && freshPve.energy };
+    }
+    if (!Number.isFinite(freshPve.energy) || freshPve.energy < minEnergy) {
+        return { ok: false, stopReason: 'Energy habis (' + freshPve.energy + ' < ' + minEnergy + ')', energy: freshPve.energy, energyDepleted: true };
+    }
+    const nextSock = await connectPve({
+        server: freshPve.pvpServer[0],
+        sessionKey: session.sessionKey,
+        charId,
+        handoffToken: freshPve.handoffToken,
+        handoffNonce: freshPve.handoffNonce,
+        ver: freshPve.ver,
+    });
+    if (bindSocket) bindSocket(nextSock, freshPve);
+    nextSock.auth();
+    await nextSock.waitAuth(15000);
+    if (!nextSock.hasCommandKey()) throw new Error('Command key socket tidak terbentuk saat reconnect.');
+    nextSock.joinLobby();
+    if (logFn) logFn('  OK RECONNECT socket (energy=' + freshPve.energy + ')');
+    return { ok: true, socket: nextSock, pve: freshPve };
+}
+
 function levelSuffix(level) { return LEVEL_INDEX[String(level || '').toLowerCase()] || 3; }
 async function connectPve(options) {
     let lastError = null;
@@ -276,6 +325,11 @@ async function loginAccount(account, webData) {
                 }
             } catch (_) {}
         }
+        const SENJUTSU_KNOWN_NAMES = {
+            '3000': 'Sage Mode',
+            '3500': 'Senjutsu: Super Charges',
+            '3110': 'Senjutsu: Dragon Sublimation',
+        };
         const senjutsuIds = new Set();
         for (const raw of senjutsuList) {
             const id = String(raw && typeof raw === 'object' ? (raw.skill_id ?? raw.skillId ?? raw.id ?? '') : raw || '');
@@ -283,18 +337,18 @@ async function loginAccount(account, webData) {
             senjutsuIds.add(id);
             const name = raw && typeof raw === 'object' ? String(raw.skill_name ?? raw.skillName ?? raw.name ?? raw.title ?? '') : '';
             if (!skillDetails.has(id)) {
-                skillDetails.set(id, { id, name: name || (id === '3110' ? 'Senjutsu: Dragon Sublimation' : ''), action: 'senjutsu' });
+                skillDetails.set(id, { id, name: name || SENJUTSU_KNOWN_NAMES[id] || '', action: 'senjutsu' });
             } else {
                 const cur = skillDetails.get(id);
                 cur.action = 'senjutsu';
-                if (!cur.name && name) cur.name = name;
+                if (!cur.name && (name || SENJUTSU_KNOWN_NAMES[id])) cur.name = name || SENJUTSU_KNOWN_NAMES[id];
             }
         }
         const rawEquipped = (data.character_equipped_skills || []).map(String);
         for (const id of rawEquipped) {
-            if (Number(id) >= 3100 && !skillDetails.has(id)) {
+            if (Number(id) >= 3000 && !skillDetails.has(id)) {
                 senjutsuIds.add(id);
-                skillDetails.set(id, { id, name: id === '3110' ? 'Senjutsu: Dragon Sublimation' : '', action: 'senjutsu' });
+                skillDetails.set(id, { id, name: SENJUTSU_KNOWN_NAMES[id] || '', action: 'senjutsu' });
             }
         }
         const owned = new Set(skillDetails.keys());
@@ -467,9 +521,18 @@ function clearBattleTimers(active) {
         active.initFallbackTimer = null;
     }
 }
-function sendBattleReadyOnce(socket, active, logFn) {
+function sendBattleReadyOnce(socket, active, logFn, afterInit = false) {
     clearBattleTimers(active);
-    if (!active || active.done || active.battleReadySent) return;
+    if (!active || active.done) return;
+    if (afterInit) {
+        if (active.battleReadyAfterInitSent) return;
+        active.battleReadyAfterInitSent = true;
+        active.battleReadySent = true;
+        socket.battleReady();
+        if (logFn) logFn('SENT battle_ready');
+        return;
+    }
+    if (active.battleReadySent) return;
     active.battleReadySent = true;
     socket.battleReady();
     if (logFn) logFn('SENT battle_ready');
@@ -483,14 +546,14 @@ function handleBattlePreTurnStep(socket, active, step, logFn) {
             clearBattleTimers(active);
             active.initFallbackTimer = setTimeout(() => {
                 if (active && !active.done && !active.battleReadySent && !active.atbStarted) {
-                    sendBattleReadyOnce(socket, active, msg => logFn && logFn(msg + ' (fallback)'));
+                    sendBattleReadyOnce(socket, active, msg => logFn && logFn(msg + ' (fallback)'), false);
                 }
-            }, 1200);
+            }, 4500);
         }
         return true;
     }
     if (step.type === 'ready') {
-        sendBattleReadyOnce(socket, active, logFn);
+        sendBattleReadyOnce(socket, active, logFn, true);
         return true;
     }
     if (step.type === 'startAtb') {
@@ -556,11 +619,62 @@ function messageValue(raw) {
     if (typeof message !== 'string') return message;
     try { return JSON.parse(message); } catch (_) { return null; }
 }
+function readSelfHp(battle, selfId) {
+    if (!battle || !battle.playersHp || typeof battle.playersHp.values !== 'function') return null;
+    const selfNorm = normCharId(selfId);
+    for (const entry of battle.playersHp.values()) {
+        if (entry && normCharId(entry.id) === selfNorm) {
+            const hp = Number(entry.hp);
+            return Number.isFinite(hp) ? hp : null;
+        }
+    }
+    return null;
+}
+function hasReactiveForcePacket(message) {
+    if (!message || typeof message !== 'object') return false;
+    if (message.reactive_force || message.reactiveForce) return true;
+    const ba = message.battleAction;
+    if (!ba || typeof ba !== 'object') return false;
+    if (ba.feed === true || ba.reactive_force || ba.reactiveForce) return true;
+    const lists = [ba.feedback, ba.feedback_skipcheck];
+    for (const rawList of lists) {
+        const items = Array.isArray(rawList) ? rawList : (rawList && typeof rawList === 'object' ? [rawList] : []);
+        for (const item of items) {
+            if (!item || typeof item !== 'object') continue;
+            const kind = String(item.type || item.effect || '').toLowerCase();
+            if (kind.includes('reactive_force') && (!item.resisted || Number(item.damage) > 0)) return true;
+        }
+    }
+    return false;
+}
+function trackReactiveForce(active, message, selfId, hpBefore, hpAfter, logFn) {
+    if (!active || !message || message.state !== 'battle_action') return false;
+    if (normCharId(message.charId) !== normCharId(selfId)) return false;
+    const ba = message.battleAction || {};
+    const rawSkill = ba.skillId ?? ba.skill_id ?? '';
+    const skillNum = String(rawSkill).replace(/^skill/i, '').trim();
+    const usedSkill345 = skillNum ? skillNum === '345' : String(active.lastSelfSkillId || '') === '345';
+    active.lastSelfSkillId = null;
+    if (!usedSkill345) return false;
+    const hpDrop = (hpBefore != null && hpAfter != null && hpAfter < hpBefore) ? (hpBefore - hpAfter) : 0;
+    const explicit = hasReactiveForcePacket(message);
+    if (!explicit && !(hpDrop > 0)) return false;
+    active.reactiveForcePending = true;
+    if (logFn) {
+        const detail = hpDrop > 0 ? ' (HP -' + hpDrop + ' -> ' + hpAfter + ')' : ' (feedback packet)';
+        logFn('REACTIVE_FORCE terdeteksi saat skill345' + detail + '; prioritas Senjutsu: Super Charges (skill3500) berikutnya');
+    }
+    return true;
+}
 function pickSkill(skills, id) { return (skills || []).find(skill => String(skill.id) === String(id)) || null; }
 function normalizeSkillName(skill) { return String(skill && skill.name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
 function pickNamedSkill(skills, names, fallbackId) {
     const wanted = names.map(name => name.toLowerCase());
     return (skills || []).find(skill => wanted.some(name => normalizeSkillName(skill).includes(name))) || pickSkill(skills, fallbackId);
+}
+function pickSuperChargesSkill(skills, extraSkills = []) {
+    const pool = [...(skills || []), ...(extraSkills || [])];
+    return pickNamedSkill(pool, ['super charges', 'super charge'], '3500');
 }
 function hasFullQuickmatchTeam(players) { return Array.isArray(players) && players.length >= 3; }
 function isUchihaRazq(charName) { return String(charName || '').trim().toLowerCase() === 'uchiha razq'; }
@@ -576,9 +690,14 @@ function cycleSequenceTurn(sequence, skills, head, turn, priorityLabel, fallback
     const skill = fallback.length ? fallback[turn % fallback.length] : null;
     return skill ? { skill, targetId: head, label: fallbackLabel } : { skill: null, targetId: head, label: 'weapon' };
 }
-function chooseQuickmatchTurn(charName, skills, enemyIds, turn) {
+function chooseQuickmatchTurn(charName, skills, enemyIds, turn, opts = {}) {
     const head = enemyIds && enemyIds[0];
+    const isCerberus = !opts || opts.boss == null || String(opts.boss).toLowerCase() === 'cerberus';
     if (isUchihaRazq(charName)) {
+        if (isCerberus && opts && opts.reactiveForcePending) {
+            const superCharges = pickSuperChargesSkill(skills, opts.extraSkills);
+            if (superCharges) return { skill: superCharges, targetId: head, label: 'razq_reactive_super_charges', override: true };
+        }
         const sequence = [
             pickNamedSkill(skills, ['five element consuming seal', 'five elements seal'], '345'),
             pickNamedSkill(skills, ['thunder explosion'], '633'),
@@ -654,7 +773,7 @@ async function runLive(args, account) {
     const solverSession = createSolverSession(args, account, line);
     const { solver } = solverSession;
     let socket = null;
-    const report = { generatedAt: new Date().toISOString(), mode: 'public-room', account: account.username, matches: [], scans: [], error: null };
+    const report = { generatedAt: new Date().toISOString(), mode: 'public-room', account: account.username, matches: [], attempts: [], scans: [], error: null };
     const meta = { charName: account.username, energyStart: null, energyEnd: null, totalScoreStart: null, totalScoreEnd: null, rankStart: null, rankEnd: null, stopReason: null };
     const saveReport = () => fs.writeFileSync(path.join(process.cwd(), 'coop_report.json'), JSON.stringify(report, null, 2));
     try {
@@ -688,12 +807,14 @@ async function runLive(args, account) {
         let joinRejectTimer = null;
         const masterProfileCache = new Map();
         const rejectedRoomUntil = new Map();
+        const roomKicks = new Map();
         const bufferedBattle = [];
-        const blockRoom = (roomId, reason) => {
+        const blockRoom = (roomId, reason, ttlMs = 120000) => {
             if (!roomId) return;
-            const until = Date.now() + 120000;
+            const durationMs = Number.isFinite(Number(ttlMs)) && Number(ttlMs) > 0 ? Number(ttlMs) : 120000;
+            const until = Date.now() + durationMs;
             rejectedRoomUntil.set(String(roomId), until);
-            line('  ROOM ' + roomId + ' skip 120 dtk (' + reason + ')');
+            line('  ROOM ' + roomId + ' skip ' + Math.round(durationMs / 1000) + ' dtk (' + reason + ')');
         };
         const resetActive = reason => {
             if (!active) return;
@@ -710,57 +831,75 @@ async function runLive(args, account) {
                 if (active && !active.done && !active.joinAccepted) resetActive(reason);
             }, timeoutMs);
         };
-        socket.on('error', err => {
-            const msg = err && err.message ? err.message : 'Socket error';
-            fatal = fatal || new Error('Socket error: ' + msg);
-        });
-        socket.on('si_error', sp => {
-            fatal = fatal || new Error('Socket.IO error: ' + JSON.stringify(sp && sp.data));
-        });
-        socket.on('si_disconnect', () => {
-            if (!fatal) fatal = new Error('Socket.IO terputus oleh server');
-        });
-        socket.on('close', (code, reason) => {
-            if (!fatal) fatal = new Error('Socket terputus (code=' + (code ?? '?') + (reason ? ', ' + reason : '') + ')');
-        });
-        socket.on('get_room_summary', data => {
-            rooms = roomArray(data);
-        });
-        socket.on('captcha_required', () => {
-            if (!active || active.done || active.joinAccepted || solvingCaptcha) return;
-            active.captchaRequested = true;
-            if (joinRejectTimer) { clearTimeout(joinRejectTimer); joinRejectTimer = null; }
-            if (++captchaAttempts > 2) { fatal = new Error('CAPTCHA berulang; berhenti agar akun tidak terkunci.'); return; }
-            solvingCaptcha = true;
-            line('  #' + active.match + ' CAPTCHA verifikasi join...');
-            solverSession.ensure().then(() => solver.solve('pve')).then(async outcome => {
-                const decision = captchaRetryDecision(outcome);
-                if (decision.action === 'stop') {
-                    fatal = new Error('CAPTCHA ditolak server. fails_left=' + (decision.failsLeft == null ? 'unknown' : decision.failsLeft) + '. Selesaikan manual sebelum lanjut.');
-                    return;
-                }
-                if (decision.action === 'retry') {
-                    line('  CAPTCHA ditolak; fails_left=' + decision.failsLeft + '. Ulang join room.');
-                    await sleep(1000);
-                    if (active && !active.done) {
-                        socket.joinRoom(active.room.id, '', pve.ver);
-                        watchJoinResponse('captcha_join_timeout', 12000);
-                    }
-                    return;
-                }
-                // Give server verification state time to reach PvE socket before retrying join.
-                await sleep(750);
-                if (!active || active.done) return;
-                line('  #' + active.match + ' CAPTCHA OK; ulang join room=' + active.room.id);
-                socket.joinRoom(active.room.id, '', pve.ver);
-                watchJoinResponse('captcha_join_timeout', 12000);
-            }).catch(error => {
-                resetActive('captcha_error:' + String(error.message || error).slice(0, 80));
-            }).finally(async () => {
-                await solverSession.releaseIfStb();
-                solvingCaptcha = false;
+        const roomEventDetail = data => {
+            if (!data || typeof data !== 'object') return {};
+            return {
+                status: data.status,
+                reason: data.reason || data.message || data.error,
+                keys: Object.keys(data).slice(0, 12),
+            };
+        };
+        const markBattleStarted = () => {
+            if (!active || active.started) return;
+            active.started = true;
+            if (active.room && active.room.id) roomKicks.delete(String(active.room.id));
+            divider('BATTLE #' + active.match + ' ' + String(args.boss).toUpperCase());
+            line('  #' + active.match + ' START ' + String(args.boss).toUpperCase());
+        };
+        let currentPve = pve;
+        const bindLiveSocket = sock => {
+            sock.on('error', err => {
+                const msg = err && err.message ? err.message : 'Socket error';
+                fatal = fatal || new Error('Socket error: ' + msg);
             });
-        });
+            sock.on('si_error', sp => {
+                fatal = fatal || new Error('Socket.IO error: ' + JSON.stringify(sp && sp.data));
+            });
+            sock.on('si_disconnect', () => {
+                if (!fatal) fatal = new Error('Socket.IO terputus oleh server');
+            });
+            sock.on('close', (code, reason) => {
+                if (!fatal) fatal = new Error('Socket terputus (code=' + (code ?? '?') + (reason ? ', ' + reason : '') + ')');
+            });
+            sock.on('get_room_summary', data => {
+                rooms = roomArray(data);
+            });
+            sock.on('captcha_required', () => {
+                if (!active || active.done || active.joinAccepted || solvingCaptcha) return;
+                active.captchaRequested = true;
+                if (joinRejectTimer) { clearTimeout(joinRejectTimer); joinRejectTimer = null; }
+                if (++captchaAttempts > 2) { fatal = new Error('CAPTCHA berulang; berhenti agar akun tidak terkunci.'); return; }
+                solvingCaptcha = true;
+                line('  #' + active.match + ' CAPTCHA verifikasi join...');
+                solverSession.ensure().then(() => solver.solve('pve')).then(async outcome => {
+                    const decision = captchaRetryDecision(outcome);
+                    if (decision.action === 'stop') {
+                        fatal = new Error('CAPTCHA ditolak server. fails_left=' + (decision.failsLeft == null ? 'unknown' : decision.failsLeft) + '. Selesaikan manual sebelum lanjut.');
+                        return;
+                    }
+                    if (decision.action === 'retry') {
+                        line('  CAPTCHA ditolak; fails_left=' + decision.failsLeft + '. Ulang join room.');
+                        await sleep(1000);
+                        if (active && !active.done) {
+                            sock.joinRoom(active.room.id, '', currentPve.ver);
+                            watchJoinResponse('captcha_join_timeout', 12000);
+                        }
+                        return;
+                    }
+                    // Give server verification state time to reach PvE socket before retrying join.
+                    await sleep(750);
+                    if (!active || active.done) return;
+                    line('  #' + active.match + ' CAPTCHA OK; ulang join room=' + active.room.id);
+                    sock.joinRoom(active.room.id, '', currentPve.ver);
+                    watchJoinResponse('captcha_join_timeout', 12000);
+                }).catch(error => {
+                    resetActive('captcha_error:' + String(error.message || error).slice(0, 80));
+                }).finally(async () => {
+                    await solverSession.releaseIfStb();
+                    solvingCaptcha = false;
+                });
+            });
+        };
         const applyRoster = async data => {
             if (!active || active.done || active.started || !data) return false;
             const raw = data.character_array || data.characters || data.players || data.ta;
@@ -822,210 +961,287 @@ async function runLive(args, account) {
             active.ready = true;
             line('  #' + active.match + ' READY room=' + active.room.id + ' (' + active.joinAcceptedToReadyMs.toFixed(1) + ' ms)' + (active.rosterConfirmed ? '' : ' roster=menunggu') + '; tunggu host max ' + Math.round(args.hostStartTimeout / 1000) + ' dtk');
         };
-        socket.on('join_room', async data => {
-            if (!active || active.done || active.started) return;
-            if (active.joinAccepted) {
-                const applied = await applyRoster(data);
-                if (applied && active && !active.done && !active.started) sendReady();
-                return;
-            }
-            if (Number(data && data.status) !== 1 || data.room_name === 'lobby') {
-                // Some servers emit join rejection just before captcha_required.
-                // Hold state briefly so CAPTCHA can resend this same join command.
-                if (!active.captchaRequested && !joinRejectTimer) watchJoinResponse('join_rejected', 1500);
-                return;
-            }
-            if (joinRejectTimer) { clearTimeout(joinRejectTimer); joinRejectTimer = null; }
-            active.joinAccepted = true;
-            active.joinAcceptedNs = nowNs();
-            await applyRoster(data);
-            if (active && !active.done && !active.started) sendReady();
-        });
-        // `ready` packets carry only the subset of ready character IDs (or empty data on host startGame);
-        // never overwrite active.players from `ready` or kick ourselves out when battle is starting.
-        socket.on('ready', () => {
-            if (active && !active.done && !active.started) sendReady();
-        });
-        socket.on('leave_room', data => {
-            if (!active || active.done || !data) return;
-            const left = normCharId(data.character_id ?? data.characterId ?? data.charId ?? data.id ?? '');
-            if (active.started) {
-                if (left && left !== botId) handleMidBattleLeave(active, left, msg => line('  #' + active.match + ' ' + msg));
-                return;
-            }
-            if (!active.rosterConfirmed) return;
-            if (left) active.players = active.players.filter(player => normCharId(player.charId) !== left);
-            const others = active.players.filter(player => normCharId(player.charId) !== botId);
-            if (active.emblemStatusUnknown) {
-                if (!others.length) resetActive('all_other_players_left');
-                return;
-            }
-            if (countOtherEmblems(active.players, botId) < 1) resetActive('emblem_player_left');
-        });
-        const roomEventDetail = data => {
-            if (!data || typeof data !== 'object') return {};
-            return {
-                status: data.status,
-                reason: data.reason || data.message || data.error,
-                keys: Object.keys(data).slice(0, 12),
-            };
-        };
-        for (const event of ['kick_user', 'force_lobby', 'destroy_battle']) {
-            socket.on(event, data => {
-                if (active && !active.done) {
-                    const detail = roomEventDetail(data);
-                    active.roomEvents = active.roomEvents || [];
-                    active.roomEvents.push({ event, ...detail });
-                    line('  #' + active.match + ' SERVER ' + event + (detail.reason ? ' (' + detail.reason + ')' : ''));
-                    if (event === 'force_lobby') blockRoom(active.room.id, 'force_lobby');
+        const bindLiveGameplay = sock => {
+            sock.on('join_room', async data => {
+                if (!active || active.done || active.started) return;
+                if (active.joinAccepted) {
+                    const applied = await applyRoster(data);
+                    if (applied && active && !active.done && !active.started) sendReady();
+                    return;
                 }
-                resetActive(event);
+                if (Number(data && data.status) !== 1 || data.room_name === 'lobby') {
+                    // Some servers emit join rejection just before captcha_required.
+                    // Hold state briefly so CAPTCHA can resend this same join command.
+                    if (!active.captchaRequested && !joinRejectTimer) watchJoinResponse('join_rejected', 1500);
+                    return;
+                }
+                if (joinRejectTimer) { clearTimeout(joinRejectTimer); joinRejectTimer = null; }
+                active.joinAccepted = true;
+                active.joinAcceptedNs = nowNs();
+                await applyRoster(data);
+                if (active && !active.done && !active.started) sendReady();
             });
-        }
-        const markBattleStarted = () => {
-            if (!active || active.started) return;
-            active.started = true;
-            divider('BATTLE #' + active.match + ' ' + String(args.boss).toUpperCase());
-            line('  #' + active.match + ' START ' + String(args.boss).toUpperCase());
-        };
-        socket.on('battle_start', markBattleStarted);
-        socket.on('battle_msg', raw => {
-            const message = messageValue(raw);
-            if (!message || !active || active.done) return;
-            if (bufferedBattle.length < 100) {
-                const ba = message.battleAction;
-                bufferedBattle.push({
-                    event: message.event,
-                    state: message.state,
-                    charId: message.charId,
-                    ...(ba ? { action: ba.action, skillId: ba.skillId || ba.SENSKILLID || ba.BLSKILLID } : {}),
+            // `ready` packets carry only the subset of ready character IDs (or empty data on host startGame);
+            // never overwrite active.players from `ready` or kick ourselves out when battle is starting.
+            sock.on('ready', () => {
+                if (active && !active.done && !active.started) sendReady();
+            });
+            sock.on('leave_room', data => {
+                if (!active || active.done || !data) return;
+                const left = normCharId(data.character_id ?? data.characterId ?? data.charId ?? data.id ?? '');
+                if (active.started) {
+                    if (left && left !== botId) handleMidBattleLeave(active, left, msg => line('  #' + active.match + ' ' + msg));
+                    return;
+                }
+                if (!active.rosterConfirmed) return;
+                if (left) active.players = active.players.filter(player => normCharId(player.charId) !== left);
+                const others = active.players.filter(player => normCharId(player.charId) !== botId);
+                if (active.emblemStatusUnknown) {
+                    if (!others.length) resetActive('all_other_players_left');
+                    return;
+                }
+                if (countOtherEmblems(active.players, botId) < 1) resetActive('emblem_player_left');
+            });
+            sock.on('kick_user', data => {
+                if (!active || active.done) return;
+                const detail = roomEventDetail(data);
+                const kickedId = normCharId(data && (data.character_id ?? data.characterId ?? data.charId ?? data.id) || '');
+                const masterId = active.master && normCharId(active.master.charId);
+                if (kickedId && kickedId !== botId) {
+                    if (masterId && kickedId === masterId) {
+                        active.roomEvents = active.roomEvents || [];
+                        active.roomEvents.push({ event: 'kick_user', ...detail, kickedId });
+                        line('  #' + active.match + ' SERVER kick_user (master ' + kickedId + ' keluar)');
+                        blockRoom(active.room.id, 'master_left');
+                        resetActive('kick_user');
+                        return;
+                    }
+                    active.players = (active.players || []).filter(player => normCharId(player.charId) !== kickedId);
+                    line('  #' + active.match + ' PEMAIN LAIN DI-KICK char=' + kickedId + '; tetap di room ' + (active.room && active.room.id));
+                    return;
+                }
+                active.roomEvents = active.roomEvents || [];
+                active.roomEvents.push({ event: 'kick_user', ...detail });
+                const kickRes = recordRoomKick(roomKicks, active.room && active.room.id, masterId);
+                line('  #' + active.match + ' SERVER kick_user' + (detail.reason ? ' (' + detail.reason + ')' : '') + ' [kick ' + kickRes.count + '/' + MAX_KICKS_PER_ROOM + ' di room ' + (active.room && active.room.id) + ']');
+                if (kickRes.blocked) {
+                    blockRoom(active.room.id, 'kicked_gt_3x', KICK_SKIP_MS);
+                }
+                resetActive('kick_user');
+            });
+            for (const event of ['force_lobby', 'destroy_battle']) {
+                sock.on(event, data => {
+                    if (active && !active.done) {
+                        const detail = roomEventDetail(data);
+                        active.roomEvents = active.roomEvents || [];
+                        active.roomEvents.push({ event, ...detail });
+                        line('  #' + active.match + ' SERVER ' + event + (detail.reason ? ' (' + detail.reason + ')' : ''));
+                        if (event === 'force_lobby') blockRoom(active.room.id, 'force_lobby');
+                    }
+                    resetActive(event);
                 });
             }
-            if (['join', 'init', 'start', 'start_atb'].includes(message.state)) {
-                markBattleStarted();
-                line('  #' + active.match + ' RECV ' + (message.event || '') + '/' + (message.state || ''));
-            }
-            if (message.state === 'battle_finish' || message.state === 'battle_win') {
-                clearBattleTimers(active);
-                const winners = idList(message.winnerIDs || message.winner_ids || message.winners).map(normCharId);
-                active.score = message.score;
-                active.reward = message.reward;
-                active.outcome = (message.state === 'battle_finish' && winners.length && !winners.includes(botId))
-                    ? 'battle_lose'
-                    : message.state;
-                active.done = true;
-                return;
-            }
-            if (message.state === 'battle_lose') { clearBattleTimers(active); active.outcome = 'battle_lose'; active.done = true; return; }
-            if (message.state === 'battle_action' && normCharId(message.charId) === botId) {
-                active.myBattleActions = (active.myBattleActions || 0) + 1;
-                const ba = message.battleAction || {};
-                line('  #' + active.match + ' OK BATTLE_ACTION ' + (ba.action || '') + ' ' + (ba.skillId || ba.SENSKILLID || ba.BLSKILLID || '') + ' (char=' + message.charId + ')');
-            }
-            const step = active.battle.nextStep(message);
-            const logBattle = msg => line('  #' + active.match + ' ' + msg);
-            traceBattleProgress(active, message, botId, logBattle);
-            if (handleBattlePreTurnStep(socket, active, step, logBattle)) return;
-            if (step.type === 'turn' && !args.captureBattle) {
-                active.commandReceivedNs = nowNs();
-                const turn = chooseQuickmatchTurn(result.charName, result.skills, active.battle.enemyIds, active.turn++);
-                const action = turn.skill ? (turn.skill.action || (Number(turn.skill.id) >= 3100 ? 'senjutsu' : 'skill')) : 'weapon_attack';
-                const actorId = step.charId || (active.battle && active.battle.battleCharId) || botId;
-                socket.battleCommand(actorId, action, turn.skill && turn.skill.skillId, turn.targetId);
-                active.lastAction = turn.label + ':' + action + ':' + (turn.skill ? turn.skill.skillId : 'weapon_attack');
-                active.battleCommandLatencyMs = elapsedMs(active.commandReceivedNs);
-                line('  #' + active.match + ' SKILL ' + active.lastAction + ' char=' + actorId + ' (' + active.battleCommandLatencyMs.toFixed(1) + ' ms)');
-            }
-        });
+            sock.on('battle_start', markBattleStarted);
+            sock.on('battle_msg', raw => {
+                const message = messageValue(raw);
+                if (!message || !active || active.done) return;
+                if (bufferedBattle.length < 100) {
+                    const ba = message.battleAction;
+                    bufferedBattle.push({
+                        event: message.event,
+                        state: message.state,
+                        charId: message.charId,
+                        ...(ba ? { action: ba.action, skillId: ba.skillId || ba.SENSKILLID || ba.BLSKILLID } : {}),
+                    });
+                }
+                if (['join', 'init', 'start', 'start_atb'].includes(message.state)) {
+                    markBattleStarted();
+                    line('  #' + active.match + ' RECV ' + (message.event || '') + '/' + (message.state || ''));
+                }
+                if (message.state === 'battle_finish' || message.state === 'battle_win') {
+                    clearBattleTimers(active);
+                    const winners = idList(message.winnerIDs || message.winner_ids || message.winners).map(normCharId);
+                    active.score = message.score;
+                    active.reward = message.reward;
+                    active.outcome = (message.state === 'battle_finish' && winners.length && !winners.includes(botId))
+                        ? 'battle_lose'
+                        : message.state;
+                    active.done = true;
+                    return;
+                }
+                if (message.state === 'battle_lose') { clearBattleTimers(active); active.outcome = 'battle_lose'; active.done = true; return; }
+                if (message.state === 'battle_action' && normCharId(message.charId) === botId) {
+                    active.myBattleActions = (active.myBattleActions || 0) + 1;
+                    const ba = message.battleAction || {};
+                    line('  #' + active.match + ' OK BATTLE_ACTION ' + (ba.action || '') + ' ' + (ba.skillId || ba.SENSKILLID || ba.BLSKILLID || '') + ' (char=' + message.charId + ')');
+                }
+                const hpBefore = readSelfHp(active.battle, botId);
+                const step = active.battle.nextStep(message);
+                const hpAfter = readSelfHp(active.battle, botId);
+                const logBattle = msg => line('  #' + active.match + ' ' + msg);
+                if (isUchihaRazq(result.charName) && String(args.boss || '').toLowerCase() === 'cerberus') {
+                    trackReactiveForce(active, message, botId, hpBefore, hpAfter, logBattle);
+                }
+                traceBattleProgress(active, message, botId, logBattle);
+                if (handleBattlePreTurnStep(sock, active, step, logBattle)) return;
+                if (step.type === 'turn' && !args.captureBattle) {
+                    active.commandReceivedNs = nowNs();
+                    const turn = chooseQuickmatchTurn(result.charName, result.skills, active.battle.enemyIds, active.turn, {
+                        boss: args.boss,
+                        reactiveForcePending: Boolean(active.reactiveForcePending),
+                        extraSkills: result.skills,
+                    });
+                    if (turn.override) active.reactiveForcePending = false;
+                    else active.turn++;
+                    const action = turn.skill ? (turn.skill.action || (Number(turn.skill.id) >= 3000 ? 'senjutsu' : 'skill')) : 'weapon_attack';
+                    const actorId = step.charId || (active.battle && active.battle.battleCharId) || botId;
+                    active.lastSelfSkillId = turn.skill ? String(turn.skill.id || turn.skill.skillId || '').replace(/^skill/i, '') : null;
+                    sock.battleCommand(actorId, action, turn.skill && turn.skill.skillId, turn.targetId);
+                    active.lastAction = turn.label + ':' + action + ':' + (turn.skill ? turn.skill.skillId : 'weapon_attack');
+                    active.battleCommandLatencyMs = elapsedMs(active.commandReceivedNs);
+                    line('  #' + active.match + ' SKILL ' + active.lastAction + ' char=' + actorId + ' (' + active.battleCommandLatencyMs.toFixed(1) + ' ms)');
+                }
+            });
+        };
+        const bindAllLive = (sock, nextPve) => {
+            if (nextPve) currentPve = nextPve;
+            bindLiveSocket(sock);
+            bindLiveGameplay(sock);
+        };
+        bindAllLive(socket, pve);
         socket.auth();
         await socket.waitAuth(15000);
         if (!socket.hasCommandKey()) throw new Error('Command key socket tidak terbentuk.');
         socket.joinLobby();
         let knownEnergy = Number(pve.energy);
         let lastEnergyCheckAt = Date.now();
+        let attemptNo = 0;
+        let reconnectAttempts = 0;
         const battleTimeoutMs = resolveBattleTimeoutMs(args);
 
         while (report.matches.length < args.maxMatches) {
-            // Room scan stays socket-only; avoid slow AMF refresh on every 1.5s poll.
-            if (Date.now() - lastEnergyCheckAt >= 30000) {
-                const fresh = await readPveInit(result.session);
-                if (!fresh || !Number.isFinite(fresh.energy)) { meta.stopReason = 'Gagal membaca sisa energy'; break; }
-                knownEnergy = fresh.energy;
-                meta.energyEnd = knownEnergy;
-                lastEnergyCheckAt = Date.now();
-            }
-            if (!Number.isFinite(knownEnergy) || knownEnergy < joinCost) {
-                divider('SELESAI');
-                meta.stopReason = 'Energy habis (' + knownEnergy + ' < ' + joinCost + ')';
-                line('  STOP: ' + meta.stopReason);
-                break;
-            }
-            requestRooms();
-            const scanDeadline = Date.now() + 15000;
-            while (!Array.isArray(rooms)) {
+            try {
+                // Room scan stays socket-only; avoid slow AMF refresh on every 1.5s poll.
+                if (Date.now() - lastEnergyCheckAt >= 30000) {
+                    const fresh = await readPveInit(result.session);
+                    if (!fresh || !Number.isFinite(fresh.energy)) { meta.stopReason = 'Gagal membaca sisa energy'; break; }
+                    knownEnergy = fresh.energy;
+                    meta.energyEnd = knownEnergy;
+                    lastEnergyCheckAt = Date.now();
+                }
+                if (!Number.isFinite(knownEnergy) || knownEnergy < joinCost) {
+                    divider('SELESAI');
+                    meta.stopReason = 'Energy habis (' + knownEnergy + ' < ' + joinCost + ')';
+                    line('  STOP: ' + meta.stopReason);
+                    break;
+                }
                 if (fatal) throw fatal;
-                if (Date.now() >= scanDeadline) throw new Error('room summary timeout');
-                await sleep(25);
-            }
-            for (const [roomId, until] of rejectedRoomUntil) if (until <= Date.now()) rejectedRoomUntil.delete(roomId);
-            const picked = pickRoom(rooms, quest.quest, botId, new Set(rejectedRoomUntil.keys()));
-            const matchNo = report.matches.length + 1;
-            report.scans.push({ at: new Date().toISOString(), rooms: rooms.length, candidate: picked.room && picked.room.id, rejects: picked.evaluated.filter(item => item.reason !== 'accepted') });
-            if (!picked.room) {
-                line('  #' + matchNo + ' REFRESH rooms=' + rooms.length + ' (' + scanSummary(picked.evaluated) + '); ulang ' + (args.roomPollMs / 1000) + ' dtk');
-                await sleep(args.roomPollMs);
-                continue;
-            }
-            active = { match: matchNo, room: picked.room, players: picked.room.players.slice(), rosterConfirmed: picked.room.schemaComplete, started: false, ready: false, done: false, reason: null, outcome: null, startedAt: Date.now(), turn: 0, battle: new PveBattle({ charId: botId, strategy: 'B', skills: result.skills }) };
-            captchaAttempts = 0;
-            divider('MATCH #' + matchNo);
-            line('  #' + matchNo + ' JOIN room=' + active.room.id + (picked.otherEmblems == null ? ' (verifikasi roster)' : ' emblem=' + picked.room.players.filter(player => player.isEmblem).length));
-            socket.joinRoom(active.room.id, '', pve.ver);
-            const readyDeadline = Date.now() + args.hostStartTimeout;
-            while (!active.done && !active.ready && Date.now() < readyDeadline) {
-                if (fatal) throw fatal;
-                await sleep(10);
-            }
-            if (!active.done && !active.ready) resetActive('ready_timeout');
-            if (active && !active.done && !active.started) {
-                // Host timer begins only after our READY command, never during CAPTCHA/join.
-                const hostDeadline = active.readySentNs
-                    ? Date.now() + Math.max(0, args.hostStartTimeout - Math.round(elapsedMs(active.readySentNs)))
-                    : Date.now() + args.hostStartTimeout;
-                while (!active.done && !active.started && Date.now() < hostDeadline) {
+                requestRooms();
+                const scanDeadline = Date.now() + 15000;
+                while (!Array.isArray(rooms)) {
+                    if (fatal) throw fatal;
+                    if (Date.now() >= scanDeadline) throw new Error('room summary timeout');
+                    await sleep(25);
+                }
+                for (const [roomId, until] of rejectedRoomUntil) if (until <= Date.now()) rejectedRoomUntil.delete(roomId);
+                const picked = pickRoom(rooms, quest.quest, botId, new Set(rejectedRoomUntil.keys()));
+                const battleNo = report.matches.length + 1;
+                report.scans.push({ at: new Date().toISOString(), rooms: rooms.length, candidate: picked.room && picked.room.id, rejects: picked.evaluated.filter(item => item.reason !== 'accepted') });
+                if (!picked.room) {
+                    reconnectAttempts = 0;
+                    line('  #' + battleNo + ' REFRESH rooms=' + rooms.length + ' (' + scanSummary(picked.evaluated) + '); ulang ' + (args.roomPollMs / 1000) + ' dtk');
+                    await sleep(args.roomPollMs);
+                    continue;
+                }
+                attemptNo++;
+                active = { match: battleNo, attempt: attemptNo, room: picked.room, players: picked.room.players.slice(), rosterConfirmed: picked.room.schemaComplete, started: false, ready: false, done: false, reason: null, outcome: null, startedAt: Date.now(), turn: 0, battle: new PveBattle({ charId: botId, strategy: 'B', skills: result.skills }) };
+                captchaAttempts = 0;
+                divider('COBA #' + attemptNo + ' (Battle #' + battleNo + ')');
+                line('  #' + battleNo + ' (coba #' + attemptNo + ') JOIN room=' + active.room.id + (picked.otherEmblems == null ? ' (verifikasi roster)' : ' emblem=' + picked.room.players.filter(player => player.isEmblem).length));
+                socket.joinRoom(active.room.id, '', currentPve.ver);
+                const readyDeadline = Date.now() + args.hostStartTimeout;
+                while (!active.done && !active.ready && Date.now() < readyDeadline) {
                     if (fatal) throw fatal;
                     await sleep(10);
                 }
-                if (!active.done && !active.started) resetActive('host_start_timeout');
-            }
-            if (active && !active.done && active.started && !args.captureBattle) {
-                const battleDeadline = Date.now() + battleTimeoutMs;
-                while (!active.done && Date.now() < battleDeadline) {
-                    if (fatal) throw fatal;
-                    await sleep(10);
+                if (!active.done && !active.ready) resetActive('ready_timeout');
+                if (active && !active.done && !active.started) {
+                    // Host timer begins only after our READY command, never during CAPTCHA/join.
+                    const hostDeadline = active.readySentNs
+                        ? Date.now() + Math.max(0, args.hostStartTimeout - Math.round(elapsedMs(active.readySentNs)))
+                        : Date.now() + args.hostStartTimeout;
+                    while (!active.done && !active.started && Date.now() < hostDeadline) {
+                        if (fatal) throw fatal;
+                        await sleep(10);
+                    }
+                    if (!active.done && !active.started) resetActive('host_start_timeout');
                 }
-                if (!active.done) resetActive('battle_timeout');
+                if (active && !active.done && active.started && !args.captureBattle) {
+                    const battleDeadline = Date.now() + battleTimeoutMs;
+                    while (!active.done && Date.now() < battleDeadline) {
+                        if (fatal) throw fatal;
+                        await sleep(10);
+                    }
+                    if (!active.done) resetActive('battle_timeout');
+                }
+                if (active.room && !active.outcome) socket.leaveRoom(active.room.id);
+                else if (active.outcome) socket.joinLobby();
+                const matchScore = extractScoreForChar(active.score, botId);
+                const finalTeam = typeof active.battle.getTeamStatus === 'function' ? active.battle.getTeamStatus() : null;
+                const summary = { attempt: active.attempt, match: active.match, roomId: active.room.id, otherEmblems: active.otherEmblems, emblemStatusUnknown: active.emblemStatusUnknown, rosterConfirmed: active.rosterConfirmed, rosterFields: active.rosterFields, roomEvents: active.roomEvents, ready: active.ready, outcome: active.outcome || 'retry', reason: active.reason, selfDied: Boolean(active.wasSelfDead), alivePlayersAtEnd: finalTeam ? finalTeam.alivePlayers.length : null, joinAcceptedToReadyMs: active.joinAcceptedToReadyMs, latencyWarning: active.latencyWarning, lastAction: active.lastAction, battleCommandLatencyMs: active.battleCommandLatencyMs, matchScore, score: active.score, reward: active.reward, durationMs: Date.now() - active.startedAt, battle: bufferedBattle.splice(0) };
+                // Force a fresh energy read after every joined room/battle attempt.
+                lastEnergyCheckAt = 0;
+                reconnectAttempts = 0;
+                const isDecidedBattle = summary.outcome === 'battle_finish' || summary.outcome === 'battle_win' || summary.outcome === 'battle_lose';
+                if (summary.outcome === 'battle_finish' || summary.outcome === 'battle_win') {
+                    line('  #' + summary.match + ' WIN ' + String(args.boss).toUpperCase() + ' (' + summary.outcome + (summary.selfDied ? '; carry tim, char sempat HP=0' : '') + ')');
+                    const updatedRanking = await readPveRanking(result.session);
+                    const rankText = updateRankingMeta(meta, updatedRanking, latestRanking, matchScore);
+                    if (updatedRanking) { summary.totalScoreAfter = updatedRanking.score; summary.rankAfter = updatedRanking.rank; latestRanking = updatedRanking; }
+                    if (rankText) line('  #' + summary.match + ' OK ' + rankText);
+                }
+                else if (summary.outcome === 'battle_lose') line('  #' + summary.match + ' LOSE ' + String(args.boss).toUpperCase());
+                else line('  #' + summary.match + ' (coba #' + summary.attempt + ') RETRY (' + (summary.reason || summary.outcome) + ')');
+                report.attempts.push(summary);
+                if (isDecidedBattle) report.matches.push(summary);
+                saveReport();
+                line('');
+                active = null;
+            } catch (err) {
+                if (joinRejectTimer) { clearTimeout(joinRejectTimer); joinRejectTimer = null; }
+                if (active) { clearBattleTimers(active); active = null; }
+                fatal = null;
+                if (!isTransientSocketError(err) || reconnectAttempts >= MAX_SOCKET_RECONNECTS) throw err;
+                reconnectAttempts++;
+                const reconnected = await reconnectPveSession({
+                    oldSocket: socket,
+                    session: result.session,
+                    charId: botId,
+                    minEnergy: joinCost,
+                    label: err.message + '; ulang ' + reconnectAttempts + '/' + MAX_SOCKET_RECONNECTS,
+                    logFn: line,
+                    bindSocket: (nextSock, nextPve) => {
+                        socket = nextSock;
+                        rooms = null;
+                        fatal = null;
+                        bindAllLive(nextSock, nextPve);
+                    },
+                });
+                if (Number.isFinite(Number(reconnected.energy))) {
+                    knownEnergy = Number(reconnected.energy);
+                    meta.energyEnd = knownEnergy;
+                    lastEnergyCheckAt = Date.now();
+                }
+                if (!reconnected.ok) {
+                    if (reconnected.energyDepleted) {
+                        divider('SELESAI');
+                        meta.stopReason = reconnected.stopReason;
+                        line('  STOP: ' + meta.stopReason);
+                        break;
+                    }
+                    throw new Error(reconnected.stopReason || err.message);
+                }
             }
-            if (active.room && !active.outcome) socket.leaveRoom(active.room.id);
-            else if (active.outcome) socket.joinLobby();
-            const matchScore = extractScoreForChar(active.score, botId);
-            const finalTeam = typeof active.battle.getTeamStatus === 'function' ? active.battle.getTeamStatus() : null;
-            const summary = { match: active.match, roomId: active.room.id, otherEmblems: active.otherEmblems, emblemStatusUnknown: active.emblemStatusUnknown, rosterConfirmed: active.rosterConfirmed, rosterFields: active.rosterFields, roomEvents: active.roomEvents, ready: active.ready, outcome: active.outcome || 'retry', reason: active.reason, selfDied: Boolean(active.wasSelfDead), alivePlayersAtEnd: finalTeam ? finalTeam.alivePlayers.length : null, joinAcceptedToReadyMs: active.joinAcceptedToReadyMs, latencyWarning: active.latencyWarning, lastAction: active.lastAction, battleCommandLatencyMs: active.battleCommandLatencyMs, matchScore, score: active.score, reward: active.reward, durationMs: Date.now() - active.startedAt, battle: bufferedBattle.splice(0) };
-            // Force a fresh energy read after every joined room/battle attempt.
-            lastEnergyCheckAt = 0;
-            if (summary.outcome === 'battle_finish' || summary.outcome === 'battle_win') {
-                line('  #' + summary.match + ' WIN ' + String(args.boss).toUpperCase() + ' (' + summary.outcome + (summary.selfDied ? '; carry tim, char sempat HP=0' : '') + ')');
-                const updatedRanking = await readPveRanking(result.session);
-                const rankText = updateRankingMeta(meta, updatedRanking, latestRanking, matchScore);
-                if (updatedRanking) { summary.totalScoreAfter = updatedRanking.score; summary.rankAfter = updatedRanking.rank; latestRanking = updatedRanking; }
-                if (rankText) line('  #' + summary.match + ' OK ' + rankText);
-            }
-            else if (summary.outcome === 'battle_lose') line('  #' + summary.match + ' LOSE ' + String(args.boss).toUpperCase());
-            else line('  #' + summary.match + ' RETRY (' + (summary.reason || summary.outcome) + ')');
-            report.matches.push(summary);
-            saveReport();
-            line('');
-            active = null;
         }
         if (!meta.stopReason && report.matches.length >= args.maxMatches) meta.stopReason = 'Target ' + args.maxMatches + ' match tercapai';
     } catch (error) {
@@ -1062,20 +1278,26 @@ function buildSkillDeck(skills) {
     const rest = usable.filter(skill => !used.has(skillKey(skill)));
     return { defense, opener, aoe, rest };
 }
-function chooseCerberusTurn(skills, enemyIds, turn, charName = '') {
+function chooseCerberusTurn(skills, enemyIds, turn, charName = '', opts = {}) {
     const head = enemyIds && enemyIds[0];
+    const isCerberus = !opts || opts.boss == null || String(opts.boss).toLowerCase() === 'cerberus';
     if (isUchihaRazq(charName)) {
+        if (isCerberus && opts && opts.reactiveForcePending) {
+            const superCharges = pickSuperChargesSkill(skills, opts.extraSkills);
+            if (superCharges) return { skill: superCharges, targetId: head, label: 'razq_host_reactive_super_charges', override: true };
+        }
+        const pool = opts && opts.extraSkills ? [...(skills || []), ...opts.extraSkills] : skills;
         const sequence = [
-            pickNamedSkill(skills, ['kinjutsu evasion', 'evasion'], '39'),
-            pickNamedSkill(skills, ['five element consuming seal', 'five elements seal'], '345'),
-            pickNamedSkill(skills, ['thunder explosion'], '633'),
-            pickNamedSkill(skills, ['flame armor'], '629'),
-            pickNamedSkill(skills, ['electric smash'], '632'),
-            pickNamedSkill(skills, ['advanced aphrodite s blessing', 'aphrodite s blessing'], '854'),
-            pickNamedSkill(skills, ['dragon sublimation'], '3110'),
-            pickNamedSkill(skills, ['dance of fujin'], '151'),
+            pickNamedSkill(pool, ['kinjutsu evasion', 'evasion'], '39'),
+            pickNamedSkill(pool, ['five element consuming seal', 'five elements seal'], '345'),
+            pickNamedSkill(pool, ['thunder explosion'], '633'),
+            pickNamedSkill(pool, ['flame armor'], '629'),
+            pickNamedSkill(pool, ['electric smash'], '632'),
+            pickNamedSkill(pool, ['advanced aphrodite s blessing', 'aphrodite s blessing'], '854'),
+            pickNamedSkill(pool, ['dragon sublimation'], '3110'),
+            pickNamedSkill(pool, ['dance of fujin'], '151'),
         ].filter(Boolean);
-        return cycleSequenceTurn(sequence, skills, head, turn, 'razq_host_priority', 'razq_host_fallback');
+        return cycleSequenceTurn(sequence, pool, head, turn, 'razq_host_priority', 'razq_host_fallback');
     }
     const deck = buildSkillDeck(skills);
     const sequence = [];
@@ -1154,8 +1376,9 @@ async function runHostRoom(args, account) {
         let captchaAttempts = 0;
         let createRejectTimer = null;
         const clearCreateTimer = () => { if (createRejectTimer) { clearTimeout(createRejectTimer); createRejectTimer = null; } };
+        let currentHostPve = pve;
         const finish = (reason, outcome) => { if (!active || active.done) return; clearBattleTimers(active); active.reason = active.reason || reason; if (outcome) active.outcome = outcome; active.done = true; };
-        const sendCreate = () => socket.createRoom({ password: '', mode: 3, quest: quest.quest, ver: pve.ver });
+        const sendCreate = () => socket.createRoom({ password: '', mode: 3, quest: quest.quest, ver: currentHostPve.ver });
 
         const evaluatePlayer = (rawId, info) => {
             const id = normCharId(rawId);
@@ -1224,212 +1447,264 @@ async function runHostRoom(args, account) {
             socket.startGame();
         };
 
-        socket.on('error', err => { const msg = err && err.message ? err.message : 'Socket error'; fatal = fatal || new Error('Socket error: ' + msg); });
-        socket.on('si_error', sp => { fatal = fatal || new Error('Socket.IO error: ' + JSON.stringify(sp && sp.data)); });
-        socket.on('si_disconnect', () => { if (!fatal) fatal = new Error('Socket.IO terputus oleh server'); });
-        socket.on('close', (code, reason) => { if (!fatal) fatal = new Error('Socket terputus (code=' + (code ?? '?') + (reason ? ', ' + reason : '') + ')'); });
-        socket.on('captcha_required', () => {
-            if (!active || solvingCaptcha || active.done) return;
-            clearCreateTimer();
-            if (++captchaAttempts > 2) { fatal = new Error('CAPTCHA berulang; berhenti agar akun tidak terkunci.'); return; }
-            solvingCaptcha = true;
-            say('  CAPTCHA verifikasi create room...');
-            solverSession.ensure().then(() => solver.solve('pve')).then(async outcome => {
-                const decision = captchaRetryDecision(outcome);
-                if (decision.action === 'stop') {
-                    fatal = new Error('CAPTCHA ditolak server. fails_left=' + (decision.failsLeft == null ? 'unknown' : decision.failsLeft) + '. Selesaikan manual sebelum lanjut.');
-                    return;
-                }
-                if (decision.action === 'retry') {
-                    say('  CAPTCHA ditolak; fails_left=' + decision.failsLeft + '. Ulang create room.');
-                    await sleep(1000);
-                    if (active && !active.done && !active.roomId) sendCreate();
-                    return;
-                }
-                await sleep(750);
-                if (active && !active.done && !active.roomId) { say('  CAPTCHA OK; ulang create room'); sendCreate(); }
-            }).catch(error => finish('captcha_error:' + String(error.message || error).slice(0, 80))).finally(async () => {
-                await solverSession.releaseIfStb();
-                solvingCaptcha = false;
+        const bindHostSocket = sock => {
+            sock.on('error', err => { const msg = err && err.message ? err.message : 'Socket error'; fatal = fatal || new Error('Socket error: ' + msg); });
+            sock.on('si_error', sp => { fatal = fatal || new Error('Socket.IO error: ' + JSON.stringify(sp && sp.data)); });
+            sock.on('si_disconnect', () => { if (!fatal) fatal = new Error('Socket.IO terputus oleh server'); });
+            sock.on('close', (code, reason) => { if (!fatal) fatal = new Error('Socket terputus (code=' + (code ?? '?') + (reason ? ', ' + reason : '') + ')'); });
+            sock.on('captcha_required', () => {
+                if (!active || solvingCaptcha || active.done) return;
+                clearCreateTimer();
+                if (++captchaAttempts > 2) { fatal = new Error('CAPTCHA berulang; berhenti agar akun tidak terkunci.'); return; }
+                solvingCaptcha = true;
+                say('  CAPTCHA verifikasi create room...');
+                solverSession.ensure().then(() => solver.solve('pve')).then(async outcome => {
+                    const decision = captchaRetryDecision(outcome);
+                    if (decision.action === 'stop') {
+                        fatal = new Error('CAPTCHA ditolak server. fails_left=' + (decision.failsLeft == null ? 'unknown' : decision.failsLeft) + '. Selesaikan manual sebelum lanjut.');
+                        return;
+                    }
+                    if (decision.action === 'retry') {
+                        say('  CAPTCHA ditolak; fails_left=' + decision.failsLeft + '. Ulang create room.');
+                        await sleep(1000);
+                        if (active && !active.done && !active.roomId) sendCreate();
+                        return;
+                    }
+                    await sleep(750);
+                    if (active && !active.done && !active.roomId) { say('  CAPTCHA OK; ulang create room'); sendCreate(); }
+                }).catch(error => finish('captcha_error:' + String(error.message || error).slice(0, 80))).finally(async () => {
+                    await solverSession.releaseIfStb();
+                    solvingCaptcha = false;
+                });
             });
-        });
-        socket.on('join_room', data => {
-            trace('join_room', data);
-            if (!active || !data) return;
-            if (!active.roomId) {
-                if (Number(data.status) === 1 && data.room_name && data.room_name !== 'lobby') {
-                    clearCreateTimer();
-                    active.roomId = String(data.room_name);
-                    active.createdAt = Date.now();
-                    say('  HOST ROOM=' + active.roomId + ' | menunggu 2 pemain Lv>=' + args.minLevel);
-                } else if (data.room_name !== 'lobby' && !createRejectTimer) {
-                    createRejectTimer = setTimeout(() => { createRejectTimer = null; if (active && !active.roomId && !solvingCaptcha) finish('create_rejected(status=' + data.status + ')'); }, 2000);
+            sock.on('join_room', data => {
+                trace('join_room', data);
+                if (!active || !data) return;
+                if (!active.roomId) {
+                    if (Number(data.status) === 1 && data.room_name && data.room_name !== 'lobby') {
+                        clearCreateTimer();
+                        active.roomId = String(data.room_name);
+                        active.createdAt = Date.now();
+                        say('  HOST ROOM=' + active.roomId + ' | menunggu 2 pemain Lv>=' + args.minLevel);
+                    } else if (data.room_name !== 'lobby' && !createRejectTimer) {
+                        createRejectTimer = setTimeout(() => { createRejectTimer = null; if (active && !active.roomId && !solvingCaptcha) finish('create_rejected(status=' + data.status + ')'); }, 2000);
+                    }
+                    return;
                 }
-                return;
-            }
-            const ids = idList(data.ta);
-            if (ids.length) syncMembers(ids, null);
-            else if (data.characterId != null && normCharId(data.characterId) !== hostId) syncMembers([...active.players.keys(), normCharId(data.characterId)], null);
-        });
-        socket.on('get_room_summary', data => {
-            if (!active || !active.roomId || active.done) return;
-            const rooms = roomArray(data);
-            if (!Array.isArray(rooms)) return;
-            const room = rooms.find(r => String(r.room_name) === active.roomId);
-            if (!room) {
-                // Server omits 3/3 full rooms from get_room_summary; only count missing when room is empty.
-                if (!active.started && active.players.size === 0 && ++active.missing >= 15) finish('room_missing');
-                return;
-            }
-            active.missing = 0;
-            const infoMap = new Map((data.char_array || []).map(ch => [normCharId(ch.char_id), ch]));
-            syncMembers(idList(room.ta), infoMap);
-            maybeStart();
-        });
-        const onReadyList = data => {
-            if (!active || !data) return;
-            trace('ready', data);
-            const ids = idList(data.character_array).map(normCharId).filter(id => id && id !== hostId);
-            for (const id of ids) evaluatePlayer(id, null);
-            active.readyIds = new Set(ids.filter(id => active.players.get(id)?.status !== 'invalid'));
-            maybeStart();
+                const ids = idList(data.ta);
+                if (ids.length) syncMembers(ids, null);
+                else if (data.characterId != null && normCharId(data.characterId) !== hostId) syncMembers([...active.players.keys(), normCharId(data.characterId)], null);
+            });
+            sock.on('get_room_summary', data => {
+                if (!active || !active.roomId || active.done) return;
+                const rooms = roomArray(data);
+                if (!Array.isArray(rooms)) return;
+                const room = rooms.find(r => String(r.room_name) === active.roomId);
+                if (!room) {
+                    // Server omits 3/3 full rooms from get_room_summary; only count missing when room is empty.
+                    if (!active.started && active.players.size === 0 && ++active.missing >= 15) finish('room_missing');
+                    return;
+                }
+                active.missing = 0;
+                const infoMap = new Map((data.char_array || []).map(ch => [normCharId(ch.char_id), ch]));
+                syncMembers(idList(room.ta), infoMap);
+                maybeStart();
+            });
+            const onReadyList = data => {
+                if (!active || !data) return;
+                trace('ready', data);
+                const ids = idList(data.character_array).map(normCharId).filter(id => id && id !== hostId);
+                for (const id of ids) evaluatePlayer(id, null);
+                active.readyIds = new Set(ids.filter(id => active.players.get(id)?.status !== 'invalid'));
+                maybeStart();
+            };
+            sock.on('ready', onReadyList);
+            sock.on('cancel_ready', onReadyList);
+            sock.on('reset_ready', () => { if (active && !active.started) active.readyIds.clear(); });
+            sock.on('leave_room', data => {
+                trace('leave_room', data);
+                if (!active || !data) return;
+                const id = normCharId(data.character_id ?? data.characterId ?? data.charId ?? data.id ?? '');
+                if (id && id !== hostId) {
+                    if (active.started) {
+                        handleMidBattleLeave(active, id, msg => say('  ' + msg));
+                    } else {
+                        active.players.delete(id);
+                        active.readyIds.delete(id);
+                        active.pendingKicks.delete(id);
+                        say('  LEAVE char=' + id);
+                    }
+                }
+            });
+            sock.on('kick_user', data => {
+                trace('kick_user', data);
+                if (!active || active.done) return;
+                const id = normCharId(data && (data.character_id ?? data.characterId ?? data.charId ?? data.id) || '');
+                // Server echoes our own kick (often without leading zeros); normalize and clear player slot so repeat joiners are re-kicked.
+                if (active.pendingKicks.size || (id && active.players.get(id)?.status === 'invalid')) {
+                    const kicked = (id && active.pendingKicks.has(id)) ? id : (active.pendingKicks.values().next().value || id);
+                    active.pendingKicks.delete(kicked);
+                    active.players.delete(kicked);
+                    active.readyIds.delete(kicked);
+                    say('  KICK SELESAI char=' + kicked + '; lanjut tunggu pemain lain');
+                    return;
+                }
+                finish('kick_user');
+            });
+            for (const event of ['force_lobby', 'destroy_battle']) sock.on(event, data => { trace(event, data); if (active && !active.done) finish(event + (data && (data.reason || data.message) ? ':' + (data.reason || data.message) : '')); });
+            const markBattleStarted = () => { if (active && !active.battleStarted) { active.battleStarted = true; active.battleStartedAt = Date.now(); divider('BATTLE #' + (report.matches.length + 1) + ' ' + String(args.boss).toUpperCase()); say('  START CERBERUS (battle masuk)'); } };
+            sock.on('battle_start', markBattleStarted);
+            sock.on('battle_msg', raw => {
+                const message = messageValue(raw);
+                if (!active || !message) return;
+                trace('battle_msg', message);
+                if (['join', 'init', 'start', 'start_atb'].includes(message.state)) markBattleStarted();
+                active.battleStates.push(message.state || message.event);
+                if (active.battleStates.length > 400) active.battleStates.shift();
+                if (message.state === 'battle_finish' || message.state === 'battle_win') {
+                    clearBattleTimers(active);
+                    const winners = idList(message.winnerIDs || message.winner_ids || message.winners).map(normCharId);
+                    const outcome = winners.length ? (winners.includes(hostId) ? 'win' : 'lose') : (message.state === 'battle_win' ? 'win' : 'finish_unknown');
+                    active.score = message.score; active.reward = message.reward;
+                    finish('battle_' + message.state, outcome);
+                    return;
+                }
+                if (message.state === 'battle_lose') { clearBattleTimers(active); finish('battle_lose', 'lose'); return; }
+                const hpBefore = readSelfHp(active.battle, hostId);
+                const step = active.battle.nextStep(message);
+                const hpAfter = readSelfHp(active.battle, hostId);
+                const logHostBattle = msg => say('  ' + msg);
+                if (isUchihaRazq(result.charName) && String(args.boss || '').toLowerCase() === 'cerberus') {
+                    trackReactiveForce(active, message, hostId, hpBefore, hpAfter, logHostBattle);
+                }
+                traceBattleProgress(active, message, hostId, logHostBattle);
+                if (handleBattlePreTurnStep(sock, active, step, logHostBattle)) return;
+                if (step.type === 'turn') {
+                    const turn = chooseCerberusTurn(result.equipped, active.battle.enemyIds, active.turn, result.charName, {
+                        boss: args.boss,
+                        reactiveForcePending: Boolean(active.reactiveForcePending),
+                        extraSkills: result.skills,
+                    });
+                    if (turn.override) active.reactiveForcePending = false;
+                    else active.turn++;
+                    const action = turn.skill ? (turn.skill.action || (Number(turn.skill.id) >= 3000 ? 'senjutsu' : 'skill')) : 'weapon_attack';
+                    const actorId = step.charId || (active.battle && active.battle.battleCharId) || hostId;
+                    active.lastSelfSkillId = turn.skill ? String(turn.skill.id || turn.skill.skillId || '').replace(/^skill/i, '') : null;
+                    sock.battleCommand(actorId, action, turn.skill && turn.skill.skillId, turn.targetId);
+                    active.actions.push(turn.label + ':' + (turn.skill ? turn.skill.skillId : 'weapon_attack'));
+                    say('  TURN ' + active.turn + (turn.override ? ' (PRIORITAS)' : '') + ' ' + turn.label + ' ' + (turn.skill ? turn.skill.skillId : 'weapon_attack') + ' char=' + actorId + ' -> ' + turn.targetId);
+                }
+            });
         };
-        socket.on('ready', onReadyList);
-        socket.on('cancel_ready', onReadyList);
-        socket.on('reset_ready', () => { if (active && !active.started) active.readyIds.clear(); });
-        socket.on('leave_room', data => {
-            trace('leave_room', data);
-            if (!active || !data) return;
-            const id = normCharId(data.character_id ?? data.characterId ?? data.charId ?? data.id ?? '');
-            if (id && id !== hostId) {
-                if (active.started) {
-                    handleMidBattleLeave(active, id, msg => say('  ' + msg));
-                } else {
-                    active.players.delete(id);
-                    active.readyIds.delete(id);
-                    active.pendingKicks.delete(id);
-                    say('  LEAVE char=' + id);
-                }
-            }
-        });
-        socket.on('kick_user', data => {
-            trace('kick_user', data);
-            if (!active || active.done) return;
-            const id = normCharId(data && (data.character_id ?? data.characterId ?? data.charId ?? data.id) || '');
-            // Server echoes our own kick (often without leading zeros); normalize and clear player slot so repeat joiners are re-kicked.
-            if (active.pendingKicks.size || (id && active.players.get(id)?.status === 'invalid')) {
-                const kicked = (id && active.pendingKicks.has(id)) ? id : (active.pendingKicks.values().next().value || id);
-                active.pendingKicks.delete(kicked);
-                active.players.delete(kicked);
-                active.readyIds.delete(kicked);
-                say('  KICK SELESAI char=' + kicked + '; lanjut tunggu pemain lain');
-                return;
-            }
-            finish('kick_user');
-        });
-        for (const event of ['force_lobby', 'destroy_battle']) socket.on(event, data => { trace(event, data); if (active && !active.done) finish(event + (data && (data.reason || data.message) ? ':' + (data.reason || data.message) : '')); });
-        const markBattleStarted = () => { if (active && !active.battleStarted) { active.battleStarted = true; active.battleStartedAt = Date.now(); divider('BATTLE #' + roomNo + ' ' + String(args.boss).toUpperCase()); say('  START CERBERUS (battle masuk)'); } };
-        socket.on('battle_start', markBattleStarted);
-        socket.on('battle_msg', raw => {
-            const message = messageValue(raw);
-            if (!active || !message) return;
-            trace('battle_msg', message);
-            if (['join', 'start', 'start_atb'].includes(message.state)) markBattleStarted();
-            active.battleStates.push(message.state || message.event);
-            if (active.battleStates.length > 400) active.battleStates.shift();
-            if (message.state === 'battle_finish' || message.state === 'battle_win') {
-                clearBattleTimers(active);
-                const winners = idList(message.winnerIDs || message.winner_ids || message.winners).map(normCharId);
-                const outcome = winners.length ? (winners.includes(hostId) ? 'win' : 'lose') : (message.state === 'battle_win' ? 'win' : 'finish_unknown');
-                active.score = message.score; active.reward = message.reward;
-                finish('battle_' + message.state, outcome);
-                return;
-            }
-            if (message.state === 'battle_lose') { clearBattleTimers(active); finish('battle_lose', 'lose'); return; }
-            const step = active.battle.nextStep(message);
-            traceBattleProgress(active, message, hostId, msg => say('  ' + msg));
-            if (handleBattlePreTurnStep(socket, active, step, msg => say('  ' + msg))) return;
-            if (step.type === 'turn') {
-                const turn = chooseCerberusTurn(result.equipped, active.battle.enemyIds, active.turn++, result.charName);
-                const action = turn.skill ? (turn.skill.action || (Number(turn.skill.id) >= 3100 ? 'senjutsu' : 'skill')) : 'weapon_attack';
-                const actorId = step.charId || (active.battle && active.battle.battleCharId) || hostId;
-                socket.battleCommand(actorId, action, turn.skill && turn.skill.skillId, turn.targetId);
-                active.actions.push(turn.label + ':' + (turn.skill ? turn.skill.skillId : 'weapon_attack'));
-                say('  TURN ' + active.turn + ' ' + turn.label + ' ' + (turn.skill ? turn.skill.skillId : 'weapon_attack') + ' char=' + actorId + ' -> ' + turn.targetId);
-            }
-        });
 
+        bindHostSocket(socket);
         socket.auth();
         await socket.waitAuth(15000);
         if (!socket.hasCommandKey()) throw new Error('Command key socket tidak terbentuk.');
         socket.joinLobby();
         say('  PVE AUTH OK');
         let roomNo = 0;
-        while (!fatal && report.matches.length < args.maxMatches) {
-            const energyNow = (await readPveInit(result.session) || {}).energy;
-            if (Number.isFinite(Number(energyNow))) meta.energyEnd = Number(energyNow);
-            if (!(energyNow >= hostCost)) {
-                divider('SELESAI');
-                meta.stopReason = 'Energy habis (' + energyNow + ' < ' + hostCost + ')';
-                say('  STOP: ' + meta.stopReason);
-                break;
-            }
-            captchaAttempts = 0;
-            active = { roomId: null, createdAt: null, players: new Map(), readyIds: new Set(), pendingKicks: new Set(), missing: 0, started: false, startSentAt: null, battleStarted: false, battleStartedAt: null, done: false, outcome: null, reason: null, turn: 0, actions: [], battleStates: [], battle: new PveBattle({ charId: hostId, strategy: 'B', skills: result.equipped }) };
-            const matchStartedAt = Date.now();
-            divider('HOST ROOM #' + (roomNo + 1));
-            say('  #' + (++roomNo) + ' CREATE ROOM CERBERUS EXTREME (energy ' + energyNow + ')');
-            sendCreate();
-            let lastPoll = 0;
-            let lastLogAt = 0;
-            let lastStatusText = '';
-            let restarted = false;
-            while (!active.done) {
+        let reconnectAttempts = 0;
+        while (report.matches.length < args.maxMatches) {
+            try {
                 if (fatal) throw fatal;
-                const now = Date.now();
-                if (active.roomId && !active.started && now - lastPoll >= 2000) {
-                    lastPoll = now;
-                    for (const [id, p] of active.players.entries()) {
-                        if (p.status === 'invalid' && now - (p.kickedAt || 0) >= 2500) evaluatePlayer(id, null);
-                    }
-                    if (active.players.size < 2) socket.getRoomSummary();
-                    const valid = [...active.players.values()].filter(p => p.status === 'valid').length;
-                    const statusText = '  ROOM ' + active.roomId + ' pemain=' + active.players.size + ' valid=' + valid + '/2 ready=' + active.readyIds.size + '/2';
-                    if (statusText !== lastStatusText || now - lastLogAt >= 15000) {
-                        lastStatusText = statusText;
-                        lastLogAt = now;
-                        say(statusText);
-                    }
+                const energyNow = (await readPveInit(result.session) || {}).energy;
+                if (Number.isFinite(Number(energyNow))) meta.energyEnd = Number(energyNow);
+                if (!(energyNow >= hostCost)) {
+                    divider('SELESAI');
+                    meta.stopReason = 'Energy habis (' + energyNow + ' < ' + hostCost + ')';
+                    say('  STOP: ' + meta.stopReason);
+                    break;
                 }
-                if (!active.roomId && !solvingCaptcha && now - matchStartedAt > 90000) finish('create_timeout');
-                else if (active.roomId && !active.started && now - active.createdAt > args.hostWait) finish('wait_players_timeout');
-                else if (active.started && !active.battleStarted) {
-                    if (!restarted && now - active.startSentAt > 8000) { restarted = true; say('  START belum diterima server, kirim ulang'); socket.startGame(); }
-                    if (now - active.startSentAt > args.startTimeout) finish('start_timeout');
-                } else if (active.battleStarted && now - active.battleStartedAt > battleTimeoutMs) finish('battle_timeout', 'timeout');
-                await sleep(100);
+                captchaAttempts = 0;
+                active = { roomId: null, createdAt: null, players: new Map(), readyIds: new Set(), pendingKicks: new Set(), missing: 0, started: false, startSentAt: null, battleStarted: false, battleStartedAt: null, done: false, outcome: null, reason: null, turn: 0, actions: [], battleStates: [], battle: new PveBattle({ charId: hostId, strategy: 'B', skills: result.equipped }) };
+                const matchStartedAt = Date.now();
+                const battleNo = report.matches.length + 1;
+                divider('HOST ROOM #' + (roomNo + 1) + ' (Battle #' + battleNo + ')');
+                say('  #' + (++roomNo) + ' CREATE ROOM CERBERUS EXTREME (energy ' + energyNow + ')');
+                sendCreate();
+                let lastPoll = 0;
+                let lastLogAt = 0;
+                let lastStatusText = '';
+                let restarted = false;
+                while (!active.done) {
+                    if (fatal) throw fatal;
+                    const now = Date.now();
+                    if (active.roomId && !active.started && now - lastPoll >= 2000) {
+                        lastPoll = now;
+                        for (const [id, p] of active.players.entries()) {
+                            if (p.status === 'invalid' && now - (p.kickedAt || 0) >= 2500) evaluatePlayer(id, null);
+                        }
+                        if (active.players.size < 2) socket.getRoomSummary();
+                        const valid = [...active.players.values()].filter(p => p.status === 'valid').length;
+                        const statusText = '  ROOM ' + active.roomId + ' pemain=' + active.players.size + ' valid=' + valid + '/2 ready=' + active.readyIds.size + '/2';
+                        if (statusText !== lastStatusText || now - lastLogAt >= 15000) {
+                            lastStatusText = statusText;
+                            lastLogAt = now;
+                            say(statusText);
+                        }
+                    }
+                    if (!active.roomId && !solvingCaptcha && now - matchStartedAt > 90000) finish('create_timeout');
+                    else if (active.roomId && !active.started && now - active.createdAt > args.hostWait) finish('wait_players_timeout');
+                    else if (active.started && !active.battleStarted) {
+                        if (!restarted && now - active.startSentAt > 8000) { restarted = true; say('  START belum diterima server, kirim ulang'); socket.startGame(); }
+                        if (now - active.startSentAt > args.startTimeout) finish('start_timeout');
+                    } else if (active.battleStarted && now - active.battleStartedAt > battleTimeoutMs) finish('battle_timeout', 'timeout');
+                    await sleep(100);
+                }
+                if (active.roomId && active.outcome == null) socket.leaveRoom(active.roomId);
+                const after = await readPveInit(result.session);
+                const matchScore = extractScoreForChar(active.score, hostId);
+                const finalTeam = typeof active.battle.getTeamStatus === 'function' ? active.battle.getTeamStatus() : null;
+                const summary = { attempt: roomNo, match: battleNo, roomId: active.roomId, outcome: active.outcome || 'retry', reason: active.reason, battleStarted: active.battleStarted, selfDied: Boolean(active.wasSelfDead), alivePlayersAtEnd: finalTeam ? finalTeam.alivePlayers.length : null, players: [...active.players.entries()].map(([id, p]) => ({ id, name: p.name, level: p.level, status: p.status })), actions: active.actions, matchScore, score: active.score, reward: active.reward, energyBefore: energyNow, energyAfter: after && after.energy, durationMs: Date.now() - matchStartedAt, battleStates: active.battleStates.slice(-60) };
+                if (after && Number.isFinite(Number(after.energy))) meta.energyEnd = Number(after.energy);
+                if (active.outcome === 'win') {
+                    say('  #' + battleNo + ' WIN CERBERUS' + (summary.selfDied ? ' (carry tim, char sempat HP=0)' : ''));
+                    const updatedRanking = await readPveRanking(result.session);
+                    const rankText = updateRankingMeta(meta, updatedRanking, latestRanking, matchScore);
+                    if (updatedRanking) { summary.totalScoreAfter = updatedRanking.score; summary.rankAfter = updatedRanking.rank; latestRanking = updatedRanking; }
+                    if (rankText) say('  #' + battleNo + ' OK ' + rankText);
+                }
+                else if (active.outcome === 'lose') say('  #' + battleNo + ' LOSE CERBERUS');
+                else say('  #' + battleNo + ' (room #' + roomNo + ') RETRY (' + (active.reason || active.outcome) + ')');
+                report.attempts.push(summary);
+                if (active.outcome === 'win' || active.outcome === 'lose') report.matches.push(summary);
+                saveReport();
+                reconnectAttempts = 0;
+                line('');
+                active = null;
+                await sleep(1500);
+            } catch (err) {
+                clearCreateTimer();
+                if (active) { clearBattleTimers(active); active = null; }
+                fatal = null;
+                if (!isTransientSocketError(err) || reconnectAttempts >= MAX_SOCKET_RECONNECTS) throw err;
+                reconnectAttempts++;
+                const reconnected = await reconnectPveSession({
+                    oldSocket: socket,
+                    session: result.session,
+                    charId: hostId,
+                    minEnergy: hostCost,
+                    label: err.message + '; ulang ' + reconnectAttempts + '/' + MAX_SOCKET_RECONNECTS,
+                    logFn: say,
+                    bindSocket: (nextSock, nextPve) => {
+                        socket = nextSock;
+                        if (nextPve) currentHostPve = nextPve;
+                        fatal = null;
+                        bindHostSocket(nextSock);
+                    },
+                });
+                if (Number.isFinite(Number(reconnected.energy))) meta.energyEnd = Number(reconnected.energy);
+                if (!reconnected.ok) {
+                    if (reconnected.energyDepleted) {
+                        divider('SELESAI');
+                        meta.stopReason = reconnected.stopReason;
+                        say('  STOP: ' + meta.stopReason);
+                        break;
+                    }
+                    throw new Error(reconnected.stopReason || err.message);
+                }
             }
-            if (active.roomId && active.outcome == null) socket.leaveRoom(active.roomId);
-            const after = await readPveInit(result.session);
-            const matchScore = extractScoreForChar(active.score, hostId);
-            const finalTeam = typeof active.battle.getTeamStatus === 'function' ? active.battle.getTeamStatus() : null;
-            const summary = { match: roomNo, roomId: active.roomId, outcome: active.outcome || 'retry', reason: active.reason, battleStarted: active.battleStarted, selfDied: Boolean(active.wasSelfDead), alivePlayersAtEnd: finalTeam ? finalTeam.alivePlayers.length : null, players: [...active.players.entries()].map(([id, p]) => ({ id, name: p.name, level: p.level, status: p.status })), actions: active.actions, matchScore, score: active.score, reward: active.reward, energyBefore: energyNow, energyAfter: after && after.energy, durationMs: Date.now() - matchStartedAt, battleStates: active.battleStates.slice(-60) };
-            if (after && Number.isFinite(Number(after.energy))) meta.energyEnd = Number(after.energy);
-            if (active.outcome === 'win') {
-                say('  #' + roomNo + ' WIN CERBERUS' + (summary.selfDied ? ' (carry tim, char sempat HP=0)' : ''));
-                const updatedRanking = await readPveRanking(result.session);
-                const rankText = updateRankingMeta(meta, updatedRanking, latestRanking, matchScore);
-                if (updatedRanking) { summary.totalScoreAfter = updatedRanking.score; summary.rankAfter = updatedRanking.rank; latestRanking = updatedRanking; }
-                if (rankText) say('  #' + roomNo + ' OK ' + rankText);
-            }
-            else if (active.outcome === 'lose') say('  #' + roomNo + ' LOSE CERBERUS');
-            else say('  #' + roomNo + ' RETRY (' + (active.reason || active.outcome) + ')');
-            report.attempts.push(summary);
-            if (active.battleStarted) report.matches.push(summary);
-            saveReport();
-            line('');
-            active = null;
-            await sleep(1500);
         }
         if (!meta.stopReason && report.matches.length >= args.maxMatches) meta.stopReason = 'Target ' + args.maxMatches + ' match tercapai';
         say('  SELESAI: ' + report.matches.length + ' match battle. Log: ' + logFile);
@@ -1471,4 +1746,4 @@ async function runHostRoom(args, account) {
     }
 })().catch(error => { line('STOP: ' + error.message); process.exitCode = 1; });
 
-module.exports = { parseArgs, parseAccountsFile, resolveMinStartEnergy, resolveBattleTimeoutMs, acquireRunLock, parsePveRankingResponse, extractScoreForChar, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, buildSkillDeck, describeDeck, normCharId, idList, evaluateLevel, traceBattleProgress, handleMidBattleLeave, runDryRun, runLive, runHostRoom };
+module.exports = { parseArgs, parseAccountsFile, resolveMinStartEnergy, resolveBattleTimeoutMs, acquireRunLock, isTransientSocketError, parsePveRankingResponse, extractScoreForChar, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, buildSkillDeck, describeDeck, normCharId, idList, evaluateLevel, traceBattleProgress, handleMidBattleLeave, hasReactiveForcePacket, trackReactiveForce, pickSuperChargesSkill, recordRoomKick, runDryRun, runLive, runHostRoom };

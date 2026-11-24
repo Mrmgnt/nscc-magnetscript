@@ -11,8 +11,8 @@ const { PveBattle } = require('./lib/ns_pve_battle.js');
 const source = fs.readFileSync(path.join(__dirname, 'ns_coop_minotaur.js'), 'utf8');
 const cut = source.indexOf('\n(async () => {');
 const context = { module: { exports: {} }, require(name) { if (name === 'fs') return fs; if (name === 'os') return os; if (name === 'path') return path; if (name === './nsclient.js') return {}; if (name.includes('ns_pve_socket')) return { PveSocket: {} }; if (name.includes('ns_pve_battle')) return { PveBattle }; if (name.includes('ns_hermes_notify')) return { formatCerberusReport, sendHermesReport }; throw new Error(name); }, console, process: { hrtime: process.hrtime, env: {}, stdout: {} }, setTimeout, clearTimeout };
-vm.runInNewContext(source.slice(0, cut) + '\nmodule.exports = { parseArgs, resolveMinStartEnergy, resolveBattleTimeoutMs, acquireRunLock, parsePveRankingResponse, extractScoreForChar, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, describeDeck, normCharId, idList, evaluateLevel, handleBattlePreTurnStep, clearBattleTimers, traceBattleProgress, handleMidBattleLeave };', context);
-const { parseArgs, resolveMinStartEnergy, resolveBattleTimeoutMs, acquireRunLock, parsePveRankingResponse, extractScoreForChar, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, describeDeck, normCharId, idList, evaluateLevel, handleBattlePreTurnStep, clearBattleTimers, traceBattleProgress, handleMidBattleLeave } = context.module.exports;
+vm.runInNewContext(source.slice(0, cut) + '\nmodule.exports = { parseArgs, resolveMinStartEnergy, resolveBattleTimeoutMs, acquireRunLock, isTransientSocketError, parsePveRankingResponse, extractScoreForChar, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, describeDeck, normCharId, idList, evaluateLevel, handleBattlePreTurnStep, clearBattleTimers, traceBattleProgress, handleMidBattleLeave, readSelfHp, hasReactiveForcePacket, trackReactiveForce, pickSuperChargesSkill, recordRoomKick };', context);
+const { parseArgs, resolveMinStartEnergy, resolveBattleTimeoutMs, acquireRunLock, isTransientSocketError, parsePveRankingResponse, extractScoreForChar, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, describeDeck, normCharId, idList, evaluateLevel, handleBattlePreTurnStep, clearBattleTimers, traceBattleProgress, handleMidBattleLeave, readSelfHp, hasReactiveForcePacket, trackReactiveForce, pickSuperChargesSkill, recordRoomKick } = context.module.exports;
 assert.equal(parseArgs([]).maxMatches, Infinity);
 assert.equal(parseArgs(['--max-matches', '2']).maxMatches, 2);
 assert.equal(parseArgs(['--host-room']).hostRoom, true);
@@ -135,10 +135,13 @@ const activeSim = { done: false, battle: { battleCharId: '84542' } };
 assert.equal(handleBattlePreTurnStep(fakeSock, activeSim, { type: 'init' }), true);
 assert.equal(handleBattlePreTurnStep(fakeSock, activeSim, { type: 'ready' }), true);
 assert.equal(handleBattlePreTurnStep(fakeSock, activeSim, { type: 'ready' }), true);
+activeSim.battleReadySent = true;
+activeSim.battleReadyAfterInitSent = false;
+assert.equal(handleBattlePreTurnStep(fakeSock, activeSim, { type: 'ready' }), true);
 assert.equal(handleBattlePreTurnStep(fakeSock, activeSim, { type: 'startAtb' }), true);
 assert.equal(handleBattlePreTurnStep(fakeSock, activeSim, { type: 'actionReady' }), true);
 assert.equal(handleBattlePreTurnStep(fakeSock, activeSim, { type: 'actionFinish', charDead: false }), true);
-assert.deepEqual(sent, ['init', 'ready', ['start_atb', '84542'], ['action_ready', '84542'], ['action_finish', false, '84542']]);
+assert.deepEqual(sent, ['init', 'ready', 'ready', ['start_atb', '84542'], ['action_ready', '84542'], ['action_finish', false, '84542']]);
 clearBattleTimers(activeSim);
 // Self death + teammate still alive tracing
 const traceLogs = [];
@@ -169,8 +172,11 @@ const mockPveSock = new PveSocket({ charId: '00084542' });
 mockPveSock.sendBattleMessage = m => sentCmds.push(m);
 mockPveSock.battleCommand('84542', 'senjutsu', 'skill3110', '5331');
 mockPveSock.battleCommand('84542', 'skill', 'skill345', '5331');
-assert.deepEqual(sentCmds[0], { event: 'info', state: 'battle_command', charId: '84542', battleAction: { action: 'senjutsu', SENSKILLID: 'skill3110' }, targetId: '5331' });
-assert.deepEqual(sentCmds[1], { event: 'info', state: 'battle_command', charId: '84542', battleAction: { action: 'skill', skillId: 'skill345' }, targetId: '5331' });
+assert.deepEqual(sentCmds[0], { event: 'info', state: 'battle_command', charId: 84542, battleAction: { action: 'senjutsu', skillId: 'skill3110' }, targetId: 5331 });
+assert.deepEqual(sentCmds[1], { event: 'info', state: 'battle_command', charId: 84542, battleAction: { action: 'skill', skillId: 'skill345' }, targetId: 5331 });
+assert.deepEqual(Array.from(activeTrace.battle.enemyIds), [5331, 5330, 5332]);
+const repAttempts = formatCerberusReport({ mode: 'public-room', account: 'Mrmgnt', matches: [{ outcome: 'battle_win' }], attempts: [{ outcome: 'retry' }, { outcome: 'retry' }, { outcome: 'battle_win' }] }, {});
+assert.ok(repAttempts.summary.includes('Match: 1 total (Menang: 1, Kalah: 0, Retry: 2)'));
 console.log('OK: cerberus host roster, level filter, per-account skill planning');
 const parsedRank = parsePveRankingResponse({ latest_ranking_data: { player_own_ranking: 166, player_score: 53244 }, season_date: '11/17/2026 - 12/01/2026' });
 assert.deepEqual(parsedRank, { rank: 166, score: 53244, seasonDate: '11/17/2026 - 12/01/2026' });
@@ -194,5 +200,81 @@ assert.ok(waPayload.summary.includes('gold46000'));
     srv.close();
     assert.equal(delivery.ok, true);
     assert.equal(seenSig, 'sha256=' + crypto.createHmac('sha256', 'testsecret').update(seenBody).digest('hex'));
-    console.log('OK: STB flags & Hermes WhatsApp HMAC webhook delivery');
+assert.equal(isTransientSocketError(new Error('Socket terputus (code=1000)')), true);
+assert.equal(isTransientSocketError(new Error('CAPTCHA ditolak server. fails_left=3.')), false);
+// Reactive Force -> Senjutsu: Super Charges (skill3500) priority for Uchiha Razq vs Cerberus
+const razqWithSuper = [...razqNamed, { id: '3500', skillId: 'skill3500', action: 'senjutsu', name: 'Senjutsu: Super Charges', damage: 0 }];
+const superPick = pickSuperChargesSkill(razqNamed, [{ id: '3500', skillId: 'skill3500', action: 'senjutsu', name: 'Senjutsu: Super Charges' }]);
+assert.equal(superPick && superPick.skillId, 'skill3500');
+const qm0 = chooseQuickmatchTurn('Uchiha Razq', razqWithSuper, ['5331'], 0, { boss: 'cerberus' });
+assert.equal(qm0.skill.skillId, 'skill345');
+assert.ok(!qm0.override);
+const rfBattle = new PveBattle({ charId: '00084542', strategy: 'B', skills: razqWithSuper });
+rfBattle.nextStep({ event: 'info', state: 'join', ta: ['00084542', '00075128', '00072043'], tb: ['ene_533'] });
+const rfActive = { battle: rfBattle, reactiveForcePending: false, lastSelfSkillId: '345' };
+const rfLogs = [];
+// Packet explicit feedback reactive_force on skill345
+const msgRfPacket = {
+    event: 'command',
+    state: 'battle_action',
+    charId: '84542',
+    battleAction: { action: 'skill', skillId: 'skill345', dmg: 32000, feedback: [{ type: 'reactive_force', damage: 2400 }] },
+    syncData: [{ type: 1, ID: '84542', HP: 5000, maxHP: 5000, SP: 1000 }],
+};
+const hp0Before = readSelfHp(rfActive.battle, '00084542');
+rfActive.battle.nextStep(msgRfPacket);
+const hp0After = readSelfHp(rfActive.battle, '00084542');
+assert.equal(trackReactiveForce(rfActive, msgRfPacket, '00084542', hp0Before, hp0After, m => rfLogs.push(m)), true);
+assert.equal(rfActive.reactiveForcePending, true);
+assert.ok(rfLogs.some(l => l.includes('REACTIVE_FORCE') && l.includes('skill3500')));
+// Next turn prioritizes skill3500 without losing index 1 (skill633)
+const qmSuper = chooseQuickmatchTurn('Uchiha Razq', razqWithSuper, ['5331'], 1, { boss: 'cerberus', reactiveForcePending: rfActive.reactiveForcePending });
+assert.equal(qmSuper.skill.skillId, 'skill3500');
+assert.equal(qmSuper.skill.action, 'senjutsu');
+assert.equal(qmSuper.override, true);
+rfActive.reactiveForcePending = false;
+assert.equal(chooseQuickmatchTurn('Uchiha Razq', razqWithSuper, ['5331'], 1, { boss: 'cerberus', reactiveForcePending: false }).skill.skillId, 'skill633');
+// Fallback HP drain on skill345 without explicit feedback object
+const rfActiveDrain = { battle: rfBattle, reactiveForcePending: false, lastSelfSkillId: '345' };
+const msgRfDrain = {
+    event: 'command',
+    state: 'battle_action',
+    charId: '00084542',
+    battleAction: { action: 'skill', skillId: 'skill345' },
+    syncData: [{ type: 1, ID: '84542', HP: 3100, maxHP: 5000, SP: 1000 }],
+};
+const hp1Before = readSelfHp(rfActiveDrain.battle, '00084542');
+rfActiveDrain.battle.nextStep(msgRfDrain);
+const hp1After = readSelfHp(rfActiveDrain.battle, '00084542');
+assert.equal(trackReactiveForce(rfActiveDrain, msgRfDrain, '00084542', hp1Before, hp1After), true);
+assert.equal(rfActiveDrain.reactiveForcePending, true);
+// Non-345 HP drop does NOT trigger Reactive Force priority
+const non345Active = { battle: rfBattle, reactiveForcePending: false, lastSelfSkillId: '633' };
+assert.equal(trackReactiveForce(non345Active, { event: 'command', state: 'battle_action', charId: '84542', battleAction: { action: 'skill', skillId: 'skill633', feedback: [{ type: 'reactive_force', damage: 500 }] } }, '00084542', 3100, 2600), false);
+assert.equal(non345Active.reactiveForcePending, false);
+// Host Room uses extraSkills fallback for Super Charges when reactiveForcePending is true
+const hostSuper = chooseCerberusTurn(razqNamed, ['5331'], 2, 'Uchiha Razq', {
+    boss: 'cerberus',
+    reactiveForcePending: true,
+    extraSkills: [{ id: '3500', skillId: 'skill3500', action: 'senjutsu', name: 'Senjutsu: Super Charges' }],
+});
+assert.equal(hostSuper.skill.skillId, 'skill3500');
+assert.equal(hostSuper.skill.action, 'senjutsu');
+assert.equal(hostSuper.override, true);
+assert.equal(chooseQuickmatchTurn('Uchiha Razq', razqWithSuper, ['5011'], 1, { boss: 'minotaur', reactiveForcePending: true }).skill.skillId, 'skill633');
+// Kick > 3x in same room switches to another room
+const kicksMap = new Map();
+assert.deepEqual(recordRoomKick(kicksMap, '5770', '11111', 1000), { count: 1, blocked: false });
+assert.deepEqual(recordRoomKick(kicksMap, '5770', '11111', 2000), { count: 2, blocked: false });
+assert.deepEqual(recordRoomKick(kicksMap, '5770', '11111', 3000), { count: 3, blocked: false });
+assert.deepEqual(recordRoomKick(kicksMap, '5771', '22222', 3500), { count: 1, blocked: false });
+assert.deepEqual(recordRoomKick(kicksMap, '5770', '11111', 4000), { count: 4, blocked: true });
+const blockedAfterKick = new Set(['5770']);
+const switchRooms = [
+    { room_id: '5770', quest: 5333, master_id: '11111', player_count: 1, max_player: 3, character_array: [{ char_id: '11111', level: 100, is_emblem: true }] },
+    { room_id: '5771', quest: 5333, master_id: '22222', player_count: 1, max_player: 3, character_array: [{ char_id: '22222', level: 100, is_emblem: true }] },
+];
+const switchedPick = pickRoom(switchRooms, 5333, '84542', blockedAfterKick);
+assert.equal(switchedPick.room && switchedPick.room.id, '5771');
+console.log('OK: STB flags & Hermes WhatsApp HMAC webhook delivery & Reactive Force Super Charges & Kick >3x');
 })();
