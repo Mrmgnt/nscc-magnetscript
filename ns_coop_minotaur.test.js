@@ -11,8 +11,8 @@ const { PveBattle } = require('./lib/ns_pve_battle.js');
 const source = fs.readFileSync(path.join(__dirname, 'ns_coop_minotaur.js'), 'utf8');
 const cut = source.indexOf('\n(async () => {');
 const context = { module: { exports: {} }, require(name) { if (name === 'fs') return fs; if (name === 'os') return os; if (name === 'path') return path; if (name === './nsclient.js') return {}; if (name.includes('ns_pve_socket')) return { PveSocket: {} }; if (name.includes('ns_pve_battle')) return { PveBattle }; if (name.includes('ns_hermes_notify')) return { formatCerberusReport, sendHermesReport }; throw new Error(name); }, console, process: { hrtime: process.hrtime, env: {}, stdout: {} }, setTimeout, clearTimeout };
-vm.runInNewContext(source.slice(0, cut) + '\nmodule.exports = { parseArgs, resolveMinStartEnergy, resolveBattleTimeoutMs, acquireRunLock, isTransientSocketError, parsePveRankingResponse, extractScoreForChar, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, describeDeck, normCharId, idList, evaluateLevel, handleBattlePreTurnStep, clearBattleTimers, traceBattleProgress, handleMidBattleLeave, readSelfHp, hasReactiveForcePacket, trackReactiveForce, pickSuperChargesSkill, recordRoomKick };', context);
-const { parseArgs, resolveMinStartEnergy, resolveBattleTimeoutMs, acquireRunLock, isTransientSocketError, parsePveRankingResponse, extractScoreForChar, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, describeDeck, normCharId, idList, evaluateLevel, handleBattlePreTurnStep, clearBattleTimers, traceBattleProgress, handleMidBattleLeave, readSelfHp, hasReactiveForcePacket, trackReactiveForce, pickSuperChargesSkill, recordRoomKick } = context.module.exports;
+vm.runInNewContext(source.slice(0, cut) + '\nmodule.exports = { parseArgs, resolveMinStartEnergy, resolveBattleTimeoutMs, acquireRunLock, isTransientSocketError, parsePveRankingResponse, extractScoreForChar, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, describeDeck, normCharId, idList, evaluateLevel, handleBattlePreTurnStep, clearBattleTimers, traceBattleProgress, handleMidBattleLeave, readSelfHp, hasReactiveForcePacket, trackReactiveForce, pickSuperChargesSkill, recordRoomKick, recordLowLevelMaster, isPasswordRejection };', context);
+const { parseArgs, resolveMinStartEnergy, resolveBattleTimeoutMs, acquireRunLock, isTransientSocketError, parsePveRankingResponse, extractScoreForChar, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, describeDeck, normCharId, idList, evaluateLevel, handleBattlePreTurnStep, clearBattleTimers, traceBattleProgress, handleMidBattleLeave, readSelfHp, hasReactiveForcePacket, trackReactiveForce, pickSuperChargesSkill, recordRoomKick, recordLowLevelMaster, isPasswordRejection } = context.module.exports;
 assert.equal(parseArgs([]).maxMatches, Infinity);
 assert.equal(parseArgs(['--max-matches', '2']).maxMatches, 2);
 assert.equal(parseArgs(['--host-room']).hostRoom, true);
@@ -262,13 +262,11 @@ assert.equal(hostSuper.skill.skillId, 'skill3500');
 assert.equal(hostSuper.skill.action, 'senjutsu');
 assert.equal(hostSuper.override, true);
 assert.equal(chooseQuickmatchTurn('Uchiha Razq', razqWithSuper, ['5011'], 1, { boss: 'minotaur', reactiveForcePending: true }).skill.skillId, 'skill633');
-// Kick > 3x in same room switches to another room
+// Max 2x kick in same room switches to another room
 const kicksMap = new Map();
 assert.deepEqual(recordRoomKick(kicksMap, '5770', '11111', 1000), { count: 1, blocked: false });
-assert.deepEqual(recordRoomKick(kicksMap, '5770', '11111', 2000), { count: 2, blocked: false });
-assert.deepEqual(recordRoomKick(kicksMap, '5770', '11111', 3000), { count: 3, blocked: false });
-assert.deepEqual(recordRoomKick(kicksMap, '5771', '22222', 3500), { count: 1, blocked: false });
-assert.deepEqual(recordRoomKick(kicksMap, '5770', '11111', 4000), { count: 4, blocked: true });
+assert.deepEqual(recordRoomKick(kicksMap, '5771', '22222', 1500), { count: 1, blocked: false });
+assert.deepEqual(recordRoomKick(kicksMap, '5770', '11111', 2000), { count: 2, blocked: true });
 const blockedAfterKick = new Set(['5770']);
 const switchRooms = [
     { room_id: '5770', quest: 5333, master_id: '11111', player_count: 1, max_player: 3, character_array: [{ char_id: '11111', level: 100, is_emblem: true }] },
@@ -276,5 +274,26 @@ const switchRooms = [
 ];
 const switchedPick = pickRoom(switchRooms, 5333, '84542', blockedAfterKick);
 assert.equal(switchedPick.room && switchedPick.room.id, '5771');
-console.log('OK: STB flags & Hermes WhatsApp HMAC webhook delivery & Reactive Force Super Charges & Kick >3x');
+// RM < Lv80 seen 2x blocks master ID across incomplete summaries too
+const lowRmMap = new Map();
+assert.deepEqual(recordLowLevelMaster(lowRmMap, '00033333', '5800', 1000), { count: 1, blockedMaster: false, masterId: normCharId('33333') });
+assert.deepEqual(recordLowLevelMaster(lowRmMap, '33333', '5801', 2000), { count: 2, blockedMaster: true, masterId: normCharId('33333') });
+const incompleteWithBlockedRm = [
+    { room_id: '5802', quest: 5333, master_id: '33333', player_count: 1, max_player: 3 },
+    { room_id: '5803', quest: 5333, master_id: '44444', player_count: 1, max_player: 3 },
+];
+const skipBlockedRm = pickRoom(incompleteWithBlockedRm, 5333, '84542', new Set(), new Set([normCharId('33333')]));
+assert.equal(skipBlockedRm.room && skipBlockedRm.room.id, '5803');
+// 1x passworded room immediately skipped; "0" string is NOT treated as passworded
+assert.equal(normalizeRoom({ room_id: '5900', quest: 5333, has_password: '0' }, 5333).hasPassword, false);
+assert.equal(normalizeRoom({ room_id: '5901', quest: 5333, need_password: '1' }, 5333).hasPassword, true);
+assert.equal(isPasswordRejection({ status: 2, reason: 'Incorrect password' }), true);
+assert.equal(isPasswordRejection({ status: 0, message: 'Room is locked' }), true);
+assert.equal(isPasswordRejection({ status: 0, reason: 'captcha' }), false);
+const pwRooms = [
+    { room_id: '5901', quest: 5333, need_password: '1', player_count: 1, max_player: 3, character_array: [{ char_id: '11111', level: 100, is_emblem: true }] },
+    { room_id: '5902', quest: 5333, has_password: '0', player_count: 1, max_player: 3, character_array: [{ char_id: '22222', level: 100, is_emblem: true }] },
+];
+assert.equal(pickRoom(pwRooms, 5333, '84542').room.id, '5902');
+console.log('OK: STB flags & Hermes WhatsApp HMAC webhook delivery & Reactive Force & Kick 2x & RM<80 2x & Password 1x');
 })();

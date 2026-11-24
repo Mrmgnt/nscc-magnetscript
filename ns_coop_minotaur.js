@@ -52,21 +52,40 @@ const AUTO_SKILL_PRIORITY = ['633', '632', '638', '623', '728', '345', '629', '8
 const AOE_SKILL_IDS = String((process.env && process.env.NS_COOP_AOE_SKILL_IDS) || '632,638,623,728').split(',').map(id => id.trim()).filter(Boolean);
 const STUN_SKILL_ID = String((process.env && process.env.NS_COOP_STUN_SKILL_ID) || '345').trim();
 const DEFAULT_BATTLE_TIMEOUT_MS = 3600000;
-const MAX_KICKS_PER_ROOM = 3;
+const MAX_KICKS_PER_ROOM = 2;
+const MAX_LOW_LEVEL_RM_SEEN = 2;
 const KICK_SKIP_MS = 600000;
 
-function recordRoomKick(kickCounts, roomId, masterId = null, now = Date.now(), maxKicks = MAX_KICKS_PER_ROOM, ttlMs = KICK_SKIP_MS) {
-    const key = roomId == null ? '' : String(roomId).trim();
-    if (!key || !kickCounts || typeof kickCounts.get !== 'function' || typeof kickCounts.set !== 'function') return { count: 0, blocked: false };
-    const masterKey = masterId ? normCharId(masterId) : '';
-    const prev = kickCounts.get(key);
+function incrementBoundedCounter(counterMap, key, now = Date.now(), ttlMs = KICK_SKIP_MS, metaMatch = null) {
+    const k = key == null ? '' : String(key).trim();
+    if (!k || !counterMap || typeof counterMap.get !== 'function' || typeof counterMap.set !== 'function') return null;
+    const prev = counterMap.get(k);
     const expired = prev && Number.isFinite(prev.updatedAt) && (now - prev.updatedAt > ttlMs);
-    const masterChanged = Boolean(prev && prev.masterId && masterKey && prev.masterId !== masterKey);
-    const count = (!prev || expired || masterChanged) ? 1 : prev.count + 1;
-    const blocked = count > maxKicks;
-    if (blocked) kickCounts.delete(key);
-    else kickCounts.set(key, { count, masterId: masterKey || (prev && prev.masterId) || '', updatedAt: now });
-    return { count, blocked };
+    const metaChanged = typeof metaMatch === 'function' ? Boolean(prev && !metaMatch(prev)) : false;
+    const count = (!prev || expired || metaChanged) ? 1 : prev.count + 1;
+    return { key: k, count, prev };
+}
+
+function recordRoomKick(kickCounts, roomId, masterId = null, now = Date.now(), maxKicks = MAX_KICKS_PER_ROOM, ttlMs = KICK_SKIP_MS) {
+    const masterKey = masterId ? normCharId(masterId) : '';
+    const step = incrementBoundedCounter(kickCounts, roomId, now, ttlMs, prev => !prev.masterId || !masterKey || prev.masterId === masterKey);
+    if (!step) return { count: 0, blocked: false };
+    const blocked = step.count >= maxKicks;
+    if (blocked) kickCounts.delete(step.key);
+    else kickCounts.set(step.key, { count: step.count, masterId: masterKey || (step.prev && step.prev.masterId) || '', updatedAt: now });
+    return { count: step.count, blocked };
+}
+
+function recordLowLevelMaster(lowCounts, masterId, roomId = null, now = Date.now(), maxSeen = MAX_LOW_LEVEL_RM_SEEN, ttlMs = KICK_SKIP_MS) {
+    const masterKey = masterId ? normCharId(masterId) : '';
+    const fallbackRoom = roomId == null ? '' : String(roomId).trim();
+    const trackKey = masterKey || (fallbackRoom ? 'room:' + fallbackRoom : '');
+    const step = incrementBoundedCounter(lowCounts, trackKey, now, ttlMs);
+    if (!step) return { count: 0, blockedMaster: false, masterId: null };
+    const blockedMaster = step.count >= maxSeen;
+    if (blockedMaster) lowCounts.delete(step.key);
+    else lowCounts.set(step.key, { count: step.count, updatedAt: now });
+    return { count: step.count, blockedMaster, masterId: masterKey || null };
 }
 
 function parseArgs(argv) {
@@ -446,6 +465,20 @@ function normalizePlayer(raw) {
     const level = Number(levelValue);
     return { charId: String(charId), isEmblem: boolEmblem(emblemValue) || Number(emblemValue) === 2, level: Number.isFinite(level) ? level : null };
 }
+function boolFlag(value) {
+    if (value === true) return true;
+    if (value === false || value == null) return false;
+    if (typeof value === 'number') return value !== 0;
+    const s = String(value).trim().toLowerCase();
+    return s === '1' || s === 'true' || s === 'yes' || s === 'y';
+}
+function isPasswordRejection(data) {
+    if (!data || typeof data !== 'object') return false;
+    const pwFlag = data.has_password ?? data.hasPassword ?? data.password_required ?? data.passwordRequired ?? data.is_password ?? data.isPassword ?? data.need_password ?? data.needPassword ?? data.password_locked ?? data.passwordLocked;
+    if (boolFlag(pwFlag)) return true;
+    const msg = String(data.reason ?? data.message ?? data.error ?? '').toLowerCase();
+    return /passw|\bpw\b|sandi|locked/.test(msg);
+}
 function normalizeRoom(raw, questId) {
     if (!raw || typeof raw !== 'object') return null;
     const id = raw.room_name ?? raw.roomName ?? raw.room_id ?? raw.roomId ?? raw.id;
@@ -453,7 +486,7 @@ function normalizeRoom(raw, questId) {
     const mode = raw.mode ?? raw.level ?? raw.difficulty;
     const rosterRaw = raw.character_array ?? raw.characters ?? raw.players ?? raw.player_array ?? raw.user_array;
     const players = Array.isArray(rosterRaw) ? rosterRaw.map(normalizePlayer) : [];
-    const hasPassword = Boolean(raw.has_password ?? raw.hasPassword ?? raw.password_required);
+    const hasPassword = boolFlag(raw.has_password ?? raw.hasPassword ?? raw.password_required ?? raw.passwordRequired ?? raw.is_password ?? raw.isPassword ?? raw.need_password ?? raw.needPassword ?? raw.password_locked ?? raw.passwordLocked ?? raw.locked);
     const capacity = Number(raw.max_player ?? raw.maxPlayer ?? raw.capacity ?? 3);
     const declaredCount = Number(raw.player_count ?? raw.playerCount ?? raw.count ?? players.length);
     const slots = Number.isFinite(capacity) && Number.isFinite(declaredCount) ? capacity - declaredCount : null;
@@ -466,7 +499,7 @@ function findRoomMaster(data, rawPlayers, players) {
     const index = (rawPlayers || []).findIndex(player => player && typeof player === 'object' && Boolean(player.is_master ?? player.isMaster ?? player.is_host ?? player.isHost ?? player.is_owner ?? player.isOwner));
     return (players || [])[index >= 0 ? index : 0] || null;
 }
-function pickRoom(rooms, questId, botCharId, blockedRoomIds = new Set()) {
+function pickRoom(rooms, questId, botCharId, blockedRoomIds = new Set(), blockedMasterIds = new Set()) {
     const evaluated = [];
     for (const raw of (Array.isArray(rooms) ? rooms : [])) {
         const room = normalizeRoom(raw, questId);
@@ -478,10 +511,20 @@ function pickRoom(rooms, questId, botCharId, blockedRoomIds = new Set()) {
         if (blockedRoomIds.has(room.id)) { evaluated.push({ roomId: room.id, reason: 'room_cooldown' }); continue; }
         if (room.hasPassword) { evaluated.push({ roomId: room.id, reason: 'password_required' }); continue; }
         if (room.slots != null && room.slots < 1) { evaluated.push({ roomId: room.id, reason: 'room_full' }); continue; }
+        const rawMasterId = room.raw && (room.raw.master_id ?? room.raw.masterId ?? room.raw.host_id ?? room.raw.hostId ?? room.raw.owner_id ?? room.raw.ownerId ?? room.raw.room_master_id ?? room.raw.roomMasterId);
+        const masterNorm = rawMasterId != null ? normCharId(rawMasterId) : '';
+        if (masterNorm && blockedMasterIds && blockedMasterIds.has(masterNorm)) {
+            evaluated.push({ roomId: room.id, reason: 'master_level_low_blocked' });
+            continue;
+        }
         // Room summary often omits roster. Join only to verify it; READY stays blocked
         // until join_room confirms another Emblem player.
         if (!room.schemaComplete) { evaluated.push({ roomId: room.id, reason: 'verify_after_join', room, otherEmblems: null }); continue; }
         const master = findRoomMaster(room.raw, room.raw.character_array || room.raw.characters || room.raw.players || [], room.players);
+        if (master && master.charId && blockedMasterIds && blockedMasterIds.has(normCharId(master.charId))) {
+            evaluated.push({ roomId: room.id, reason: 'master_level_low_blocked' });
+            continue;
+        }
         if (!master || !(master.level >= 80)) { evaluated.push({ roomId: room.id, reason: master && master.level != null ? 'master_level_' + master.level : 'master_level_unknown' }); continue; }
         const botNorm = normCharId(botCharId);
         const otherEmblems = room.players.filter(player => normCharId(player.charId) !== botNorm && player.isEmblem).length;
@@ -807,7 +850,9 @@ async function runLive(args, account) {
         let joinRejectTimer = null;
         const masterProfileCache = new Map();
         const rejectedRoomUntil = new Map();
+        const rejectedMasterUntil = new Map();
         const roomKicks = new Map();
+        const lowLevelRmCounts = new Map();
         const bufferedBattle = [];
         const blockRoom = (roomId, reason, ttlMs = 120000) => {
             if (!roomId) return;
@@ -828,7 +873,10 @@ async function runLive(args, account) {
             if (joinRejectTimer) clearTimeout(joinRejectTimer);
             joinRejectTimer = setTimeout(() => {
                 joinRejectTimer = null;
-                if (active && !active.done && !active.joinAccepted) resetActive(reason);
+                if (active && !active.done && !active.joinAccepted) {
+                    blockRoom(active.room && active.room.id, reason, 120000);
+                    resetActive(reason);
+                }
             }, timeoutMs);
         };
         const roomEventDetail = data => {
@@ -934,7 +982,14 @@ async function runLive(args, account) {
             }
             if (!active.master || !(active.master.level >= 80)) {
                 const reason = active.master && active.master.level != null ? 'master_level_' + active.master.level : 'master_level_unknown';
-                blockRoom(active.room.id, reason);
+                const masterId = active.master && normCharId(active.master.charId);
+                const lowRes = recordLowLevelMaster(lowLevelRmCounts, masterId, active.room && active.room.id);
+                const skipMs = lowRes.blockedMaster ? KICK_SKIP_MS : 120000;
+                if (lowRes.blockedMaster && lowRes.masterId) {
+                    rejectedMasterUntil.set(lowRes.masterId, Date.now() + KICK_SKIP_MS);
+                    line('  #' + active.match + ' RM Lv<80 terdeteksi ' + lowRes.count + 'x (master=' + lowRes.masterId + '); blokir RM & cari room lain');
+                }
+                blockRoom(active.room.id, reason, skipMs);
                 resetActive(reason);
                 return false;
             }
@@ -970,6 +1025,13 @@ async function runLive(args, account) {
                     return;
                 }
                 if (Number(data && data.status) !== 1 || data.room_name === 'lobby') {
+                    if (isPasswordRejection(data)) {
+                        const detail = roomEventDetail(data);
+                        line('  #' + active.match + ' SERVER join_room password_required' + (detail.reason ? ' (' + detail.reason + ')' : '') + '; cari room lain');
+                        blockRoom(active.room && active.room.id, 'password_required', KICK_SKIP_MS);
+                        resetActive('password_required');
+                        return;
+                    }
                     // Some servers emit join rejection just before captcha_required.
                     // Hold state briefly so CAPTCHA can resend this same join command.
                     if (!active.captchaRequested && !joinRejectTimer) watchJoinResponse('join_rejected', 1500);
@@ -1025,7 +1087,7 @@ async function runLive(args, account) {
                 const kickRes = recordRoomKick(roomKicks, active.room && active.room.id, masterId);
                 line('  #' + active.match + ' SERVER kick_user' + (detail.reason ? ' (' + detail.reason + ')' : '') + ' [kick ' + kickRes.count + '/' + MAX_KICKS_PER_ROOM + ' di room ' + (active.room && active.room.id) + ']');
                 if (kickRes.blocked) {
-                    blockRoom(active.room.id, 'kicked_gt_3x', KICK_SKIP_MS);
+                    blockRoom(active.room.id, 'kicked_2x', KICK_SKIP_MS);
                 }
                 resetActive('kick_user');
             });
@@ -1143,8 +1205,10 @@ async function runLive(args, account) {
                     if (Date.now() >= scanDeadline) throw new Error('room summary timeout');
                     await sleep(25);
                 }
-                for (const [roomId, until] of rejectedRoomUntil) if (until <= Date.now()) rejectedRoomUntil.delete(roomId);
-                const picked = pickRoom(rooms, quest.quest, botId, new Set(rejectedRoomUntil.keys()));
+                const nowMs = Date.now();
+                for (const [roomId, until] of rejectedRoomUntil) if (until <= nowMs) rejectedRoomUntil.delete(roomId);
+                for (const [mId, until] of rejectedMasterUntil) if (until <= nowMs) rejectedMasterUntil.delete(mId);
+                const picked = pickRoom(rooms, quest.quest, botId, new Set(rejectedRoomUntil.keys()), new Set(rejectedMasterUntil.keys()));
                 const battleNo = report.matches.length + 1;
                 report.scans.push({ at: new Date().toISOString(), rooms: rooms.length, candidate: picked.room && picked.room.id, rejects: picked.evaluated.filter(item => item.reason !== 'accepted') });
                 if (!picked.room) {
@@ -1746,4 +1810,4 @@ async function runHostRoom(args, account) {
     }
 })().catch(error => { line('STOP: ' + error.message); process.exitCode = 1; });
 
-module.exports = { parseArgs, parseAccountsFile, resolveMinStartEnergy, resolveBattleTimeoutMs, acquireRunLock, isTransientSocketError, parsePveRankingResponse, extractScoreForChar, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, buildSkillDeck, describeDeck, normCharId, idList, evaluateLevel, traceBattleProgress, handleMidBattleLeave, hasReactiveForcePacket, trackReactiveForce, pickSuperChargesSkill, recordRoomKick, runDryRun, runLive, runHostRoom };
+module.exports = { parseArgs, parseAccountsFile, resolveMinStartEnergy, resolveBattleTimeoutMs, acquireRunLock, isTransientSocketError, parsePveRankingResponse, extractScoreForChar, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, buildSkillDeck, describeDeck, normCharId, idList, evaluateLevel, traceBattleProgress, handleMidBattleLeave, hasReactiveForcePacket, trackReactiveForce, pickSuperChargesSkill, recordRoomKick, recordLowLevelMaster, isPasswordRejection, runDryRun, runLive, runHostRoom };
