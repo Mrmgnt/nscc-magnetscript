@@ -427,6 +427,30 @@ async function executeOneMiniGame(context, config = loadConfig(), options = {}) 
     };
 }
 
+function buildBattleEnemyQueue(enemies, count, rng = Math.random) {
+    const list = Array.isArray(enemies) ? enemies.filter(Boolean) : [];
+    const total = Math.max(0, Math.floor(Number(count) || 0));
+    if (!list.length || total <= 0) return [];
+    const queue = [];
+    while (queue.length < total) {
+        const bag = list.slice();
+        for (let i = bag.length - 1; i > 0; i--) {
+            const j = Math.floor(rng() * (i + 1));
+            [bag[i], bag[j]] = [bag[j], bag[i]];
+        }
+        // Avoid back-to-back duplicate across 5-boss cycle boundary (e.g. Emblem 8 hearts).
+        if (queue.length && bag.length > 1 && bag[0].id === queue[queue.length - 1].id) {
+            const swapIdx = 1 + Math.floor(rng() * (bag.length - 1));
+            [bag[0], bag[swapIdx]] = [bag[swapIdx], bag[0]];
+        }
+        for (const enemy of bag) {
+            if (queue.length >= total) break;
+            queue.push(enemy);
+        }
+    }
+    return queue;
+}
+
 async function runBattle(context, config = loadConfig(), options = {}) {
     if (!config.enemies.length || config.enemies.some(enemy => !enemy.id)) {
         throw new Error('ID lima musuh belum diisi pada thanksgiving_event_config.json.');
@@ -441,13 +465,17 @@ async function runBattle(context, config = loadConfig(), options = {}) {
 
     line(`Battle Status Awal: ${status.heart}/${status.heartMax} Heart (Refill: ${formatTime(status.refillRemain)})`);
     const limit = Math.min(status.heart, maxBattles);
+    const enemyQueue = targetEnemy ? [] : buildBattleEnemyQueue(config.enemies, limit);
+    if (!targetEnemy && enemyQueue.length > 0) {
+        line(`  Urutan Boss (Acak Tanpa Duplikat): ${enemyQueue.map(e => e.id).join(' -> ')}`);
+    }
     let battles = 0;
     let totalXp = 0;
     let totalGold = 0;
     const rewards = [];
 
     for (let i = 0; i < limit; i++) {
-        const enemy = targetEnemy || config.enemies[i % config.enemies.length];
+        const enemy = targetEnemy || enemyQueue[i];
         const bRes = await executeOneBattle(context, enemy, config, options);
         if (!bRes.ok) {
             line(`  [#${i + 1}] STOP: ${bRes.reason}`);
@@ -818,6 +846,7 @@ module.exports = {
     summarizeMiniGameRewards,
     diffMaterialProgress,
     claimGunBlastingSkill,
+    buildBattleEnemyQueue,
     getContext,
     getBattleStatus,
     getMiniGameStatus,

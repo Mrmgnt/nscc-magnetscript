@@ -6,7 +6,7 @@ const os = require('os');
 const path = require('path');
 const zlib = require('zlib');
 
-const { parseStatus, renderParam, isConfigured, loadConfig, parseCliArgs, summarizeBattleReward, parseMaterialCounts, normalizeSkillSet, checkWerewolfMaterialSpace, summarizeMiniGameRewards, diffMaterialProgress, claimGunBlastingSkill, formatTime } = require('./ns_thanksgiving.js');
+const { parseStatus, renderParam, isConfigured, loadConfig, parseCliArgs, summarizeBattleReward, parseMaterialCounts, normalizeSkillSet, checkWerewolfMaterialSpace, summarizeMiniGameRewards, diffMaterialProgress, claimGunBlastingSkill, buildBattleEnemyQueue, formatTime } = require('./ns_thanksgiving.js');
 const { decodeAmfPacket, parseHttpMessage, dechunkHttpBody } = require('./lib/amf_decoder.js');
 const { readZipEntries, groupRawSessionEntries } = require('./lib/saz_reader.js');
 const { decodeSazFile, decodeJsonlCapture, inspectCryptoParam } = require('./tools/import_thanksgiving_saz.js');
@@ -316,6 +316,32 @@ assert.ok(normalizeSkillSet(['skill39', '596']).has('skill596'));
 
     const notReady = await claimGunBlastingSkill({ sessionKey: 'gs_test' }, { '923': 8, '924': 10 }, new Set(['skill39']));
     assert.deepStrictEqual(notReady, { claimed: false, reason: 'insufficient_materials' });
+
+    // 7. Test shuffled no-duplicate Thanksgiving boss queue (3 hearts, 5 hearts, 8 hearts Emblem)
+    assert.deepStrictEqual(buildBattleEnemyQueue(cfg.enemies, 0), []);
+    const q5 = buildBattleEnemyQueue(cfg.enemies, 5);
+    assert.strictEqual(q5.length, 5);
+    assert.strictEqual(new Set(q5.map(e => e.id)).size, 5);
+
+    const q3 = buildBattleEnemyQueue(cfg.enemies, 3);
+    assert.strictEqual(q3.length, 3);
+    assert.strictEqual(new Set(q3.map(e => e.id)).size, 3);
+
+    // Emblem 8 hearts: first 5 unique, next 3 unique, and no back-to-back duplicate on boundary (index 4 -> 5)
+    for (let trial = 0; trial < 30; trial++) {
+        const q8 = buildBattleEnemyQueue(cfg.enemies, 8);
+        assert.strictEqual(q8.length, 8);
+        assert.strictEqual(new Set(q8.slice(0, 5).map(e => e.id)).size, 5);
+        assert.strictEqual(new Set(q8.slice(5, 8).map(e => e.id)).size, 3);
+        assert.notStrictEqual(q8[4].id, q8[5].id);
+    }
+
+    // Deterministic RNG check: actually shuffles order instead of fixed 477..481
+    let seed = 0.2;
+    const fakeRng = () => { seed = (seed * 7 + 0.13) % 1; return seed; };
+    const qDet = buildBattleEnemyQueue(cfg.enemies, 5, fakeRng).map(e => e.id);
+    assert.strictEqual(new Set(qDet).size, 5);
+    assert.notDeepStrictEqual(qDet, cfg.enemies.map(e => e.id));
 
     console.log('ns_thanksgiving.test.js OK');
 })();
