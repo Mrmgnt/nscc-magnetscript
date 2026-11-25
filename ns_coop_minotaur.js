@@ -52,9 +52,26 @@ const AUTO_SKILL_PRIORITY = ['633', '632', '638', '623', '728', '345', '629', '8
 const AOE_SKILL_IDS = String((process.env && process.env.NS_COOP_AOE_SKILL_IDS) || '632,638,623,728').split(',').map(id => id.trim()).filter(Boolean);
 const STUN_SKILL_ID = String((process.env && process.env.NS_COOP_STUN_SKILL_ID) || '345').trim();
 const DEFAULT_BATTLE_TIMEOUT_MS = 3600000;
+const DEFAULT_WAIT_FULL_TIMEOUT_MS = 45000;
+const DEFAULT_HOST_START_TIMEOUT_MS = 75000;
+const CAPTCHA_JOIN_TIMEOUT_MS = 4000;
 const MAX_KICKS_PER_ROOM = 2;
 const MAX_LOW_LEVEL_RM_SEEN = 2;
 const KICK_SKIP_MS = 600000;
+const SKILL_META = {
+    '345': { cp: 1200, cooldown: 25 },
+    '633': { cp: 512, cooldown: 14 },
+    '629': { cp: 465, cooldown: 14 },
+    '632': { cp: 1002, cooldown: 11 },
+    '623': { cp: 806, cooldown: 10 },
+    '728': { cp: 10, cooldown: 15 },
+    '151': { cp: 200, cooldown: 14 },
+    '854': { cp: 500, cooldown: 25 },
+    '39': { cp: 50, cooldown: 10 },
+    '3110': { cp: 0, sp: 650, cooldown: 20 },
+    '3500': { cp: 0, sp: 600, cooldown: 10 },
+    '3000': { cp: 0, sp: 1000, cooldown: 0 },
+};
 
 function incrementBoundedCounter(counterMap, key, now = Date.now(), ttlMs = KICK_SKIP_MS, metaMatch = null) {
     const k = key == null ? '' : String(key).trim();
@@ -92,7 +109,7 @@ function parseArgs(argv) {
     const envNotify = process.env && (process.env.NS_HERMES_NOTIFY === '1' || Boolean(process.env.HERMES_NOTIFY_URL));
     const args = {
         boss: 'cerberus', level: 'extreme', accounts: 'coop_accounts.txt', maxMatches: Infinity,
-        roomPollMs: 1500, hostStartTimeout: 180000, minLevel: 80, hostWait: 1800000, startTimeout: 60000,
+        roomPollMs: 1500, waitFullTimeout: DEFAULT_WAIT_FULL_TIMEOUT_MS, hostStartTimeout: DEFAULT_HOST_START_TIMEOUT_MS, minLevel: 80, hostWait: 1800000, startTimeout: 60000,
         battleTimeout: null,
         dryRun: false, captureBattle: false, hostRoom: false, headful: false, headless: false, stb: false,
         notify: envNotify, minStartEnergy: null, lock: false,
@@ -105,6 +122,7 @@ function parseArgs(argv) {
         else if (key === '--accounts') args.accounts = argv[++i];
         else if (key === '--max-matches') args.maxMatches = Number(argv[++i]);
         else if (key === '--room-poll-ms') args.roomPollMs = Number(argv[++i]);
+        else if (key === '--wait-full-timeout') args.waitFullTimeout = Number(argv[++i]);
         else if (key === '--host-start-timeout') args.hostStartTimeout = Number(argv[++i]);
         else if (key === '--min-level') args.minLevel = Number(argv[++i]);
         else if (key === '--host-wait') args.hostWait = Number(argv[++i]);
@@ -132,7 +150,7 @@ function parseArgs(argv) {
         throw new Error('--min-start-energy harus angka positif atau auto.');
     }
     if (!(args.maxMatches > 0) || (!Number.isFinite(args.maxMatches) && args.maxMatches !== Infinity)) throw new Error('--max-matches harus angka positif.');
-    for (const [key, value] of [['--room-poll-ms', args.roomPollMs], ['--host-start-timeout', args.hostStartTimeout], ['--min-level', args.minLevel], ['--host-wait', args.hostWait], ['--start-timeout', args.startTimeout]]) {
+    for (const [key, value] of [['--room-poll-ms', args.roomPollMs], ['--wait-full-timeout', args.waitFullTimeout], ['--host-start-timeout', args.hostStartTimeout], ['--min-level', args.minLevel], ['--host-wait', args.hostWait], ['--start-timeout', args.startTimeout]]) {
         if (!(value > 0) || !Number.isFinite(value)) throw new Error(key + ' harus angka positif.');
     }
     if (args.battleTimeout !== null && (!(args.battleTimeout > 0) || !Number.isFinite(args.battleTimeout))) {
@@ -479,19 +497,44 @@ function isPasswordRejection(data) {
     const msg = String(data.reason ?? data.message ?? data.error ?? '').toLowerCase();
     return /passw|\bpw\b|sandi|locked/.test(msg);
 }
-function normalizeRoom(raw, questId) {
+function buildCharSummaryMap(data) {
+    const map = new Map();
+    const list = data && (data.char_array || data.charArray);
+    if (!Array.isArray(list)) return map;
+    for (const raw of list) {
+        if (!raw || typeof raw !== 'object') continue;
+        const cid = raw.char_id ?? raw.charId ?? raw.character_id ?? raw.characterId ?? raw.id;
+        if (cid == null) continue;
+        const key = normCharId(cid);
+        const lv = Number(raw.char_level ?? raw.character_level ?? raw.characterLevel ?? raw.level ?? raw.lv);
+        const emb = raw.isEmblem ?? raw.is_emblem ?? raw.emblem ?? raw.accountType ?? raw.account_type;
+        map.set(key, {
+            charId: key,
+            level: Number.isFinite(lv) ? lv : null,
+            isEmblem: emb == null ? null : (boolEmblem(emb) || Number(emb) === 2),
+        });
+    }
+    return map;
+}
+function normalizeRoom(raw, questId, charMap = null) {
     if (!raw || typeof raw !== 'object') return null;
     const id = raw.room_name ?? raw.roomName ?? raw.room_id ?? raw.roomId ?? raw.id;
     const quest = Number(raw.quest ?? raw.quest_id ?? raw.questId ?? raw.mission ?? raw.mission_id);
     const mode = raw.mode ?? raw.level ?? raw.difficulty;
     const rosterRaw = raw.character_array ?? raw.characters ?? raw.players ?? raw.player_array ?? raw.user_array;
     const players = Array.isArray(rosterRaw) ? rosterRaw.map(normalizePlayer) : [];
+    const taIds = Array.isArray(raw.ta) ? raw.ta.map(v => v && typeof v === 'object' ? (v.char_id ?? v.character_id ?? v.id) : v).filter(v => v != null && String(v).trim() !== '') : [];
     const hasPassword = boolFlag(raw.has_password ?? raw.hasPassword ?? raw.password_required ?? raw.passwordRequired ?? raw.is_password ?? raw.isPassword ?? raw.need_password ?? raw.needPassword ?? raw.password_locked ?? raw.passwordLocked ?? raw.locked);
     const capacity = Number(raw.max_player ?? raw.maxPlayer ?? raw.capacity ?? 3);
-    const declaredCount = Number(raw.player_count ?? raw.playerCount ?? raw.count ?? players.length);
+    const countBase = raw.player_count ?? raw.playerCount ?? raw.count ?? (players.length || taIds.length);
+    const declaredCount = Number(countBase);
     const slots = Number.isFinite(capacity) && Number.isFinite(declaredCount) ? capacity - declaredCount : null;
     const schemaComplete = Boolean(id != null && quest === Number(questId) && Array.isArray(rosterRaw) && players.length === rosterRaw.length && slots != null);
-    return { id: id == null ? null : String(id), quest, mode, players, slots, hasPassword, schemaComplete, raw };
+    const rawMasterId = raw.master_id ?? raw.masterId ?? raw.host_id ?? raw.hostId ?? raw.owner_id ?? raw.ownerId ?? raw.room_master_id ?? raw.roomMasterId ?? taIds[0] ?? null;
+    const summaryMasterId = rawMasterId != null ? normCharId(rawMasterId) : null;
+    const charEntry = (summaryMasterId && charMap && typeof charMap.get === 'function') ? charMap.get(summaryMasterId) : null;
+    const summaryMasterLevel = charEntry && Number.isFinite(charEntry.level) ? charEntry.level : null;
+    return { id: id == null ? null : String(id), quest, mode, players, slots, hasPassword, schemaComplete, summaryMasterId, summaryMasterLevel, raw };
 }
 function findRoomMaster(data, rawPlayers, players) {
     const masterId = data && (data.master_id ?? data.masterId ?? data.host_id ?? data.hostId ?? data.owner_id ?? data.ownerId ?? data.room_master_id ?? data.roomMasterId);
@@ -499,10 +542,10 @@ function findRoomMaster(data, rawPlayers, players) {
     const index = (rawPlayers || []).findIndex(player => player && typeof player === 'object' && Boolean(player.is_master ?? player.isMaster ?? player.is_host ?? player.isHost ?? player.is_owner ?? player.isOwner));
     return (players || [])[index >= 0 ? index : 0] || null;
 }
-function pickRoom(rooms, questId, botCharId, blockedRoomIds = new Set(), blockedMasterIds = new Set()) {
+function pickRoom(rooms, questId, botCharId, blockedRoomIds = new Set(), blockedMasterIds = new Set(), charMap = null) {
     const evaluated = [];
     for (const raw of (Array.isArray(rooms) ? rooms : [])) {
-        const room = normalizeRoom(raw, questId);
+        const room = normalizeRoom(raw, questId, charMap);
         if (!room || !room.id || room.quest !== Number(questId)) {
             const enemies = Array.isArray(raw && raw.tb) ? raw.tb.join(',') : '';
             evaluated.push({ reason: 'quest_or_id', quest: room && room.quest, enemies });
@@ -511,15 +554,21 @@ function pickRoom(rooms, questId, botCharId, blockedRoomIds = new Set(), blocked
         if (blockedRoomIds.has(room.id)) { evaluated.push({ roomId: room.id, reason: 'room_cooldown' }); continue; }
         if (room.hasPassword) { evaluated.push({ roomId: room.id, reason: 'password_required' }); continue; }
         if (room.slots != null && room.slots < 1) { evaluated.push({ roomId: room.id, reason: 'room_full' }); continue; }
-        const rawMasterId = room.raw && (room.raw.master_id ?? room.raw.masterId ?? room.raw.host_id ?? room.raw.hostId ?? room.raw.owner_id ?? room.raw.ownerId ?? room.raw.room_master_id ?? room.raw.roomMasterId);
-        const masterNorm = rawMasterId != null ? normCharId(rawMasterId) : '';
+        const masterNorm = room.summaryMasterId || '';
         if (masterNorm && blockedMasterIds && blockedMasterIds.has(masterNorm)) {
             evaluated.push({ roomId: room.id, reason: 'master_level_low_blocked' });
             continue;
         }
-        // Room summary often omits roster. Join only to verify it; READY stays blocked
+        if (room.summaryMasterLevel != null && room.summaryMasterLevel < 80) {
+            evaluated.push({ roomId: room.id, reason: 'master_level_' + room.summaryMasterLevel });
+            continue;
+        }
+        // Room summary often omits full roster. Join only to verify it; READY stays blocked
         // until join_room confirms another Emblem player.
-        if (!room.schemaComplete) { evaluated.push({ roomId: room.id, reason: 'verify_after_join', room, otherEmblems: null }); continue; }
+        if (!room.schemaComplete) {
+            evaluated.push({ roomId: room.id, reason: 'verify_after_join', room, otherEmblems: null, masterLevel: room.summaryMasterLevel });
+            continue;
+        }
         const master = findRoomMaster(room.raw, room.raw.character_array || room.raw.characters || room.raw.players || [], room.players);
         if (master && master.charId && blockedMasterIds && blockedMasterIds.has(normCharId(master.charId))) {
             evaluated.push({ roomId: room.id, reason: 'master_level_low_blocked' });
@@ -529,9 +578,14 @@ function pickRoom(rooms, questId, botCharId, blockedRoomIds = new Set(), blocked
         const botNorm = normCharId(botCharId);
         const otherEmblems = room.players.filter(player => normCharId(player.charId) !== botNorm && player.isEmblem).length;
         if (otherEmblems < 1) { evaluated.push({ roomId: room.id, reason: 'need_second_emblem' }); continue; }
-        evaluated.push({ roomId: room.id, reason: 'accepted', room, otherEmblems });
+        evaluated.push({ roomId: room.id, reason: 'accepted', room, otherEmblems, masterLevel: master.level });
     }
-    const candidates = evaluated.filter(item => item.room).sort((left, right) => (right.otherEmblems ?? -1) - (left.otherEmblems ?? -1) || (right.room.slots ?? 0) - (left.room.slots ?? 0) || left.room.id.localeCompare(right.room.id, undefined, { numeric: true }));
+    const candidates = evaluated.filter(item => item.room).sort((left, right) =>
+        (right.otherEmblems ?? -1) - (left.otherEmblems ?? -1) ||
+        (left.room.slots ?? 99) - (right.room.slots ?? 99) ||
+        (right.masterLevel ?? 0) - (left.masterLevel ?? 0) ||
+        left.room.id.localeCompare(right.room.id, undefined, { numeric: true })
+    );
     return { room: candidates[0] && candidates[0].room, evaluated };
 }
 function scanSummary(evaluated) {
@@ -663,15 +717,57 @@ function messageValue(raw) {
     try { return JSON.parse(message); } catch (_) { return null; }
 }
 function readSelfHp(battle, selfId) {
-    if (!battle || !battle.playersHp || typeof battle.playersHp.values !== 'function') return null;
+    const res = readSelfResources(battle, selfId);
+    return res.hp;
+}
+function readSelfResources(battle, selfId) {
+    if (!battle || !battle.playersHp || typeof battle.playersHp.values !== 'function') {
+        return { hp: null, cp: null, maxCp: null, sp: null };
+    }
     const selfNorm = normCharId(selfId);
     for (const entry of battle.playersHp.values()) {
         if (entry && normCharId(entry.id) === selfNorm) {
-            const hp = Number(entry.hp);
-            return Number.isFinite(hp) ? hp : null;
+            const numOrNull = v => (v != null && Number.isFinite(Number(v)) ? Number(v) : null);
+            return {
+                hp: numOrNull(entry.hp),
+                cp: numOrNull(entry.cp),
+                maxCp: numOrNull(entry.maxCp),
+                sp: numOrNull(entry.sp),
+            };
         }
     }
-    return null;
+    return { hp: null, cp: null, maxCp: null, sp: null };
+}
+function tickSelfSkillCooldowns(cooldowns) {
+    if (!cooldowns || typeof cooldowns.entries !== 'function') return;
+    for (const [k, v] of cooldowns.entries()) {
+        const next = Number(v) - 1;
+        if (next > 0) cooldowns.set(k, next);
+        else cooldowns.delete(k);
+    }
+}
+function trackSelfActionOutcome(active, message, selfId, logFn) {
+    if (!active || !message || message.state !== 'battle_action') return;
+    if (normCharId(message.charId) !== normCharId(selfId)) return;
+    if (!active.skillCooldowns) active.skillCooldowns = new Map();
+    const ba = message.battleAction || {};
+    const act = String(ba.action || '').toLowerCase();
+    const rawSkill = ba.skillId ?? ba.skill_id ?? '';
+    const parsedNum = String(rawSkill).replace(/^skill/i, '').trim();
+    const usedId = (act === 'senjutsu' ? (active.lastSelfSkillId || parsedNum) : (parsedNum || active.lastSelfSkillId || ''));
+    if (act === 'pass' && active.lastSelfSkillId) {
+        const blockedId = String(active.lastSelfSkillId);
+        const cur = Number(active.skillCooldowns.get(blockedId)) || 0;
+        active.skillCooldowns.set(blockedId, Math.max(cur, 3));
+        if (logFn) logFn('SERVER PASS untuk skill' + blockedId + '; skip sementara (CP/CD)');
+        return;
+    }
+    if ((act === 'skill' || act === 'senjutsu') && usedId) {
+        const meta = SKILL_META[usedId];
+        if (meta && meta.cooldown > 0) {
+            active.skillCooldowns.set(usedId, meta.cooldown);
+        }
+    }
 }
 function hasReactiveForcePacket(message) {
     if (!message || typeof message !== 'object') return false;
@@ -733,15 +829,57 @@ function cycleSequenceTurn(sequence, skills, head, turn, priorityLabel, fallback
     const skill = fallback.length ? fallback[turn % fallback.length] : null;
     return skill ? { skill, targetId: head, label: fallbackLabel } : { skill: null, targetId: head, label: 'weapon' };
 }
-function chooseQuickmatchTurn(charName, skills, enemyIds, turn, opts = {}) {
-    const head = enemyIds && enemyIds[0];
-    const isCerberus = !opts || opts.boss == null || String(opts.boss).toLowerCase() === 'cerberus';
-    if (isUchihaRazq(charName)) {
-        if (isCerberus && opts && opts.reactiveForcePending) {
-            const superCharges = pickSuperChargesSkill(skills, opts.extraSkills);
-            if (superCharges) return { skill: superCharges, targetId: head, label: 'razq_reactive_super_charges', override: true };
+function isSkillReadyForState(skill, battleState) {
+    if (!skill) return { ready: false, reason: 'missing' };
+    if (!battleState) return { ready: true };
+    const id = String(skill.id || skill.skillId || '').replace(/^skill/i, '').trim();
+    const cd = battleState.cooldowns && typeof battleState.cooldowns.get === 'function' ? (Number(battleState.cooldowns.get(id)) || 0) : 0;
+    if (cd > 0) return { ready: false, reason: 'cooldown', cd };
+    const meta = SKILL_META[id] || {};
+    const isSenjutsu = skill.action === 'senjutsu' || Number(id) >= 3000;
+    if (isSenjutsu) {
+        if (battleState.sp != null && meta.sp && battleState.sp < meta.sp) return { ready: false, reason: 'sp' };
+    } else if (battleState.cp != null && meta.cp && battleState.cp < meta.cp) {
+        return { ready: false, reason: 'cp' };
+    }
+    return { ready: true };
+}
+function chooseSmartSequenceTurn(sequence, skills, targetId, turn, priorityLabel, fallbackLabel, battleState, superChargesSkill = null) {
+    if (!battleState) return cycleSequenceTurn(sequence, skills, targetId, turn, priorityLabel, fallbackLabel);
+    if (sequence.length) {
+        let blockedByCp = false;
+        const start = turn % sequence.length;
+        for (let offset = 0; offset < sequence.length; offset++) {
+            const idx = (start + offset) % sequence.length;
+            const candidate = sequence[idx];
+            const check = isSkillReadyForState(candidate, battleState);
+            if (check.ready) {
+                return { skill: candidate, targetId, label: priorityLabel, nextTurn: idx + 1 };
+            }
+            if (check.reason === 'cp') blockedByCp = true;
         }
-        const sequence = [
+        if (blockedByCp) {
+            if (superChargesSkill && isSkillReadyForState(superChargesSkill, battleState).ready) {
+                return { skill: superChargesSkill, action: 'senjutsu', targetId, label: priorityLabel + '_cp_super_charges', override: true };
+            }
+            return { skill: null, action: 'charge', targetId, label: priorityLabel + '_charge_cp', override: true };
+        }
+        return { skill: null, action: 'weapon_attack', targetId, label: priorityLabel + '_weapon_cd', override: true };
+    }
+    return cycleSequenceTurn(sequence, skills, targetId, turn, priorityLabel, fallbackLabel);
+}
+function chooseQuickmatchTurn(charName, skills, enemyIds, turn, opts = {}) {
+    const head = (opts && opts.battleState && opts.battleState.livingTargetId != null)
+        ? opts.battleState.livingTargetId
+        : (enemyIds && enemyIds[0]);
+    const isCerberus = !opts || opts.boss == null || String(opts.boss).toLowerCase() === 'cerberus';
+    const battleState = opts && opts.battleState ? opts.battleState : null;
+    if (isUchihaRazq(charName)) {
+        const superCharges = pickSuperChargesSkill(skills, opts && opts.extraSkills);
+        if (isCerberus && opts && opts.reactiveForcePending && superCharges && isSkillReadyForState(superCharges, battleState).ready) {
+            return { skill: superCharges, action: 'senjutsu', targetId: head, label: 'razq_reactive_super_charges', override: true, consumedReactiveForce: true };
+        }
+        const primary = [
             pickNamedSkill(skills, ['five element consuming seal', 'five elements seal'], '345'),
             pickNamedSkill(skills, ['thunder explosion'], '633'),
             pickNamedSkill(skills, ['flame armor'], '629'),
@@ -749,10 +887,20 @@ function chooseQuickmatchTurn(charName, skills, enemyIds, turn, opts = {}) {
             pickNamedSkill(skills, ['dragon sublimation'], '3110'),
             pickNamedSkill(skills, ['dance of fujin'], '151'),
             pickNamedSkill(skills, ['advanced aphrodite s blessing', 'aphrodite s blessing'], '854'),
-        ].filter(Boolean);
-        return cycleSequenceTurn(sequence, skills, head, turn, 'razq_priority', 'razq_fallback');
+        ];
+        const extended = battleState ? [
+            ...primary,
+            pickNamedSkill(skills, ['vacuum bomb'], '623'),
+            pickNamedSkill(skills, ['minotaur s sweep', 'minotaur sweep'], '728'),
+            pickNamedSkill(skills, ['kinjutsu evasion', 'evasion'], '39'),
+        ] : primary;
+        const sequence = extended.filter(Boolean);
+        return chooseSmartSequenceTurn(sequence, skills, head, turn, 'razq_priority', 'razq_fallback', battleState, superCharges);
     }
     const fallback = rankedSkills(skills, ['2004']);
+    if (battleState && fallback.length) {
+        return chooseSmartSequenceTurn(fallback, skills, head, turn, 'ranked', 'ranked', battleState, null);
+    }
     const skill = fallback.length ? fallback[turn % fallback.length] : pickSkill(skills, '2004');
     return skill ? { skill, targetId: head, label: 'ranked' } : { skill: null, targetId: head, label: 'weapon' };
 }
@@ -843,6 +991,7 @@ async function runLive(args, account) {
         socket = await connectPve({ server: pve.pvpServer[0], sessionKey: result.session.sessionKey, charId: botId, handoffToken: pve.handoffToken, handoffNonce: pve.handoffNonce, ver: pve.ver });
 
         let rooms = null;
+        let roomCharMap = new Map();
         let active = null;
         let fatal = null;
         let solvingCaptcha = false;
@@ -911,6 +1060,7 @@ async function runLive(args, account) {
             });
             sock.on('get_room_summary', data => {
                 rooms = roomArray(data);
+                roomCharMap = buildCharSummaryMap(data);
             });
             sock.on('captcha_required', () => {
                 if (!active || active.done || active.joinAccepted || solvingCaptcha) return;
@@ -927,19 +1077,19 @@ async function runLive(args, account) {
                     }
                     if (decision.action === 'retry') {
                         line('  CAPTCHA ditolak; fails_left=' + decision.failsLeft + '. Ulang join room.');
-                        await sleep(1000);
+                        await sleep(600);
                         if (active && !active.done) {
                             sock.joinRoom(active.room.id, '', currentPve.ver);
-                            watchJoinResponse('captcha_join_timeout', 12000);
+                            watchJoinResponse('captcha_join_timeout', CAPTCHA_JOIN_TIMEOUT_MS);
                         }
                         return;
                     }
                     // Give server verification state time to reach PvE socket before retrying join.
-                    await sleep(750);
+                    await sleep(400);
                     if (!active || active.done) return;
                     line('  #' + active.match + ' CAPTCHA OK; ulang join room=' + active.room.id);
                     sock.joinRoom(active.room.id, '', currentPve.ver);
-                    watchJoinResponse('captcha_join_timeout', 12000);
+                    watchJoinResponse('captcha_join_timeout', CAPTCHA_JOIN_TIMEOUT_MS);
                 }).catch(error => {
                     resetActive('captcha_error:' + String(error.message || error).slice(0, 80));
                 }).finally(async () => {
@@ -984,7 +1134,7 @@ async function runLive(args, account) {
                 const reason = active.master && active.master.level != null ? 'master_level_' + active.master.level : 'master_level_unknown';
                 const masterId = active.master && normCharId(active.master.charId);
                 const lowRes = recordLowLevelMaster(lowLevelRmCounts, masterId, active.room && active.room.id);
-                const skipMs = lowRes.blockedMaster ? KICK_SKIP_MS : 120000;
+                const skipMs = (active.master && active.master.level != null && active.master.level < 80) || lowRes.blockedMaster ? KICK_SKIP_MS : 120000;
                 if (lowRes.blockedMaster && lowRes.masterId) {
                     rejectedMasterUntil.set(lowRes.masterId, Date.now() + KICK_SKIP_MS);
                     line('  #' + active.match + ' RM Lv<80 terdeteksi ' + lowRes.count + 'x (master=' + lowRes.masterId + '); blokir RM & cari room lain');
@@ -1139,8 +1289,10 @@ async function runLive(args, account) {
                 }
                 const hpBefore = readSelfHp(active.battle, botId);
                 const step = active.battle.nextStep(message);
-                const hpAfter = readSelfHp(active.battle, botId);
+                const selfRes = readSelfResources(active.battle, botId);
+                const hpAfter = selfRes.hp;
                 const logBattle = msg => line('  #' + active.match + ' ' + msg);
+                trackSelfActionOutcome(active, message, botId, logBattle);
                 if (isUchihaRazq(result.charName) && String(args.boss || '').toLowerCase() === 'cerberus') {
                     trackReactiveForce(active, message, botId, hpBefore, hpAfter, logBattle);
                 }
@@ -1148,18 +1300,26 @@ async function runLive(args, account) {
                 if (handleBattlePreTurnStep(sock, active, step, logBattle)) return;
                 if (step.type === 'turn' && !args.captureBattle) {
                     active.commandReceivedNs = nowNs();
+                    if (!active.skillCooldowns) active.skillCooldowns = new Map();
+                    tickSelfSkillCooldowns(active.skillCooldowns);
                     const turn = chooseQuickmatchTurn(result.charName, result.skills, active.battle.enemyIds, active.turn, {
                         boss: args.boss,
                         reactiveForcePending: Boolean(active.reactiveForcePending),
                         extraSkills: result.skills,
+                        battleState: {
+                            cp: selfRes.cp,
+                            sp: selfRes.sp,
+                            cooldowns: active.skillCooldowns,
+                            livingTargetId: step.targetId,
+                        },
                     });
-                    if (turn.override) active.reactiveForcePending = false;
-                    else active.turn++;
-                    const action = turn.skill ? (turn.skill.action || (Number(turn.skill.id) >= 3000 ? 'senjutsu' : 'skill')) : 'weapon_attack';
+                    if (turn.consumedReactiveForce) active.reactiveForcePending = false;
+                    if (!turn.override) active.turn = turn.nextTurn != null ? turn.nextTurn : (active.turn + 1);
+                    const action = turn.action || (turn.skill ? (turn.skill.action || (Number(turn.skill.id) >= 3000 ? 'senjutsu' : 'skill')) : 'weapon_attack');
                     const actorId = step.charId || (active.battle && active.battle.battleCharId) || botId;
                     active.lastSelfSkillId = turn.skill ? String(turn.skill.id || turn.skill.skillId || '').replace(/^skill/i, '') : null;
                     sock.battleCommand(actorId, action, turn.skill && turn.skill.skillId, turn.targetId);
-                    active.lastAction = turn.label + ':' + action + ':' + (turn.skill ? turn.skill.skillId : 'weapon_attack');
+                    active.lastAction = turn.label + ':' + action + ':' + (turn.skill ? turn.skill.skillId : action);
                     active.battleCommandLatencyMs = elapsedMs(active.commandReceivedNs);
                     line('  #' + active.match + ' SKILL ' + active.lastAction + ' char=' + actorId + ' (' + active.battleCommandLatencyMs.toFixed(1) + ' ms)');
                 }
@@ -1208,7 +1368,7 @@ async function runLive(args, account) {
                 const nowMs = Date.now();
                 for (const [roomId, until] of rejectedRoomUntil) if (until <= nowMs) rejectedRoomUntil.delete(roomId);
                 for (const [mId, until] of rejectedMasterUntil) if (until <= nowMs) rejectedMasterUntil.delete(mId);
-                const picked = pickRoom(rooms, quest.quest, botId, new Set(rejectedRoomUntil.keys()), new Set(rejectedMasterUntil.keys()));
+                const picked = pickRoom(rooms, quest.quest, botId, new Set(rejectedRoomUntil.keys()), new Set(rejectedMasterUntil.keys()), roomCharMap);
                 const battleNo = report.matches.length + 1;
                 report.scans.push({ at: new Date().toISOString(), rooms: rooms.length, candidate: picked.room && picked.room.id, rejects: picked.evaluated.filter(item => item.reason !== 'accepted') });
                 if (!picked.room) {
@@ -1218,17 +1378,32 @@ async function runLive(args, account) {
                     continue;
                 }
                 attemptNo++;
-                active = { match: battleNo, attempt: attemptNo, room: picked.room, players: picked.room.players.slice(), rosterConfirmed: picked.room.schemaComplete, started: false, ready: false, done: false, reason: null, outcome: null, startedAt: Date.now(), turn: 0, battle: new PveBattle({ charId: botId, strategy: 'B', skills: result.skills }) };
+                active = { match: battleNo, attempt: attemptNo, room: picked.room, players: picked.room.players.slice(), rosterConfirmed: picked.room.schemaComplete, started: false, ready: false, done: false, reason: null, outcome: null, startedAt: Date.now(), turn: 0, skillCooldowns: new Map(), battle: new PveBattle({ charId: botId, strategy: 'B', skills: result.skills }) };
                 captchaAttempts = 0;
                 divider('COBA #' + attemptNo + ' (Battle #' + battleNo + ')');
-                line('  #' + battleNo + ' (coba #' + attemptNo + ') JOIN room=' + active.room.id + (picked.otherEmblems == null ? ' (verifikasi roster)' : ' emblem=' + picked.room.players.filter(player => player.isEmblem).length));
+                const summaryHint = picked.room.summaryMasterLevel != null
+                    ? ' (RM Lv' + picked.room.summaryMasterLevel + (picked.room.slots != null ? ', ' + (3 - picked.room.slots) + '/3' : '') + ')'
+                    : (picked.otherEmblems == null ? ' (verifikasi roster)' : ' emblem=' + picked.room.players.filter(player => player.isEmblem).length);
+                line('  #' + battleNo + ' (coba #' + attemptNo + ') JOIN room=' + active.room.id + summaryHint);
                 socket.joinRoom(active.room.id, '', currentPve.ver);
-                const readyDeadline = Date.now() + args.hostStartTimeout;
-                while (!active.done && !active.ready && Date.now() < readyDeadline) {
+                const waitFullMs = args.waitFullTimeout || DEFAULT_WAIT_FULL_TIMEOUT_MS;
+                let readyDeadline = Date.now() + waitFullMs;
+                let readyWaitAnchored = false;
+                while (!active.done && !active.ready && (solvingCaptcha || Date.now() < readyDeadline)) {
                     if (fatal) throw fatal;
+                    // Never expire wait-full timer during CAPTCHA; anchor 45s strictly after join is accepted.
+                    if (solvingCaptcha && !active.joinAccepted) {
+                        readyDeadline = Date.now() + waitFullMs;
+                    } else if (active.joinAccepted && !readyWaitAnchored) {
+                        readyWaitAnchored = true;
+                        readyDeadline = Date.now() + waitFullMs;
+                    }
                     await sleep(10);
                 }
-                if (!active.done && !active.ready) resetActive('ready_timeout');
+                if (!active.done && !active.ready) {
+                    blockRoom(active.room.id, 'ready_timeout', 180000);
+                    resetActive('ready_timeout');
+                }
                 if (active && !active.done && !active.started) {
                     // Host timer begins only after our READY command, never during CAPTCHA/join.
                     const hostDeadline = active.readySentNs
@@ -1238,7 +1413,10 @@ async function runLive(args, account) {
                         if (fatal) throw fatal;
                         await sleep(10);
                     }
-                    if (!active.done && !active.started) resetActive('host_start_timeout');
+                    if (!active.done && !active.started) {
+                        blockRoom(active.room.id, 'host_start_timeout', 180000);
+                        resetActive('host_start_timeout');
+                    }
                 }
                 if (active && !active.done && active.started && !args.captureBattle) {
                     const battleDeadline = Date.now() + battleTimeoutMs;
@@ -1248,7 +1426,7 @@ async function runLive(args, account) {
                     }
                     if (!active.done) resetActive('battle_timeout');
                 }
-                if (active.room && !active.outcome) socket.leaveRoom(active.room.id);
+                if (active.room && !active.outcome && active.joinAccepted) socket.leaveRoom(active.room.id);
                 else if (active.outcome) socket.joinLobby();
                 const matchScore = extractScoreForChar(active.score, botId);
                 const finalTeam = typeof active.battle.getTeamStatus === 'function' ? active.battle.getTeamStatus() : null;
@@ -1343,15 +1521,18 @@ function buildSkillDeck(skills) {
     return { defense, opener, aoe, rest };
 }
 function chooseCerberusTurn(skills, enemyIds, turn, charName = '', opts = {}) {
-    const head = enemyIds && enemyIds[0];
+    const head = (opts && opts.battleState && opts.battleState.livingTargetId != null)
+        ? opts.battleState.livingTargetId
+        : (enemyIds && enemyIds[0]);
     const isCerberus = !opts || opts.boss == null || String(opts.boss).toLowerCase() === 'cerberus';
+    const battleState = opts && opts.battleState ? opts.battleState : null;
     if (isUchihaRazq(charName)) {
-        if (isCerberus && opts && opts.reactiveForcePending) {
-            const superCharges = pickSuperChargesSkill(skills, opts.extraSkills);
-            if (superCharges) return { skill: superCharges, targetId: head, label: 'razq_host_reactive_super_charges', override: true };
+        const superCharges = pickSuperChargesSkill(skills, opts && opts.extraSkills);
+        if (isCerberus && opts && opts.reactiveForcePending && superCharges && isSkillReadyForState(superCharges, battleState).ready) {
+            return { skill: superCharges, action: 'senjutsu', targetId: head, label: 'razq_host_reactive_super_charges', override: true, consumedReactiveForce: true };
         }
         const pool = opts && opts.extraSkills ? [...(skills || []), ...opts.extraSkills] : skills;
-        const sequence = [
+        const primary = [
             pickNamedSkill(pool, ['kinjutsu evasion', 'evasion'], '39'),
             pickNamedSkill(pool, ['five element consuming seal', 'five elements seal'], '345'),
             pickNamedSkill(pool, ['thunder explosion'], '633'),
@@ -1360,8 +1541,14 @@ function chooseCerberusTurn(skills, enemyIds, turn, charName = '', opts = {}) {
             pickNamedSkill(pool, ['advanced aphrodite s blessing', 'aphrodite s blessing'], '854'),
             pickNamedSkill(pool, ['dragon sublimation'], '3110'),
             pickNamedSkill(pool, ['dance of fujin'], '151'),
-        ].filter(Boolean);
-        return cycleSequenceTurn(sequence, pool, head, turn, 'razq_host_priority', 'razq_host_fallback');
+        ];
+        const extended = battleState ? [
+            ...primary,
+            pickNamedSkill(pool, ['vacuum bomb'], '623'),
+            pickNamedSkill(pool, ['minotaur s sweep', 'minotaur sweep'], '728'),
+        ] : primary;
+        const sequence = extended.filter(Boolean);
+        return chooseSmartSequenceTurn(sequence, pool, head, turn, 'razq_host_priority', 'razq_host_fallback', battleState, superCharges);
     }
     const deck = buildSkillDeck(skills);
     const sequence = [];
@@ -1636,27 +1823,37 @@ async function runHostRoom(args, account) {
                 if (message.state === 'battle_lose') { clearBattleTimers(active); finish('battle_lose', 'lose'); return; }
                 const hpBefore = readSelfHp(active.battle, hostId);
                 const step = active.battle.nextStep(message);
-                const hpAfter = readSelfHp(active.battle, hostId);
+                const selfRes = readSelfResources(active.battle, hostId);
+                const hpAfter = selfRes.hp;
                 const logHostBattle = msg => say('  ' + msg);
+                trackSelfActionOutcome(active, message, hostId, logHostBattle);
                 if (isUchihaRazq(result.charName) && String(args.boss || '').toLowerCase() === 'cerberus') {
                     trackReactiveForce(active, message, hostId, hpBefore, hpAfter, logHostBattle);
                 }
                 traceBattleProgress(active, message, hostId, logHostBattle);
                 if (handleBattlePreTurnStep(sock, active, step, logHostBattle)) return;
                 if (step.type === 'turn') {
+                    if (!active.skillCooldowns) active.skillCooldowns = new Map();
+                    tickSelfSkillCooldowns(active.skillCooldowns);
                     const turn = chooseCerberusTurn(result.equipped, active.battle.enemyIds, active.turn, result.charName, {
                         boss: args.boss,
                         reactiveForcePending: Boolean(active.reactiveForcePending),
                         extraSkills: result.skills,
+                        battleState: {
+                            cp: selfRes.cp,
+                            sp: selfRes.sp,
+                            cooldowns: active.skillCooldowns,
+                            livingTargetId: step.targetId,
+                        },
                     });
-                    if (turn.override) active.reactiveForcePending = false;
-                    else active.turn++;
-                    const action = turn.skill ? (turn.skill.action || (Number(turn.skill.id) >= 3000 ? 'senjutsu' : 'skill')) : 'weapon_attack';
+                    if (turn.consumedReactiveForce) active.reactiveForcePending = false;
+                    if (!turn.override) active.turn = turn.nextTurn != null ? turn.nextTurn : (active.turn + 1);
+                    const action = turn.action || (turn.skill ? (turn.skill.action || (Number(turn.skill.id) >= 3000 ? 'senjutsu' : 'skill')) : 'weapon_attack');
                     const actorId = step.charId || (active.battle && active.battle.battleCharId) || hostId;
                     active.lastSelfSkillId = turn.skill ? String(turn.skill.id || turn.skill.skillId || '').replace(/^skill/i, '') : null;
                     sock.battleCommand(actorId, action, turn.skill && turn.skill.skillId, turn.targetId);
-                    active.actions.push(turn.label + ':' + (turn.skill ? turn.skill.skillId : 'weapon_attack'));
-                    say('  TURN ' + active.turn + (turn.override ? ' (PRIORITAS)' : '') + ' ' + turn.label + ' ' + (turn.skill ? turn.skill.skillId : 'weapon_attack') + ' char=' + actorId + ' -> ' + turn.targetId);
+                    active.actions.push(turn.label + ':' + (turn.skill ? turn.skill.skillId : action));
+                    say('  TURN ' + active.turn + (turn.override ? ' (PRIORITAS)' : '') + ' ' + turn.label + ' ' + (turn.skill ? turn.skill.skillId : action) + ' char=' + actorId + ' -> ' + turn.targetId);
                 }
             });
         };
@@ -1810,4 +2007,4 @@ async function runHostRoom(args, account) {
     }
 })().catch(error => { line('STOP: ' + error.message); process.exitCode = 1; });
 
-module.exports = { parseArgs, parseAccountsFile, resolveMinStartEnergy, resolveBattleTimeoutMs, acquireRunLock, isTransientSocketError, parsePveRankingResponse, extractScoreForChar, findQuestId, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, buildSkillDeck, describeDeck, normCharId, idList, evaluateLevel, traceBattleProgress, handleMidBattleLeave, hasReactiveForcePacket, trackReactiveForce, pickSuperChargesSkill, recordRoomKick, recordLowLevelMaster, isPasswordRejection, runDryRun, runLive, runHostRoom };
+module.exports = { parseArgs, parseAccountsFile, resolveMinStartEnergy, resolveBattleTimeoutMs, acquireRunLock, isTransientSocketError, parsePveRankingResponse, extractScoreForChar, findQuestId, buildCharSummaryMap, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, buildSkillDeck, describeDeck, normCharId, idList, evaluateLevel, traceBattleProgress, handleMidBattleLeave, readSelfResources, tickSelfSkillCooldowns, trackSelfActionOutcome, hasReactiveForcePacket, trackReactiveForce, pickSuperChargesSkill, recordRoomKick, recordLowLevelMaster, isPasswordRejection, runDryRun, runLive, runHostRoom };
