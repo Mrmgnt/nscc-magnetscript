@@ -26,7 +26,9 @@ const now = () => Math.floor(Date.now() / 1000);
 async function runTrainSession(opts = {}) {
     const mode = String(opts.mode || process.argv[2] || 'tp').toLowerCase();
     const maks = Number(opts.maks !== undefined ? opts.maks : (process.argv[3] || 5));
-    const jeda = Number(opts.jeda !== undefined ? opts.jeda : (process.argv[4] || 11));
+    const rawJeda = opts.jeda !== undefined ? opts.jeda : (process.env.NS_TRAIN_DELAY || process.argv[4]);
+    const parsedJeda = (rawJeda !== undefined && rawJeda !== '') ? Number(rawJeda) : 3;
+    const jeda = Number.isFinite(parsedJeda) && parsedJeda > 0 ? Math.max(1.5, parsedJeda) : 3;
     const paksa = Boolean(opts.paksa || process.argv.includes('--paksa'));
     const shared = opts.shared || null;
 
@@ -220,6 +222,7 @@ async function runTrainSession(opts = {}) {
         let kredit = 0;
         let alreadyDone = 0;
         let failedCount = 0;
+        let lastSkippedDone = false;
 
         for (const mid of daftar) {
             if (!extraKeys) {
@@ -234,7 +237,8 @@ async function runTrainSession(opts = {}) {
 
             // Update server 20 Nov 2026: CharacterService.startMission dihapus;
             // cfn awal diambil dari extraData.csf, sbid dibuat lokal, lalu dirotasi dari ub.csf.
-            await sleep(Math.max(3, jeda) * 1000);
+            // Jika misi sebelumnya di rangkaian ini sudah diklaim hari ini, cukup jeda singkat 350ms untuk cek sisa misi.
+            await sleep(lastSkippedDone ? 350 : Math.round(jeda * 1000));
 
             let upd = null;
             for (let coba = 1; coba <= 3; coba++) {
@@ -259,11 +263,11 @@ async function runTrainSession(opts = {}) {
                     continue;
                 }
                 if (/please wait|wait a moment/i.test(ubTxt) && coba < 3) {
-                    await sleep(10000);
+                    await sleep(6000);
                     continue;
                 }
                 if ((!upd || !upd.body) && coba < 3) {
-                    await sleep(2500);
+                    await sleep(2000);
                     continue;
                 }
                 break;
@@ -274,27 +278,31 @@ async function runTrainSession(opts = {}) {
                 const resTxt = JSON.stringify(res);
                 if (/daily mission already completed today|already completed/i.test(resTxt)) {
                     alreadyDone++;
+                    lastSkippedDone = true;
                     line('  ' + mid + ' SUDAH DIKLAIM HARI INI');
                 } else {
                     failedCount++;
+                    lastSkippedDone = false;
                     hadError = true;
                     line('  ' + mid + ' DITOLAK: ' + resTxt.slice(0, 200));
                 }
                 continue;
             }
 
+            lastSkippedDone = false;
             ok++;
             totalAccepted++;
             const inv = res.update_inventory || {};
-            if (inv.xp !== undefined && Number(inv.xp) > st.xp) st.xp = Number(inv.xp);
-            else st.xp += (curMode === 'tp' ? 2000 : 10000);
-            if (inv.gold !== undefined && Number(inv.gold) > st.gold) st.gold = Number(inv.gold);
-            else st.gold += (curMode === 'tp' ? 2000 : 10000);
+            const gain = curMode === 'tp' ? 2000 : 10000;
+            // inv.xp sudah berisi XP terbaru sesudah misi, sedangkan inv.gold berisi Gold sebelum reward misi ditambahkan
+            if (inv.xp !== undefined && inv.xp !== null) st.xp = Number(inv.xp);
+            else st.xp += gain;
+            if (inv.gold !== undefined && inv.gold !== null) st.gold = Number(inv.gold) + gain;
+            else st.gold += gain;
 
             const dg = st.gold - g0, dx = st.xp - x0;
             if (dg !== 0 || dx !== 0) kredit++;
             line('  ' + mid + ' KREDIT (' + ok + '/' + daftar.length + ')  XP ' + st.xp + (dx ? ' (+' + dx + ')' : '') + ' | gold ' + st.gold + (dg ? ' (+' + dg + ')' : ''));
-            await sleep(400);
         }
 
         line('');

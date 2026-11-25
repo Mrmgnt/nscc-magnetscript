@@ -119,12 +119,12 @@ function sebab(out) {
         process.exit(1);
     }
 
-    await sleep(300);
+    await sleep(50);
 
     const trainTitle = 'Daily: TP & SS Training';
     line('');
     line('################ ' + trainTitle + ' ################');
-    const trainRes = await runTrainSession({ mode: 'all', maks: 5, jeda: 11, shared });
+    const trainRes = await runTrainSession({ mode: 'all', maks: 5, jeda: 3, shared });
     hasil.push([trainTitle, trainRes.exitCode, trainRes.kredit || 0, trainRes.exitCode === 0 ? 'Selesai' : 'Ada kegagalan']);
 
     if (thanksgivingMode) {
@@ -140,11 +140,11 @@ function sebab(out) {
         const charRank = Number(shared.st.rank || 1);
 
         if (charLevel >= 80) {
-            await sleep(300);
+            await sleep(50);
             const gsTitle = 'Daily: Misi Grade S (Map 1-4)';
             line('');
             line('################ ' + gsTitle + ' ################');
-            const gsRes = await runGradeSSession({ target: '1-4', jeda: 8, shared });
+            const gsRes = await runGradeSSession({ target: '1-4', jeda: 3, shared });
             hasil.push([gsTitle, gsRes.exitCode, gsRes.battles || 0, `Grade S ${gsRes.battles || 0}x`]);
         }
 
@@ -158,14 +158,14 @@ function sebab(out) {
         let lvTitle = '';
         if (butuhUjianNama) {
             lvTitle = 'Auto Exam: ' + butuhUjianNama;
-            lvCmd = [process.execPath, 'ns_level.js', String(targetLevel || charLevel), '8'];
+            lvCmd = [process.execPath, 'ns_level.js', String(targetLevel || charLevel), '3'];
         } else if (targetLevel && targetLevel > charLevel) {
             lvTitle = 'Auto Leveling ke ' + targetLevel;
-            lvCmd = [process.execPath, 'ns_level.js', String(targetLevel), '8'];
+            lvCmd = [process.execPath, 'ns_level.js', String(targetLevel), '3'];
         }
 
         if (lvCmd) {
-            await sleep(500);
+            await sleep(100);
             line('');
             line('################ ' + lvTitle + ' ################');
             const r = await runTahap(lvCmd);

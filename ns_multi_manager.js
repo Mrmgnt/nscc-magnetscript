@@ -6,22 +6,13 @@
  * Fitur:
  *   - Membaca daftar akun dari accounts.txt dengan format:
  *       username:password:targetLevel:characterSlot
- *     Contoh skenario 3 akun (Akun 1 Emblem >1 karakter, Akun 2 & 3 Non-Emblem 1 karakter):
- *       akun1:pass1:80:all   (Otomatis mendeteksi & menjalankan SEMUA karakter di Akun 1)
- *       -- atau tulis per slot:
- *       akun1:pass1:80:1     (Akun 1, karakter slot 1)
- *       akun1:pass1:60:2     (Akun 1, karakter slot 2)
- *       akun2:pass2:80:1     (Akun 2, karakter slot 1)
- *       akun3:pass3:100:1    (Akun 3, karakter slot 1)
  *   - Mendukung slot "all" / "*" (auto-detect semua karakter di akun) atau "1,2" (multi-slot).
- *   - Menjalankan seluruh rutinitas otomatis secara sekuensial (bergantian):
- *       1. Jatah Harian Full (TP + SS + Eudemon Dragon 3x Emblem/1x Free + Claim Hunting House Tanpa Battle)
- *       2. Jatah Harian Full + Battle Hunting House
- *       3. Jatah Harian Full + Auto Leveling / Grade S
- *       4. Eudemon Dragon Saja / Hunting House Saja / Claim HH Saja / TP & SS / Leveling
- *   - Setiap akun & karakter dijalankan satu demi satu dengan jeda aman,
- *     menghindari tabrakan sesi server ("Session validation failed").
- *   - Laporan ringkasan di akhir eksekusi (Success / Failed / Skipped)
+ *   - Mode PARALEL PER AKUN (default 5 akun berbeda jalan bersamaan):
+ *       * Akun berbeda berjalan paralel sehingga total waktu terpangkas drastis.
+ *       * Karakter di dalam akun yang SAMA tetap dijalankan berurutan (serial) dengan
+ *         penjaga cooldown 21s agar aman dari "Session validation failed".
+ *   - Mode sekuensial tetap tersedia dengan --serial atau --parallel 1.
+ *   - Laporan ringkasan di akhir eksekusi disimpan ke multi_manager_report.json.
  */
 'use strict';
 
@@ -33,8 +24,18 @@ const c = require('./nsclient.js');
 
 const ACCOUNTS_FILE = path.join(__dirname, 'accounts.txt');
 const REPORT_FILE = path.join(__dirname, 'multi_manager_report.json');
+const DEFAULT_CONCURRENCY = Number(process.env.NS_MULTI_CONCURRENCY || 3);
+const DEFAULT_DELAY_SEC = 1;
+const MIN_LAUNCH_GAP_MS = 2300; // Jeda anti rate-limit IP antar peluncuran login child process
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const line = s => console.log('[' + new Date().toTimeString().slice(0, 8) + '] ' + s);
+
+const activeChildren = new Set();
+process.on('exit', () => {
+    for (const ch of activeChildren) {
+        try { ch.kill(); } catch (_) { }
+    }
+});
 
 function loadAccounts() {
     if (!fs.existsSync(ACCOUNTS_FILE)) {
@@ -54,7 +55,7 @@ function loadAccounts() {
         const user = parts[0] || '';
         const pass = parts[1] || '';
         const targetLevel = parts[2] ? parseInt(parts[2], 10) : 60;
-        const slotRaw = parts[3] || 'all'; // jika dikosongkan, otomatis cek semua karakter di akun
+        const slotRaw = parts[3] || 'all';
         if (!user || !pass) continue;
 
         const normTarget = isNaN(targetLevel) ? 60 : targetLevel;
@@ -71,26 +72,32 @@ function loadAccounts() {
 }
 
 /**
- * Deteksi & resolusi karakter per akun (mendukung slot "all"/"*", "1,2", atau slot spesifik).
- * Login & getCharactersList di-cache per akun agar akun Emblem >1 karakter efisien.
+ * Deteksi & resolusi karakter per akun secara paralel antar akun unik.
  */
-async function expandAccountsIfNeeded(rawAccounts) {
+async function expandAccountsIfNeeded(rawAccounts, concurrency = DEFAULT_CONCURRENCY) {
     const expanded = [];
     const seenKeys = new Set();
     const accountCache = new Map();
 
-    // Hitung berapa baris per akun agar bisa memberi info jika akun Emblem >1 char hanya dijadwalkan 1 slot
     const userRowCount = new Map();
+    const uniqueCreds = [];
+    const seenCreds = new Set();
+
     for (const acc of rawAccounts) {
         const uk = acc.user.toLowerCase();
         userRowCount.set(uk, (userRowCount.get(uk) || 0) + 1);
+        const sl = String(acc.slot || '').trim().toLowerCase();
+        const needsDetect = (sl === '' || sl === 'all' || sl === '*' || !/^\d+$/.test(sl));
+        if (!needsDetect) continue;
+        const credKey = `${uk}:${acc.pass}`;
+        if (!seenCreds.has(credKey)) {
+            seenCreds.add(credKey);
+            uniqueCreds.push({ key: credKey, user: acc.user, pass: acc.pass });
+        }
     }
 
-    async function fetchAccountChars(user, pass) {
-        const key = `${user.toLowerCase()}:${pass}`;
+    async function fetchAccountChars(user, pass, key) {
         if (accountCache.has(key)) return accountCache.get(key);
-
-        line(`Mendeteksi daftar karakter pada akun "${user}"...`);
         const s = await c.login(user, pass);
         if (!s.ok) {
             const errInfo = { ok: false, error: s.message || s.stage };
@@ -105,31 +112,64 @@ async function expandAccountsIfNeeded(rawAccounts) {
                 chars = rl.body.result;
                 break;
             }
-            if (t < 3) await sleep(1000);
+            if (t < 3) await sleep(800);
         }
 
         const isEmblem = Boolean(s.isEmblem || Number(s.accountType) === 2);
         const entry = { ok: true, isEmblem, chars };
         accountCache.set(key, entry);
-
-        if (chars.length > 0) {
-            line(`  -> Ditemukan ${chars.length} karakter di akun ${user}${isEmblem ? ' [EMBLEM]' : ' [FREE]'}:`);
-            chars.forEach((ch, idx) => {
-                const cName = ch[1] || ('Char_' + ch[0]);
-                const cLv = ch[2] || 1;
-                line(`     Slot ${idx + 1}: ${cName} (Lv ${cLv}, ID: ${ch[0]})`);
-            });
-        }
-        await sleep(150);
         return entry;
     }
 
+    if (uniqueCreds.length > 0) {
+        const detectWorkers = Math.max(1, Math.min(2, concurrency || 1, uniqueCreds.length));
+        line(`Mendeteksi daftar karakter pada ${uniqueCreds.length} akun multi-slot...`);
+        let credIdx = 0;
+        await Promise.all(Array.from({ length: detectWorkers }, async (_, wIdx) => {
+            if (wIdx > 0) await sleep(wIdx * 1800);
+            while (credIdx < uniqueCreds.length) {
+                const cur = uniqueCreds[credIdx++];
+                if (!cur) break;
+                try {
+                    await fetchAccountChars(cur.user, cur.pass, cur.key);
+                } catch (err) {
+                    accountCache.set(cur.key, { ok: false, error: err.message });
+                }
+            }
+        }));
+
+        for (const cur of uniqueCreds) {
+            const info = accountCache.get(cur.key);
+            if (info && info.ok && info.chars.length > 0) {
+                const slotsSummary = info.chars.map((ch, idx) => `Slot ${idx + 1}: ${ch[1] || ('Char_' + ch[0])} (Lv ${ch[2] || 1})`).join(' | ');
+                line(`  -> ${cur.user}${info.isEmblem ? ' [EMBLEM]' : ' [FREE]'}: ${slotsSummary}`);
+            }
+        }
+        await sleep(1800);
+    }
+
     for (const acc of rawAccounts) {
-        const sl = String(acc.slot || '').toLowerCase();
-        const isAll = (sl === 'all' || sl === '*');
+        const sl = String(acc.slot || '').trim().toLowerCase();
+        const isAll = (sl === '' || sl === 'all' || sl === '*');
+        const credKey = `${acc.user.toLowerCase()}:${acc.pass}`;
+
+        // Jika slot berupa angka eksplisit (misal "1") dan belum perlu pre-login, langsung jadwalkan hemat 1x login!
+        if (!isAll && /^\d+$/.test(sl) && !accountCache.has(credKey)) {
+            const dedup = `${acc.user.toLowerCase()}:slot:${sl}`;
+            if (!seenKeys.has(dedup)) {
+                seenKeys.add(dedup);
+                expanded.push({
+                    user: acc.user,
+                    pass: acc.pass,
+                    targetLevel: acc.targetLevel,
+                    slot: sl
+                });
+            }
+            continue;
+        }
 
         try {
-            const info = await fetchAccountChars(acc.user, acc.pass);
+            const info = accountCache.get(credKey) || await fetchAccountChars(acc.user, acc.pass, credKey);
             if (!info.ok) {
                 line(`  [!] Login gagal untuk ${acc.user}: ${info.error}. Tetap dijadwalkan slot ${isAll ? '1' : acc.slot}.`);
                 const fallbackSlot = isAll ? '1' : String(acc.slot || '1');
@@ -198,10 +238,30 @@ async function expandAccountsIfNeeded(rawAccounts) {
     return expanded;
 }
 
-function runScriptForAccount(scriptName, args, acc) {
+function pipeWithPrefix(stream, prefix, isErr = false) {
+    let remainder = '';
+    stream.on('data', chunk => {
+        const text = remainder + chunk.toString('utf8');
+        const parts = text.split(/\r?\n/);
+        remainder = parts.pop() || '';
+        for (const p of parts) {
+            if (!p.trim()) continue;
+            if (isErr && /tput|tcsetattr|Inappropriate ioctl/i.test(p)) continue;
+            console.log(`${prefix} ${p}`);
+        }
+    });
+    stream.on('end', () => {
+        if (remainder.trim()) {
+            console.log(`${prefix} ${remainder}`);
+            remainder = '';
+        }
+    });
+}
+
+function runScriptForAccount(scriptName, args, acc, opts = {}) {
     return new Promise(resolve => {
+        const prefix = opts.prefix || '';
         const childEnv = Object.assign({}, process.env);
-        // Bersihkan sisa variabel karakter dari .char_env.bat agar tidak bocor ke akun lain
         delete childEnv.NS_CHAR_ID;
         delete childEnv.NS_CHAR_NAME;
         delete childEnv.NS_CHAR_LEVEL;
@@ -217,27 +277,34 @@ function runScriptForAccount(scriptName, args, acc) {
         if (acc.charLevel) childEnv.NS_CHAR_LEVEL = String(acc.charLevel);
 
         const scriptPath = path.join(__dirname, scriptName);
+        const usePipe = Boolean(prefix);
         const child = spawn(process.execPath, [scriptPath, ...args], {
             cwd: __dirname,
             env: childEnv,
-            stdio: 'inherit',
+            stdio: usePipe ? ['ignore', 'pipe', 'pipe'] : 'inherit',
             windowsHide: true
         });
+        activeChildren.add(child);
+
+        if (usePipe) {
+            pipeWithPrefix(child.stdout, prefix, false);
+            pipeWithPrefix(child.stderr, prefix, true);
+        }
 
         child.on('close', code => {
+            activeChildren.delete(child);
             resolve({ ok: code === 0, code });
         });
 
         child.on('error', err => {
+            activeChildren.delete(child);
             resolve({ ok: false, error: err.message });
         });
     });
 }
 
 /**
- * Susun antrean secara bergiliran per akun (round-robin) agar akun Emblem
- * yang memiliki >1 karakter diselingi akun lain, sehingga cooldown 20s server
- * per akun terlewati secara alami tanpa menunggu idle.
+ * Susun antrean secara bergiliran per akun (round-robin) untuk mode 1-worker (serial).
  */
 function interleaveAccounts(list) {
     const groups = new Map();
@@ -261,104 +328,109 @@ function interleaveAccounts(list) {
     return ordered;
 }
 
-async function runBulk(action, extraArgs = [], delaySec = 3) {
-    const rawAccounts = loadAccounts();
-    if (rawAccounts.length === 0) return;
+/**
+ * Kelompokkan karakter per akun unik, urutkan dari akun dengan slot terbanyak
+ * supaya akun multi-karakter (Emblem) langsung mulai paling awal saat paralel.
+ */
+function groupQueuesByAccount(list) {
+    const groups = new Map();
+    for (const acc of list) {
+        const key = String(acc.user || '').toLowerCase();
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(acc);
+    }
+    return Array.from(groups.values()).sort((a, b) => b.length - a.length);
+}
 
-    const expanded = await expandAccountsIfNeeded(rawAccounts);
-    if (expanded.length === 0) return;
-    const accounts = interleaveAccounts(expanded);
+function buildScriptArgs(action, acc, extraArgs) {
+    if (extraArgs && extraArgs.length > 0) return extraArgs;
+    if (action === 'daily' || action === 'daily_pure') return ['--pure'];
+    if (action === 'daily_hh') return ['--pure', '--with-hh-battle'];
+    if (action === 'daily_level' || action === 'full') return acc.targetLevel ? ['--level', String(acc.targetLevel)] : [];
+    if (action === 'daily_thanksgiving_battle' || action === 'daily_thanksgiving' || action === 'daily_tg_battle') return ['--pure', '--with-thanksgiving-battle'];
+    if (action === 'daily_thanksgiving_full' || action === 'daily_tg_full') return ['--pure', '--with-thanksgiving-full'];
+    if (action === 'eudemon' || action === 'dragon') return ['eudemon', '10', '10.5'];
+    if (action === 'house' || action === 'hunting') return ['house', '10', '10.5'];
+    if (action === 'claim') return ['claim'];
+    if (action === 'hunt_daily') return ['daily', '10', '10.5'];
+    if (action === 'hunt' || action === 'both') return ['both', '10', '10.5'];
+    if (action === 'train') return ['all', '5', '3'];
+    if (action === 'grades') return ['1-4', '3'];
+    if (action === 'level') return [String(acc.targetLevel || 60), '3'];
+    if (action === 'thanksgiving_battle') return ['battle'];
+    if (action === 'thanksgiving_minigame') return ['minigame'];
+    if (action === 'thanksgiving_full') return ['full'];
+    return ['--pure'];
+}
 
-    let targetScript = 'ns_daily.js';
-    let actionLabel = action.toUpperCase();
-
+function resolveActionMeta(action) {
     switch (action) {
         case 'daily':
         case 'daily_pure':
-            targetScript = 'ns_daily.js';
-            actionLabel = 'JATAH HARIAN FULL (TP + SS + EUDEMON DRAGON + CLAIM HH TANPA BATTLE)';
-            break;
+            return { targetScript: 'ns_daily.js', actionLabel: 'JATAH HARIAN FULL (TP + SS + EUDEMON DRAGON + CLAIM HH TANPA BATTLE)' };
         case 'daily_hh':
-            targetScript = 'ns_daily.js';
-            actionLabel = 'JATAH HARIAN FULL + BATTLE BOSS HUNTING HOUSE';
-            break;
+            return { targetScript: 'ns_daily.js', actionLabel: 'JATAH HARIAN FULL + BATTLE BOSS HUNTING HOUSE' };
         case 'daily_level':
         case 'full':
-            targetScript = 'ns_daily.js';
-            actionLabel = 'JATAH HARIAN LENGKAP + AUTO LEVELING / GRADE S';
-            break;
+            return { targetScript: 'ns_daily.js', actionLabel: 'JATAH HARIAN LENGKAP + AUTO LEVELING / GRADE S' };
         case 'daily_thanksgiving_battle':
         case 'daily_thanksgiving':
         case 'daily_tg_battle':
-            targetScript = 'ns_daily.js';
-            actionLabel = 'JATAH HARIAN FULL + THANKSGIVING BATTLE (TANPA BATTLE HH)';
-            break;
+            return { targetScript: 'ns_daily.js', actionLabel: 'JATAH HARIAN FULL + THANKSGIVING BATTLE (TANPA BATTLE HH)' };
         case 'daily_thanksgiving_full':
         case 'daily_tg_full':
-            targetScript = 'ns_daily.js';
-            actionLabel = 'JATAH HARIAN FULL + THANKSGIVING FULL EVENT (BATTLE + WEREWOLF)';
-            break;
+            return { targetScript: 'ns_daily.js', actionLabel: 'JATAH HARIAN FULL + THANKSGIVING FULL EVENT (BATTLE + WEREWOLF)' };
         case 'eudemon':
         case 'dragon':
-            targetScript = 'ns_hunt.js';
-            actionLabel = 'EUDEMON DRAGON SAJA (AUTO 3X EMBLEM / 1X FREE)';
-            break;
+            return { targetScript: 'ns_hunt.js', actionLabel: 'EUDEMON DRAGON SAJA (AUTO 3X EMBLEM / 1X FREE)' };
         case 'house':
         case 'hunting':
-            targetScript = 'ns_hunt.js';
-            actionLabel = 'HUNTING HOUSE SAJA (AUTO CLAIM + BATTLE BOSS)';
-            break;
+            return { targetScript: 'ns_hunt.js', actionLabel: 'HUNTING HOUSE SAJA (AUTO CLAIM + BATTLE BOSS)' };
         case 'claim':
-            targetScript = 'ns_hunt.js';
-            actionLabel = 'CLAIM DAILY HUNTING HOUSE PASSPORT SAJA (TANPA BATTLE)';
-            break;
+            return { targetScript: 'ns_hunt.js', actionLabel: 'CLAIM DAILY HUNTING HOUSE PASSPORT SAJA (TANPA BATTLE)' };
         case 'hunt_daily':
-            targetScript = 'ns_hunt.js';
-            actionLabel = 'EUDEMON DRAGON + CLAIM HUNTING HOUSE (TANPA BATTLE HH)';
-            break;
+            return { targetScript: 'ns_hunt.js', actionLabel: 'EUDEMON DRAGON + CLAIM HUNTING HOUSE (TANPA BATTLE HH)' };
         case 'hunt':
         case 'both':
-            targetScript = 'ns_hunt.js';
-            actionLabel = 'HUNTING HOUSE + EUDEMON DRAGON (BATTLE SEMUA)';
-            break;
+            return { targetScript: 'ns_hunt.js', actionLabel: 'HUNTING HOUSE + EUDEMON DRAGON (BATTLE SEMUA)' };
         case 'train':
-            targetScript = 'ns_train.js';
-            actionLabel = 'TRAINING TP & SS SAJA';
-            break;
+            return { targetScript: 'ns_train.js', actionLabel: 'TRAINING TP & SS SAJA' };
         case 'grades':
-            targetScript = 'ns_grade_s.js';
-            actionLabel = 'MISI GRADE S (AUTO STAMINA RUNNER)';
-            break;
+            return { targetScript: 'ns_grade_s.js', actionLabel: 'MISI GRADE S (AUTO STAMINA RUNNER)' };
         case 'level':
-            targetScript = 'ns_level.js';
-            actionLabel = 'AUTO GRINDING LEVEL + UJIAN HARD';
-            break;
+            return { targetScript: 'ns_level.js', actionLabel: 'AUTO GRINDING LEVEL + UJIAN HARD' };
         case 'thanksgiving_battle':
-            targetScript = 'ns_thanksgiving.js';
-            actionLabel = 'THANKSGIVING BATTLE (HABISKAN HEART)';
-            break;
+            return { targetScript: 'ns_thanksgiving.js', actionLabel: 'THANKSGIVING BATTLE (HABISKAN HEART)' };
         case 'thanksgiving_minigame':
-            targetScript = 'ns_thanksgiving.js';
-            actionLabel = 'THANKSGIVING MINI-GAME (HABISKAN AMMO + WEREWOLF)';
-            break;
+            return { targetScript: 'ns_thanksgiving.js', actionLabel: 'THANKSGIVING MINI-GAME (HABISKAN AMMO + WEREWOLF)' };
         case 'thanksgiving_full':
-            targetScript = 'ns_thanksgiving.js';
-            actionLabel = 'THANKSGIVING FULL EVENT (BATTLE + MINI-GAME)';
-            break;
+            return { targetScript: 'ns_thanksgiving.js', actionLabel: 'THANKSGIVING FULL EVENT (BATTLE + MINI-GAME)' };
         default:
-            targetScript = 'ns_daily.js';
-            actionLabel = 'JATAH HARIAN FULL (TP + SS + EUDEMON DRAGON + CLAIM HH TANPA BATTLE)';
-            break;
+            return { targetScript: 'ns_daily.js', actionLabel: 'JATAH HARIAN FULL (TP + SS + EUDEMON DRAGON + CLAIM HH TANPA BATTLE)' };
     }
+}
+
+async function runBulk(action, extraArgs = [], delaySec = DEFAULT_DELAY_SEC, concurrency = DEFAULT_CONCURRENCY) {
+    const rawAccounts = loadAccounts();
+    if (rawAccounts.length === 0) return;
+
+    const normConcurrency = Math.max(1, parseInt(concurrency, 10) || DEFAULT_CONCURRENCY);
+    const expanded = await expandAccountsIfNeeded(rawAccounts, normConcurrency);
+    if (expanded.length === 0) return;
+
+    const accountQueues = groupQueuesByAccount(expanded);
+    const effectiveConcurrency = Math.min(normConcurrency, accountQueues.length);
+    const { targetScript, actionLabel } = resolveActionMeta(action);
 
     console.log('\n==========================================================');
     console.log('      NINJA SAGA MULTI-ACCOUNT & MULTI-CHAR RUNNER');
     console.log('                cc: MagnetScript(Razki)');
     console.log('==========================================================');
-    console.log(`  Total Karakter Antrean: ${accounts.length}`);
+    console.log(`  Total Karakter Antrean: ${expanded.length} (${accountQueues.length} akun unik)`);
     console.log(`  Mode Farming          : ${actionLabel}`);
     console.log(`  Script Target         : ${targetScript}`);
-    console.log(`  Jeda Antar Karakter   : ${delaySec} detik`);
+    console.log(`  Mode Eksekusi         : ${effectiveConcurrency > 1 ? `PARALEL ${effectiveConcurrency} AKUN SEKALIGUS (slot se-akun tetap serial aman)` : 'SEKUENSIAL (1 per 1)'}`);
+    console.log(`  Jeda Antar Slot Akun  : ${delaySec} detik`);
     console.log('==========================================================\n');
 
     const results = [];
@@ -366,108 +438,113 @@ async function runBulk(action, extraArgs = [], delaySec = 3) {
     const lastCooldownAnchor = new Map();
     const ACCOUNT_COOLDOWN_MS = 21000;
     const endAnchorActions = new Set(['level', 'daily_level', 'full']);
+    let startedCounter = 0;
+    let nextLaunchAllowedAt = 0;
+    let launchChain = Promise.resolve();
 
-    for (let i = 0; i < accounts.length; i++) {
-        const acc = accounts[i];
-        const accIdx = `[${i + 1}/${accounts.length}]`;
+    function acquireLaunchSlot() {
+        const p = launchChain.then(async () => {
+            const nowMs = Date.now();
+            if (nowMs < nextLaunchAllowedAt) {
+                await sleep(nextLaunchAllowedAt - nowMs);
+            }
+            nextLaunchAllowedAt = Date.now() + MIN_LAUNCH_GAP_MS;
+        });
+        launchChain = p.catch(() => { });
+        return p;
+    }
+
+    async function executeOneCharacter(acc, idxLabel, isParallelMode) {
         const userKey = acc.user.toLowerCase();
-
-        // Pastikan cooldown 20s per akun sudah lewat sebelum memulai karakter baru di akun sama
         const prevAnchor = lastCooldownAnchor.get(userKey);
         if (prevAnchor) {
             const elapsed = Date.now() - prevAnchor;
             if (elapsed < ACCOUNT_COOLDOWN_MS) {
                 const needWaitMs = ACCOUNT_COOLDOWN_MS - elapsed;
-                line(`${accIdx} [Cooldown] Menunggu sisa ${(needWaitMs / 1000).toFixed(1)}s untuk akun ${acc.user}...`);
+                line(`${idxLabel} [Cooldown] Menunggu sisa ${(needWaitMs / 1000).toFixed(1)}s untuk slot berikutnya di akun ${acc.user}...`);
                 await sleep(needWaitMs);
+            } else if (delaySec > 0) {
+                await sleep(delaySec * 1000);
             }
         }
 
-        let scriptArgs = [];
-        if (action === 'daily' || action === 'daily_pure') {
-            scriptArgs = ['--pure'];
-        } else if (action === 'daily_hh') {
-            scriptArgs = ['--pure', '--with-hh-battle'];
-        } else if (action === 'daily_level' || action === 'full') {
-            scriptArgs = acc.targetLevel ? ['--level', String(acc.targetLevel)] : [];
-        } else if (action === 'daily_thanksgiving_battle' || action === 'daily_thanksgiving' || action === 'daily_tg_battle') {
-            scriptArgs = ['--pure', '--with-thanksgiving-battle'];
-        } else if (action === 'daily_thanksgiving_full' || action === 'daily_tg_full') {
-            scriptArgs = ['--pure', '--with-thanksgiving-full'];
-        } else if (action === 'eudemon' || action === 'dragon') {
-            scriptArgs = ['eudemon', '10', '10.5'];
-        } else if (action === 'house' || action === 'hunting') {
-            scriptArgs = ['house', '10', '10.5'];
-        } else if (action === 'claim') {
-            scriptArgs = ['claim'];
-        } else if (action === 'hunt_daily') {
-            scriptArgs = ['daily', '10', '10.5'];
-        } else if (action === 'hunt' || action === 'both') {
-            scriptArgs = ['both', '10', '10.5'];
-        } else if (action === 'train') {
-            scriptArgs = ['all', '5', '11'];
-        } else if (action === 'grades') {
-            scriptArgs = ['1-4', '8'];
-        } else if (action === 'level') {
-            scriptArgs = [String(acc.targetLevel || 60), '8'];
-        } else if (action === 'thanksgiving_battle') {
-            scriptArgs = ['battle'];
-        } else if (action === 'thanksgiving_minigame') {
-            scriptArgs = ['minigame'];
-        } else if (action === 'thanksgiving_full') {
-            scriptArgs = ['full'];
-        } else {
-            scriptArgs = ['--pure'];
+        if (isParallelMode) {
+            await acquireLaunchSlot();
         }
 
-        if (extraArgs.length > 0) scriptArgs = extraArgs;
-
+        const scriptArgs = buildScriptArgs(action, acc, extraArgs);
         const charDesc = acc.charName ? `${acc.charName} (Lv ${acc.charLevel}, Slot ${acc.slot})` : `Slot ${acc.slot}`;
-        line(`${accIdx} Memulai: ${acc.user} | Karakter: ${charDesc} | Target: Lv ${acc.targetLevel} ...`);
+        const prefix = isParallelMode ? `[${acc.user}#${acc.slot}]` : '';
+        line(`${idxLabel} Memulai: ${acc.user} | Karakter: ${charDesc} | Target: Lv ${acc.targetLevel} ...`);
 
         const accStart = Date.now();
         let res;
         try {
-            res = await runScriptForAccount(targetScript, scriptArgs, acc);
+            res = await runScriptForAccount(targetScript, scriptArgs, acc, { prefix });
         } catch (e) {
             res = { ok: false, error: e.message };
         }
-        // Retry 1x jika gagal (misal timeout jaringan / sesi terputus / cooldown antar karakter)
+
         if (!res.ok) {
             const retryWaitSec = 21;
-            line(`${accIdx} [RETRY] ${acc.user} (${charDesc}) gagal (exit: ${res.code || res.error}). Mencoba ulang setelah ${retryWaitSec}s...`);
+            line(`${idxLabel} [RETRY] ${acc.user} (${charDesc}) gagal (exit: ${res.code || res.error}). Mencoba ulang setelah ${retryWaitSec}s...`);
             await sleep(retryWaitSec * 1000);
+            if (isParallelMode) {
+                await acquireLaunchSlot();
+            }
             try {
-                res = await runScriptForAccount(targetScript, scriptArgs, acc);
+                res = await runScriptForAccount(targetScript, scriptArgs, acc, { prefix });
             } catch (e) {
                 res = { ok: false, error: e.message };
             }
         }
+
         const accEnd = Date.now();
         const accDuration = Math.round((accEnd - accStart) / 1000);
-        // Catat waktu getCharacterById terakhir agar karakter berikutnya di akun sama hanya menunggu sisa cooldown jika perlu
         const anchorMs = endAnchorActions.has(action) ? accEnd : Math.min(accEnd, accStart + 3500);
         lastCooldownAnchor.set(userKey, anchorMs);
 
         if (res.ok) {
-            line(`${accIdx} SELESAI: ${acc.user} (${charDesc}) (durasi: ${accDuration}s)`);
+            line(`${idxLabel} SELESAI: ${acc.user} (${charDesc}) (durasi: ${accDuration}s)`);
             results.push({ user: acc.user, slot: acc.slot, charName: acc.charName || '', targetLevel: acc.targetLevel, status: 'SUCCESS', duration: accDuration });
         } else {
-            line(`${accIdx} GAGAL: ${acc.user} (${charDesc}) (exit: ${res.code || res.error})`);
+            line(`${idxLabel} GAGAL: ${acc.user} (${charDesc}) (exit: ${res.code || res.error})`);
             results.push({ user: acc.user, slot: acc.slot, charName: acc.charName || '', targetLevel: acc.targetLevel, status: 'FAILED', code: res.code, error: res.error, duration: accDuration });
         }
+    }
 
-        if (i < accounts.length - 1 && delaySec > 0) {
-            const nextAcc = accounts[i + 1];
-            const nextKey = nextAcc.user.toLowerCase();
-            const nextPrevAnchor = lastCooldownAnchor.get(nextKey);
-            const nextNeedMs = nextPrevAnchor ? Math.max(0, ACCOUNT_COOLDOWN_MS - (Date.now() - nextPrevAnchor)) : 0;
-            // Jika perlu tunggu cooldown untuk akun berikutnya, biarkan cek di awal iterasi menanganinya tanpa dobel tidur
-            if (nextNeedMs === 0) {
-                line(`Menunggu jeda aman ${delaySec} detik sebelum karakter berikutnya...`);
-                await sleep(delaySec * 1000);
+    if (effectiveConcurrency <= 1) {
+        const accounts = interleaveAccounts(expanded);
+        for (let i = 0; i < accounts.length; i++) {
+            const acc = accounts[i];
+            const idxLabel = `[${i + 1}/${accounts.length}]`;
+            await executeOneCharacter(acc, idxLabel, false);
+
+            if (i < accounts.length - 1 && delaySec > 0) {
+                const nextAcc = accounts[i + 1];
+                const nextPrevAnchor = lastCooldownAnchor.get(nextAcc.user.toLowerCase());
+                const nextNeedMs = nextPrevAnchor ? Math.max(0, ACCOUNT_COOLDOWN_MS - (Date.now() - nextPrevAnchor)) : 0;
+                if (nextNeedMs === 0 && nextAcc.user.toLowerCase() !== acc.user.toLowerCase()) {
+                    await sleep(delaySec * 1000);
+                }
             }
         }
+    } else {
+        let queueCursor = 0;
+        const workers = Array.from({ length: effectiveConcurrency }, async (_, workerIdx) => {
+            if (workerIdx > 0) await sleep(workerIdx * 250);
+            while (queueCursor < accountQueues.length) {
+                const myQueue = accountQueues[queueCursor++];
+                if (!myQueue || !myQueue.length) continue;
+                for (let sIdx = 0; sIdx < myQueue.length; sIdx++) {
+                    const acc = myQueue[sIdx];
+                    startedCounter++;
+                    const idxLabel = `[#${startedCounter}/${expanded.length}]`;
+                    await executeOneCharacter(acc, idxLabel, true);
+                }
+            }
+        });
+        await Promise.all(workers);
     }
 
     const totalDuration = Math.round((Date.now() - startTime) / 1000);
@@ -478,8 +555,9 @@ async function runBulk(action, extraArgs = [], delaySec = 3) {
         fs.writeFileSync(REPORT_FILE, JSON.stringify({
             action,
             actionLabel,
+            concurrency: effectiveConcurrency,
             timestamp: new Date().toISOString(),
-            total: accounts.length,
+            total: expanded.length,
             success: successCount,
             failed: failCount,
             total_duration_sec: totalDuration,
@@ -490,7 +568,8 @@ async function runBulk(action, extraArgs = [], delaySec = 3) {
     console.log('\n==========================================================');
     console.log('           LAPORAN RINGKASAN MULTI-ACCOUNT');
     console.log('==========================================================');
-    console.log(`  Total Karakter Dikerjakan : ${accounts.length}`);
+    console.log(`  Total Karakter Dikerjakan : ${expanded.length}`);
+    console.log(`  Mode Paralel              : ${effectiveConcurrency} akun sekaligus`);
     console.log(`  Sukses                     : ${successCount}`);
     console.log(`  Gagal                      : ${failCount}`);
     console.log(`  Total Waktu                : ${totalDuration} detik`);
@@ -516,6 +595,7 @@ async function interactiveMenu() {
     console.log(`  File Akun: ${ACCOUNTS_FILE} (${accounts.length} baris konfigurasi terdeteksi)`);
     console.log('  Tips Slot: Gunakan "all" di kolom slot untuk jalankan semua karakter');
     console.log('             pada akun Emblem/Multi-Char, atau "1,2" / baris terpisah.');
+    console.log('  Fast Mode: Akun berbeda dijalankan PARALEL bersamaan secara otomatis!');
     console.log('----------------------------------------------------------------------');
     console.log('  [ PAKET JATAH HARIAN MULTI-AKUN ]');
     console.log('  1. Jatah Harian Full (TP + SS + Eudemon Dragon + Claim HH Tanpa Battle)');
@@ -546,59 +626,38 @@ async function interactiveMenu() {
         return;
     }
 
-    const rawDelay = (await ask('Jeda antar karakter dalam detik (default = 3) : ')).trim();
+    const rawConc = (await ask(`Jumlah akun paralel sekaligus (default = ${DEFAULT_CONCURRENCY}, 1 = sekuensial) : `)).trim();
+    const parsedConc = parseInt(rawConc, 10);
+    const concurrency = Number.isNaN(parsedConc) ? DEFAULT_CONCURRENCY : Math.max(1, parsedConc);
+
+    const rawDelay = (await ask(`Jeda antar karakter di akun sama dalam detik (default = ${DEFAULT_DELAY_SEC}) : `)).trim();
     const parsedDelay = parseInt(rawDelay, 10);
-    const delay = Number.isNaN(parsedDelay) ? 3 : Math.max(0, parsedDelay);
+    const delay = Number.isNaN(parsedDelay) ? DEFAULT_DELAY_SEC : Math.max(0, parsedDelay);
 
     rl.close();
     c.enableGracefulStop('menu multi-account');
 
-    switch (choice) {
-        case '1':
-            await runBulk('daily_pure', [], delay);
-            break;
-        case '2':
-            await runBulk('daily_hh', [], delay);
-            break;
-        case '3':
-            await runBulk('daily_level', [], delay);
-            break;
-        case '4':
-            await runBulk('daily_thanksgiving_battle', [], delay);
-            break;
-        case '5':
-            await runBulk('daily_thanksgiving_full', [], delay);
-            break;
-        case '6':
-            await runBulk('eudemon', [], delay);
-            break;
-        case '7':
-            await runBulk('house', [], delay);
-            break;
-        case '8':
-            await runBulk('claim', [], delay);
-            break;
-        case '9':
-            await runBulk('train', [], delay);
-            break;
-        case '10':
-            await runBulk('thanksgiving_battle', [], delay);
-            break;
-        case '11':
-            await runBulk('thanksgiving_minigame', [], delay);
-            break;
-        case '12':
-            await runBulk('thanksgiving_full', [], delay);
-            break;
-        case '13':
-            await runBulk('grades', [], delay);
-            break;
-        case '14':
-            await runBulk('level', [], delay);
-            break;
-        default:
-            console.log('Pilihan tidak valid.');
-            break;
+    const choiceMap = {
+        '1': 'daily_pure',
+        '2': 'daily_hh',
+        '3': 'daily_level',
+        '4': 'daily_thanksgiving_battle',
+        '5': 'daily_thanksgiving_full',
+        '6': 'eudemon',
+        '7': 'house',
+        '8': 'claim',
+        '9': 'train',
+        '10': 'thanksgiving_battle',
+        '11': 'thanksgiving_minigame',
+        '12': 'thanksgiving_full',
+        '13': 'grades',
+        '14': 'level'
+    };
+
+    if (choiceMap[choice]) {
+        await runBulk(choiceMap[choice], [], delay, concurrency);
+    } else {
+        console.log('Pilihan tidak valid.');
     }
 }
 
@@ -607,18 +666,26 @@ async function interactiveMenu() {
 // ═══════════════════════════════════════════════════════════════
 const args = process.argv.slice(2);
 let action = '';
-let delaySec = 3;
+let delaySec = DEFAULT_DELAY_SEC;
+let concurrency = DEFAULT_CONCURRENCY;
 const cleanArgs = [];
 
 for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--delay' && args[i + 1] !== undefined) {
+    const a = args[i];
+    if (a === '--delay' && args[i + 1] !== undefined) {
         const parsed = parseInt(args[i + 1], 10);
-        delaySec = Number.isNaN(parsed) ? 3 : Math.max(0, parsed);
+        delaySec = Number.isNaN(parsed) ? DEFAULT_DELAY_SEC : Math.max(0, parsed);
         i++;
+    } else if ((a === '--parallel' || a === '--concurrency' || a === '-p') && args[i + 1] !== undefined) {
+        const parsed = parseInt(args[i + 1], 10);
+        concurrency = Number.isNaN(parsed) ? DEFAULT_CONCURRENCY : Math.max(1, parsed);
+        i++;
+    } else if (a === '--serial') {
+        concurrency = 1;
     } else if (!action) {
-        action = args[i].toLowerCase();
+        action = a.toLowerCase();
     } else {
-        cleanArgs.push(args[i]);
+        cleanArgs.push(a);
     }
 }
 
@@ -626,7 +693,7 @@ if (require.main === module) {
     (async () => {
         if (action) {
             c.enableGracefulStop('menu multi-account');
-            await runBulk(action, cleanArgs, delaySec);
+            await runBulk(action, cleanArgs, delaySec, concurrency);
         } else {
             await interactiveMenu();
         }
@@ -637,4 +704,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { loadAccounts, expandAccountsIfNeeded, interleaveAccounts, runBulk };
+module.exports = { loadAccounts, expandAccountsIfNeeded, interleaveAccounts, groupQueuesByAccount, runBulk };

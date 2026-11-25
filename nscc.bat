@@ -201,7 +201,7 @@ echo ======================================================================
 echo.
 echo   Tips: Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti ke menu.
 echo.
-node ns_train.js all 5 15
+node ns_train.js all 5 3
 echo.
 pause
 goto MENU
@@ -228,7 +228,7 @@ echo.
 if "%EUD%"=="2" (
   node ns_hunt.js status
 ) else (
-  node ns_hunt.js eudemon 10 11
+  node ns_hunt.js eudemon 10 10.5
 )
 echo.
 pause
@@ -256,13 +256,13 @@ set "HHO="
 set /p "HHO=Pilih [1/2/3/4, Enter = 1] : "
 echo.
 if "%HHO%"=="2" (
-  node ns_hunt.js fight 10 11
+  node ns_hunt.js fight 10 10.5
 ) else if "%HHO%"=="3" (
   node ns_hunt.js claim
 ) else if "%HHO%"=="4" (
   node ns_hunt.js status
 ) else (
-  node ns_hunt.js house 10 11
+  node ns_hunt.js house 10 10.5
 )
 echo.
 pause
@@ -286,17 +286,17 @@ set "HNT="
 set /p "HNT=Pilih [1-6, Enter = 1] : "
 echo.
 if "%HNT%"=="2" (
-  node ns_hunt.js both 10 11
+  node ns_hunt.js both 10 10.5
 ) else if "%HNT%"=="3" (
-  node ns_hunt.js eudemon 10 11
+  node ns_hunt.js eudemon 10 10.5
 ) else if "%HNT%"=="4" (
-  node ns_hunt.js house 10 11
+  node ns_hunt.js house 10 10.5
 ) else if "%HNT%"=="5" (
   node ns_hunt.js claim
 ) else if "%HNT%"=="6" (
   node ns_hunt.js status
 ) else (
-  node ns_hunt.js daily 10 11
+  node ns_hunt.js daily 10 10.5
 )
 echo.
 pause
@@ -362,8 +362,8 @@ if "%GS_MODE%"=="3" goto GRADES_PICK
 if "%GS_MODE%"=="4" goto GRADES_SPAM
 
 set "JDA="
-set /p "JDA=Jeda antar battle dalam detik (default: 8s): "
-if "%JDA%"=="" set "JDA=8"
+set /p "JDA=Jeda antar battle dalam detik (default: 3s): "
+if "%JDA%"=="" set "JDA=3"
 echo.
 if "%GS_MODE%"=="2" (
   node ns_grade_s.js loop %JDA%
@@ -387,8 +387,8 @@ set "STG="
 set /p "STG=Pilihan Stage [1-5, default: 1]: "
 if "%STG%"=="" set "STG=1"
 set "JDA="
-set /p "JDA=Jeda antar battle dalam detik (default: 8s): "
-if "%JDA%"=="" set "JDA=8"
+set /p "JDA=Jeda antar battle dalam detik (default: 3s): "
+if "%JDA%"=="" set "JDA=3"
 echo.
 node ns_grade_s.js %STG% %JDA%
 echo.
@@ -413,8 +413,8 @@ set "STG="
 set /p "STG=Pilihan Stage [1-5, default: 1]: "
 if "%STG%"=="" set "STG=1"
 set "JDA="
-set /p "JDA=Jeda antar battle dalam detik (default: 8s): "
-if "%JDA%"=="" set "JDA=8"
+set /p "JDA=Jeda antar battle dalam detik (default: 3s): "
+if "%JDA%"=="" set "JDA=3"
 echo.
 node ns_grade_s.js spam %STG% %JDA%
 echo.
@@ -436,8 +436,8 @@ set "TARGET="
 set /p "TARGET=Target Level (misal: 60 / 80 / 100, default: 100): "
 if "%TARGET%"=="" set "TARGET=100"
 set "JEDA="
-set /p "JEDA=Jeda antar misi dalam detik (default: 8s): "
-if "%JEDA%"=="" set "JEDA=8"
+set /p "JEDA=Jeda antar misi dalam detik (default: 3s): "
+if "%JEDA%"=="" set "JEDA=3"
 echo.
 node ns_level.js %TARGET% %JEDA%
 echo.
@@ -461,8 +461,11 @@ echo.
 set "TARGET="
 set /p "TARGET=Mau naik sampai level berapa? (kosong = 100) : "
 if "%TARGET%"=="" set "TARGET=100"
+set "JEDA="
+set /p "JEDA=Jeda antar misi dalam detik (default: 3s): "
+if "%JEDA%"=="" set "JEDA=3"
 echo.
-node ns_level.js %TARGET% 8 --only-mission --no-event
+node ns_level.js %TARGET% %JEDA% --only-mission --no-event
 echo.
 pause
 goto MENU

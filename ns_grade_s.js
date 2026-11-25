@@ -146,7 +146,7 @@ if (!isMapMode && !isSpamMode && rawTarget !== 'auto') {
     singleStageNum = parseInt(rawTarget, 10) || 0;
 }
 const spamStageNum = isSpamMode ? parseInt(args[1], 10) || 0 : 0;
-const jedaSec = Math.max(5, parseInt(args[isSpamMode ? 2 : 1], 10) || 8);
+const jedaSec = Math.max(2, parseFloat(args[isSpamMode ? 2 : 1]) || 3);
 const maxBattles = parseInt(args[isSpamMode ? 3 : 2], 10) || 0;
 
 async function runGradeSSession(opts = {}) {
@@ -158,7 +158,7 @@ async function runGradeSSession(opts = {}) {
     if (!localIsMapMode && localTarget !== 'auto') {
         localSingleStageNum = parseInt(localTarget, 10) || 0;
     }
-    const localJedaSec = Math.max(5, parseInt(opts.jeda !== undefined ? opts.jeda : jedaSec, 10) || 8);
+    const localJedaSec = Math.max(2, parseFloat(opts.jeda !== undefined ? opts.jeda : jedaSec) || 3);
     const localMaxBattles = parseInt(opts.maxBattles !== undefined ? opts.maxBattles : maxBattles, 10) || 0;
 
     const user = (shared && shared.user) || process.env.NS_USER;
@@ -425,7 +425,7 @@ async function runGradeSSession(opts = {}) {
             break;
         }
 
-        await sleep(500);
+        await sleep(100);
     }
 
     // Verifikasi saldo token akhir dari server hanya jika ada token / battle sukses (hemat request & hindari cooldown baru)

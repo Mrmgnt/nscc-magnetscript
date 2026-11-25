@@ -1,0 +1,102 @@
+{
+  "type": "slider",
+  "start_x": 330,
+  "max_x": 330,
+  "track_w": 380,
+  "dom": {},
+  "details": {
+    "target": {
+      "x": 267,
+      "y": 0,
+      "score": 99.99318181818182,
+      "borderMismatch": 58.67,
+      "histScore": 0.551,
+      "candidates": [
+        {
+          "x": 29,
+          "score": 162.49878787878788,
+          "borderMismatch": 88.39,
+          "histScore": 0.988,
+          "boundary": 28037,
+          "pattern": 51.738,
+          "checker": 0.9128
+        },
+        {
+          "x": 79,
+          "score": 112.25742424242425,
+          "borderMismatch": 62.23,
+          "histScore": 0.667,
+          "boundary": 53561,
+          "pattern": 29.1712,
+          "checker": 0.914
+        },
+        {
+          "x": 129,
+          "score": 214.52803030303028,
+          "borderMismatch": 106.33,
+          "histScore": 1.443,
+          "boundary": 33769,
+          "pattern": 50.0692,
+          "checker": 0.9424
+        },
+        {
+          "x": 167,
+          "score": 100.0030303030303,
+          "borderMismatch": 57.81,
+          "histScore": 0.563,
+          "boundary": 56590,
+          "pattern": 32.0852,
+          "checker": 0.9948
+        },
+        {
+          "x": 217,
+          "score": 221.29045454545454,
+          "borderMismatch": 112.69,
+          "histScore": 1.448,
+          "boundary": 51353,
+          "pattern": 27.3888,
+          "checker": 0.9304
+        },
+        {
+          "x": 267,
+          "score": 99.99318181818182,
+          "borderMismatch": 58.67,
+          "histScore": 0.551,
+          "boundary": 57961,
+          "pattern": 31.2732,
+          "checker": 0.8716
+        },
+        {
+          "x": 317,
+          "score": 157.59454545454543,
+          "borderMismatch": 83.08,
+          "histScore": 0.994,
+          "boundary": 32870,
+          "pattern": 33.808,
+          "checker": 0.9396
+        }
+      ]
+    },
+    "images": {
+      "scaleX": 0.6926314504523027,
+      "scaleY": 0.692578125,
+      "initialX": 231,
+      "initialY": 0,
+      "trackWidth": 265.9999694824219,
+      "background": {
+        "width": 380,
+        "height": 140
+      },
+      "piece": {
+        "width": 50,
+        "height": 140
+      }
+    },
+    "deltaX": -46.0674027292352,
+    "deltaY": 0,
+    "position": {
+      "x": 185.5,
+      "y": 0
+    }
+  }
+}

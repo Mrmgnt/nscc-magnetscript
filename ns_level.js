@@ -78,12 +78,16 @@ try {
     }
 } catch (e) { /* kalau file tidak ada, anggap tidak ada misi berulang */ }
 const ULANG = new Set([...DAILY]);
-// peta grade misi (E/D/C/S).
+// peta metadata & grade misi (E/D/C/S).
 let GRADE = new Map();
+const MISSION_META = new Map();
 try {
-    for (const m of require('./ns_mission_data.json')) if (m.grade) GRADE.set(m.id, String(m.grade).toUpperCase());
+    for (const m of (DATA || require('./ns_mission_data.json'))) {
+        MISSION_META.set(m.id, m);
+        if (m.grade) GRADE.set(m.id, String(m.grade).toUpperCase());
+    }
 } catch (e) { /* abaikan */ }
-const JEDA_ANTAR_MISI = 2; // detik jeda aman antar misi (seperti pada ns_grade_s.js)
+const CHAR_SYNC_COOLDOWN_MS = 20500; // sinkron getCharacterById hanya saat cooldown 20s server sudah lewat
 
 const UJIAN = {
     20: { hard: ['msn55', 'msn56', 'msn57', 'msn58', 'msn59'], easy: null, nama: 'Chunin' },
@@ -122,7 +126,9 @@ function butuhUjian(st) {
 
 (async () => {
     let target = Number(process.argv[2] || 0);
-    const jeda = Number(process.env.NS_JEDA || process.argv[3] || 8);
+    const rawJeda = process.env.NS_JEDA || process.argv[3];
+    const parsedJeda = (rawJeda !== undefined && rawJeda !== '') ? Number(rawJeda) : 3;
+    const jeda = Number.isFinite(parsedJeda) && parsedJeda > 0 ? Math.max(1.5, parsedJeda) : 3;
     // Ujian SELALU hard mode — --easy diabaikan kecuali --force-easy juga disertakan
     const pakaiEasy = process.argv.includes('--force-easy') && process.argv.includes('--easy');
     const onlyMission = process.argv.includes('--only-mission');
@@ -232,6 +238,7 @@ function butuhUjian(st) {
         return false;
     }
 
+    let lastBacaAt = 0;
     async function baca() {
         const res = await c.getCharacterByIdWithWait(s, charId, {
             maxWaitMs: 45000,
@@ -239,6 +246,7 @@ function butuhUjian(st) {
             onCooldown: sec => line('  [Cooldown] Menunggu ' + sec + 's sebelum membaca data karakter...')
         });
         if (!res.ok) return null;
+        lastBacaAt = Date.now();
         if (res.session && res.session.sessionKey && res.session.sessionKey !== s.sessionKey) {
             s = res.session;
             h = k.mk(s.sessionKey);
@@ -273,7 +281,7 @@ function butuhUjian(st) {
         }
         // Update server 20 Nov 2026: CharacterService.startMission dihapus;
         // cfn awal diambil dari extraData.csf, sbid dibuat lokal, lalu dirotasi dari ub.csf.
-        await sleep(Math.max(3, jeda) * 1000);
+        await sleep(Math.round(jeda * 1000));
 
         let upd = null;
         for (let coba = 1; coba <= 3; coba++) {
@@ -403,13 +411,11 @@ function butuhUjian(st) {
                 okU++;
                 line('  [✓] Ujian stage ' + mid + ' SELESAI (' + okU + '/' + rantaiUjian.length + ')');
                 selesaiSet.add(mid);
-                await sleep(JEDA_ANTAR_MISI * 1000);
             }
 
             line('  Hasil rangkaian ujian: ' + okU + '/' + rantaiUjian.length + ' tahap sukses diproses.');
             line('  Memperbarui data rank karakter dari server...');
             await relogin();
-            st = await baca() || st;
 
             if (st.rank >= pendingExam.targetRank) {
                 line('  🎉 SELAMAT! Karakter berhasil LULUS ujian ' + pendingExam.nama + '!');
@@ -419,7 +425,6 @@ function butuhUjian(st) {
                 line('  [!] Catatan: Rank masih ' + (RANK_NAMES[st.rank] || ('Rank ' + st.rank)) + '. Server mungkin butuh sinkronisasi.');
                 await sleep(5000);
                 await relogin();
-                st = await baca() || st;
                 if (st.rank >= pendingExam.targetRank) {
                     line('  🎉 SINKRONISASI SUKSES: Rank baru ' + (RANK_NAMES[st.rank] || ('Rank ' + st.rank)) + '!');
                     tanpaXp = 0; gagalBeruntun = 0; gagalHariIni.clear(); cooldown.clear();
@@ -450,7 +455,7 @@ function butuhUjian(st) {
             if (!noHunt && !sudahHunting) {
                 sudahHunting = true;
                 line('misi level ' + st.level + ' habis — mencoba Hunting House untuk naik level...');
-                const hr = require('child_process').spawnSync('node', ['ns_hunt.js', 'run', '10', '18'], { cwd: __dirname, stdio: 'inherit', env: process.env });
+                require('child_process').spawnSync('node', ['ns_hunt.js', 'run', '10', '10.5'], { cwd: __dirname, stdio: 'inherit', env: process.env });
                 await relogin();
                 if (st && st.level > awal.level) {
                     line('naik ke level ' + st.level + '! Melanjutkan misi grade baru...');
@@ -468,24 +473,56 @@ function butuhUjian(st) {
         for (const [mid, lv, xp] of kandidat) {
             const r = await jalankanMisi(mid);
             if (!r.ok) { line('  ' + mid + ' ditolak (' + (r.fatal || r.err) + ')'); if (r.fatal) { line('STOP: ' + r.fatal); process.exit(4); } continue; }
-            if (r.skip) { line('  ' + mid + ' dilewati (sudah selesai / jatah habis / diistirahatkan)'); await sleep(1000); continue; }
-            await sleep(JEDA_ANTAR_MISI * 1000);
-            const st2 = await baca();
-            if (!st2) break;
-            n++; sukses = true; gagalBeruntun = 0; selesai++;
-            const dXp = st2.xp - st.xp;
-            const dGold = st2.gold - st.gold;
-            const mInfo = (DATA && DATA.find(x => x.id === mid)) || {};
+            if (r.skip) { line('  ' + mid + ' dilewati (sudah selesai / jatah habis / diistirahatkan)'); await sleep(300); continue; }
+
+            const ub = r.body || {};
+            const inv = ub.update_inventory || {};
+            const mInfo = MISSION_META.get(mid) || {};
             const mName = mInfo.name ? `[${mInfo.name}]` : '';
+            const estXp = Number(mInfo.xp !== undefined ? mInfo.xp : xp) || 0;
+            const estGold = Number(mInfo.gold) || 0;
+
+            const prevLv = st.level;
+            const prevXp = st.xp;
+            const prevGold = st.gold;
+            // Di server amf.ninjasaga.cc: inv.xp sudah berisi XP karakter sesudah misi ini,
+            // sedangkan inv.gold berisi Gold sebelum reward misi ini ditambahkan.
+            let nextXp = (inv.xp !== undefined && inv.xp !== null) ? Number(inv.xp) : (prevXp + estXp);
+            let nextGold = (inv.gold !== undefined && inv.gold !== null) ? (Number(inv.gold) + estGold) : (prevGold + estGold);
+            let nextLv = prevLv;
+            let syncedNow = false;
+
+            // Sinkronkan level/rank ke getCharacterById hanya saat:
+            // (a) cooldown 20s sudah lewat secara alami (0s waktu tunggu!), ATAU
+            // (b) XP berhenti bertambah (indikasi menyentuh Level Cap ujian 20/40/60/80 atau cap harian)
+            const xpMandek = (estXp > 0 && nextXp <= prevXp);
+            if (xpMandek || (Date.now() - lastBacaAt) >= CHAR_SYNC_COOLDOWN_MS) {
+                const stSync = await baca();
+                if (stSync) {
+                    syncedNow = true;
+                    nextLv = stSync.level;
+                    nextXp = stSync.xp;
+                    nextGold = stSync.gold;
+                    st = stSync;
+                }
+            }
+
+            if (!syncedNow) {
+                st.xp = nextXp;
+                st.gold = nextGold;
+            }
+
+            n++; sukses = true; gagalBeruntun = 0; selesai++;
+            const dXp = nextXp - prevXp;
+            const dGold = nextGold - prevGold;
             line('  +-------------------------------------------------------------');
-            line(`  | ✓ [#${n}] Misi ${mid} ${mName} SELESAI`);
-            line(`  |   Level : Lv ${st.level}${st2.level > st.level ? ' -> Lv ' + st2.level + ' (LEVEL UP! 🎉)' : ''}`);
-            line(`  |   XP    : +${dXp.toLocaleString()} (XP Karakter: ${st2.xp.toLocaleString()})`);
-            line(`  |   Gold  : +${dGold.toLocaleString()} (Gold Karakter: ${st2.gold.toLocaleString()})`);
+            line(`  | ✓ [#${n}] Misi ${mid} ${mName} SELESAI${syncedNow ? ' [Sync DB]' : ''}`);
+            line(`  |   Level : Lv ${prevLv}${nextLv > prevLv ? ' -> Lv ' + nextLv + ' (LEVEL UP! 🎉)' : ''}`);
+            line(`  |   XP    : +${dXp.toLocaleString()} (XP Karakter: ${nextXp.toLocaleString()})`);
+            line(`  |   Gold  : +${dGold.toLocaleString()} (Gold Karakter: ${nextGold.toLocaleString()})`);
             line('  +-------------------------------------------------------------');
-            st = st2;
+
             if (dXp <= 0) {
-                // Deteksi apakah XP 0 karena tertahan Level Cap & wajib Ujian
                 const cekUjianLagi = butuhUjian(st);
                 if (cekUjianLagi) {
                     line('');
@@ -494,22 +531,12 @@ function butuhUjian(st) {
                     tanpaXp = 0;
                     break;
                 }
-
-                // reward bisa telat masuk — cek 1x setelah 15s
-                await sleep(15000);
-                const st3 = await baca();
-                const telat = st3 ? st3.xp - st.xp : 0;
-                if (st3 && telat > 0) {
-                    const telatGold = st3.gold - st.gold;
-                    line(`    (Reward telat masuk) XP +${telat.toLocaleString()} | Gold +${telatGold.toLocaleString()}`);
-                    st = st3; tanpaXp = 0;
-                } else {
-                    if (st3) st = st3;
-                    tanpaXp++;
-                    cooldown.set(mid, Date.now() + 30000);
-                    line('    ' + mid + ' belum bayar saat ini — istirahat 30 detik, mencoba misi lain.');
-                }
-            } else { tanpaXp = 0; }
+                tanpaXp++;
+                cooldown.set(mid, Date.now() + 30000);
+                line('    ' + mid + ' belum bayar saat ini — istirahat 30 detik, mencoba misi lain.');
+            } else {
+                tanpaXp = 0;
+            }
             break;
         }
         if (tanpaXp >= 3) {
@@ -535,18 +562,16 @@ function butuhUjian(st) {
                 // Coba fallback ke hunting house dulu sebelum menyerah
                 if (!noHunt && !sudahHunting) {
                     sudahHunting = true;
+                    const xpBeforeHunt = st.xp;
+                    const lvBeforeHunt = st.level;
                     line('misi level ' + st.level + ' tidak diterima — mencoba Hunting House untuk XP...');
-                    require('child_process').spawnSync('node', ['ns_hunt.js', 'run', '10', '18'], { cwd: __dirname, stdio: 'inherit', env: process.env });
+                    require('child_process').spawnSync('node', ['ns_hunt.js', 'run', '10', '10.5'], { cwd: __dirname, stdio: 'inherit', env: process.env });
                     await relogin();
-                    const stH = st;
-                    if (stH) {
-                        const dx = stH.xp - st.xp;
-                        st = stH;
-                        if (stH.level > st.level || dx > 0) {
-                            line('mendapat XP dari hunting! Lanjut misi...');
-                            gagalBeruntun = 0; sudahHunting = false; gagalHariIni.clear(); tanpaXp = 0;
-                            continue;
-                        }
+                    prevPreXp = null; prevMid = '';
+                    if (st && (st.level > lvBeforeHunt || st.xp > xpBeforeHunt)) {
+                        line('mendapat XP dari hunting! Lanjut misi...');
+                        gagalBeruntun = 0; sudahHunting = false; gagalHariIni.clear(); tanpaXp = 0;
+                        continue;
                     }
                 }
                 if (onlyMission && noHunt && noEvent) {
@@ -565,8 +590,13 @@ function butuhUjian(st) {
                 gagalBeruntun = 0; gagalHariIni.clear(); cooldown.clear(); sudahHunting = false; tanpaXp = 0;
                 continue;
             }
-            await sleep(10000);
+            await sleep(5000);
         }
+    }
+
+    if ((Date.now() - lastBacaAt) >= CHAR_SYNC_COOLDOWN_MS) {
+        const stEnd = await baca();
+        if (stEnd) st = stEnd;
     }
 
     line('');

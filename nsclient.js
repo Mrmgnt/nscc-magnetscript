@@ -24,21 +24,33 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 const SITE = 'https://ninjasaga.cc/';
 const ORIGIN = 'https://ninjasaga.cc';
 
+let _cachedWinProxyArgs = null;
 function curlProxyArgs() {
     const configured = process.env.NS_HTTP_PROXY || process.env.HTTPS_PROXY || process.env.https_proxy;
     if (configured) return ['--proxy', configured];
     if (process.platform !== 'win32') return [];
+    if (_cachedWinProxyArgs !== null) return _cachedWinProxyArgs;
     try {
         const enableRes = spawnSync('reg.exe', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings', '/v', 'ProxyEnable'], { encoding: 'utf8', windowsHide: true });
         const enableMatch = enableRes.status === 0 && String(enableRes.stdout || '').match(/ProxyEnable\s+REG_DWORD\s+0x([0-9a-f]+)/mi);
-        if (!enableMatch || parseInt(enableMatch[1], 16) !== 1) return [];
+        if (!enableMatch || parseInt(enableMatch[1], 16) !== 1) {
+            _cachedWinProxyArgs = [];
+            return _cachedWinProxyArgs;
+        }
 
         const result = spawnSync('reg.exe', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings', '/v', 'ProxyServer'], { encoding: 'utf8', windowsHide: true });
         const match = result.status === 0 && String(result.stdout || '').match(/ProxyServer\s+REG_SZ\s+(.+)$/mi);
-        if (!match || !match[1].trim()) return [];
+        if (!match || !match[1].trim()) {
+            _cachedWinProxyArgs = [];
+            return _cachedWinProxyArgs;
+        }
         const raw = match[1].trim();
-        return ['--proxy', /^https?:\/\//i.test(raw) ? raw : 'http://' + raw];
-    } catch (_) { return []; }
+        _cachedWinProxyArgs = ['--proxy', /^https?:\/\//i.test(raw) ? raw : 'http://' + raw];
+        return _cachedWinProxyArgs;
+    } catch (_) {
+        _cachedWinProxyArgs = [];
+        return _cachedWinProxyArgs;
+    }
 }
 
 const u16 = v => { const b = Buffer.allocUnsafe(2); b.writeUInt16BE(v, 0); return b; };
@@ -174,19 +186,28 @@ function amf(service, params) {
             '-H', 'Accept-Encoding: identity',
             '--data-binary', '@-'
         ];
-        try {
-            const r = spawnSync('curl.exe', args, { input: p, maxBuffer: 32 * 1024 * 1024, timeout: 25000, windowsHide: true });
-            if (!r.error && r.stdout && r.stdout.length > 0) {
-                const raw = r.stdout;
-                try {
-                    const m = parse(raw);
-                    const body = m.length ? m[0].body : null;
-                    return Promise.resolve({ body, target: m.length ? m[0].target : '', fault: !!(body && (body.faultCode !== undefined || body.faultString !== undefined)), bytes: raw.length });
-                } catch (e) {
-                    return Promise.resolve({ body: null, parseError: e.message, hex: raw.slice(0, 160).toString('hex') });
+        for (let tryAmf = 1; tryAmf <= 2; tryAmf++) {
+            try {
+                const r = spawnSync('curl.exe', args, { input: p, maxBuffer: 32 * 1024 * 1024, timeout: 25000, windowsHide: true });
+                if (!r.error && r.stdout && r.stdout.length > 0) {
+                    const raw = r.stdout;
+                    try {
+                        const m = parse(raw);
+                        const body = m.length ? m[0].body : null;
+                        if (body !== null) {
+                            return Promise.resolve({ body, target: m.length ? m[0].target : '', fault: !!(body && (body.faultCode !== undefined || body.faultString !== undefined)), bytes: raw.length });
+                        }
+                    } catch (e) {
+                        if (tryAmf === 2) {
+                            return Promise.resolve({ body: null, parseError: e.message, hex: raw.slice(0, 160).toString('hex') });
+                        }
+                    }
                 }
+            } catch (_) { }
+            if (tryAmf < 2) {
+                Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 900);
             }
-        } catch (_) { }
+        }
     }
 
     return new Promise(res => {
@@ -268,17 +289,19 @@ async function loginOnce(username, password, webData) {
     };
 }
 
-async function login(username, password, webData, retries = 2) {
+async function login(username, password, webData, retries = 3) {
     let last = null;
     for (let attempt = 0; attempt <= retries; attempt++) {
         last = await loginOnce(username, password, attempt === 0 ? webData : null);
         if (last.ok) return last;
-        // Jangan retry jika credential ditolak oleh API (401/403/Invalid credentials)
-        if (last.stage === 'web-login' && last.http && last.http >= 400 && last.http < 500) {
+        const isRateLimit = (last.http === 429) || /rate limit|too many|wait a few seconds/i.test(String(last.message || last.body || ''));
+        // Jangan retry jika credential salah (401/403), tapi TETAP retry jika terkena 429 Rate Limit
+        if (!isRateLimit && last.stage === 'web-login' && last.http && last.http >= 400 && last.http < 500) {
             return last;
         }
         if (attempt < retries) {
-            await sleepMs(1500 * (attempt + 1));
+            const waitMs = isRateLimit ? (4000 * (attempt + 1)) : (1500 * (attempt + 1));
+            await sleepMs(waitMs);
         }
     }
     return last;

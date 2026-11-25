@@ -342,7 +342,7 @@ async function runHuntSession(opts = {}) {
                 line('    -> GAGAL klaim reward boss: ' + JSON.stringify(fb).slice(0, 200));
             }
 
-            await sleep(300);
+            await sleep(80);
         }
 
         line('  Ringkasan Hunting House: ' + won + '/' + tried + ' battle sukses | Sisa tiket (item509): ' + st.tickets);
@@ -452,7 +452,7 @@ async function runHuntSession(opts = {}) {
                     line('    -> finishHunting gagal (' + fErr + '), akan diulang...');
                 }
 
-                await sleep(300);
+                await sleep(80);
             }
         }
 
@@ -461,27 +461,29 @@ async function runHuntSession(opts = {}) {
             await clearRoom(i);
         }
 
-        // Pass 2 (Verifikasi Akhir): Pastikan tidak ada room terbuka yang masih menyisakan jatah > 0
-        const hsVerify = await c.amf('EudemonGarden.getHuntingStatus', [s.sessionKey]);
-        const hbVerify = (hsVerify && hsVerify.body) || {};
-        const roomsVerify = ((hbVerify.result || {}).room) || [];
-        let sisaBelumSelesai = 0;
-        for (let i = mulaiRoom; i < Math.min(endRoom, roomsVerify.length); i++) {
-            const rem = Number((roomsVerify[i] && roomsVerify[i].time) || 0);
-            if (rem > 0 && !lockedRooms.has(i)) {
-                sisaBelumSelesai += rem;
-                roomsInit[i] = roomsVerify[i];
-            }
-        }
-
-        if (sisaBelumSelesai > 0) {
-            line('');
-            line('  [VERIFIKASI] Masih ada ' + sisaBelumSelesai + 'x sisa jatah Eudemon Dragon, menyelesaikan otomatis...');
-            cachedHs = hbVerify;
+        // Pass 2 (Verifikasi Akhir): Hanya panggil ulang status server bila ada battle yang sempat gagal/retry di Pass 1
+        if (hadError || won < tried) {
+            const hsVerify = await c.amf('EudemonGarden.getHuntingStatus', [s.sessionKey]);
+            const hbVerify = (hsVerify && hsVerify.body) || {};
+            const roomsVerify = ((hbVerify.result || {}).room) || [];
+            let sisaBelumSelesai = 0;
             for (let i = mulaiRoom; i < Math.min(endRoom, roomsVerify.length); i++) {
                 const rem = Number((roomsVerify[i] && roomsVerify[i].time) || 0);
                 if (rem > 0 && !lockedRooms.has(i)) {
-                    await clearRoom(i);
+                    sisaBelumSelesai += rem;
+                    roomsInit[i] = roomsVerify[i];
+                }
+            }
+
+            if (sisaBelumSelesai > 0) {
+                line('');
+                line('  [VERIFIKASI] Masih ada ' + sisaBelumSelesai + 'x sisa jatah Eudemon Dragon, menyelesaikan otomatis...');
+                cachedHs = hbVerify;
+                for (let i = mulaiRoom; i < Math.min(endRoom, roomsVerify.length); i++) {
+                    const rem = Number((roomsVerify[i] && roomsVerify[i].time) || 0);
+                    if (rem > 0 && !lockedRooms.has(i)) {
+                        await clearRoom(i);
+                    }
                 }
             }
         }
