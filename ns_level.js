@@ -20,9 +20,13 @@
  * Bot berhenti kalau server menolak atau flag itu aktif.
  */
 'use strict';
+const path = require('path');
 const c = require('./nsclient.js');
 const k = require('./ns_crypto.js');
 const { ucEncode } = require('./nscrypt.js');
+const { parseMissionRewards, parseScratchCardReward, appendMissionHistory, formatSessionHistoryLines } = require('./lib/ns_mission_history.js');
+const MISSION_HISTORY_FILE = path.join(__dirname, 'logs', 'mission_history.jsonl');
+const GRADE_S_HISTORY_FILE = path.join(__dirname, 'logs', 'grade_s_history.jsonl');
 const line = s => console.log('[' + new Date().toTimeString().slice(0, 8) + '] ' + s);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 function kv(s) { let o = ''; for (const ch of String(s)) { const i = 'GhKmNpRtVwYzJqSx'.indexOf(ch); o += i < 0 ? ch : '0123456789abcdef'.charAt(i); } return o; }
@@ -141,6 +145,7 @@ function butuhUjian(st) {
     const maxMisi = iMax >= 0 ? Number(process.argv[iMax + 1] || 0) : 0;
     const iOne = process.argv.indexOf('--one');
     const oneMid = iOne >= 0 ? String(process.argv[iOne + 1] || '') : '';
+    const checkScratch = process.argv.includes('--scratch');
     // Label grade di menu game NinjaSaga:
     //   Grade C = lv 1-19, Grade B = lv 20-41, Grade A = lv 42-79, Grade S = lv 80-100
     function tierGrade(lv) {
@@ -362,9 +367,101 @@ function butuhUjian(st) {
     line('');
 
     let n = 0, gagalBeruntun = 0, selesai = 0, tanpaXp = 0, tunggu = 0;
+    let totalTokensWon = 0, tokenMatchCount = 0;
+    let scratchChecks = 0, scratchBangoCount = 0, scratchFreeDone = 0, scratchTokenSkipped = 0;
+    const scratchRewards = [];
+    const itemDropCounts = {};
+    const missionHistory = [];
     const MAKS = 500;
     const jedaTunggu = Math.max(10, Number(process.env.NS_WAIT_SEC || 20)) * 1000; // 20 detik
     let sudahHunting = false;
+
+    async function cekDanJalankanScratch(curLevel) {
+        if (!checkScratch || curLevel <= 20) return null;
+        scratchChecks++;
+        let rnd = null;
+        try {
+            rnd = await c.amf('RouletteService.randomAddScatchCard', [s.sessionKey]);
+        } catch (err) {
+            return { checked: true, bango: false, error: err.message || String(err) };
+        }
+        const rb = (rnd && rnd.body) || {};
+        const bango = Boolean(rb.bango);
+        if (!bango) {
+            return { checked: true, bango: false, scratched: false, rawRandom: rb };
+        }
+        scratchBangoCount++;
+
+        let scDataBody = {};
+        try {
+            const scData = await c.amf('RouletteService.getScratchCardData', [s.sessionKey]);
+            scDataBody = (scData && scData.body) || {};
+        } catch (_) { }
+        const freeRemaining = Number(scDataBody.dailyRoulette_remainTime || 0);
+        const tokenCost = scDataBody.bouns_discount ? 3 : 5;
+
+        if (freeRemaining <= 0) {
+            scratchTokenSkipped++;
+            return {
+                checked: true,
+                bango: true,
+                scratched: false,
+                freeRemaining,
+                tokenCost,
+                skippedReason: 'butuh_token',
+                rawRandom: rb,
+                rawScratchData: scDataBody
+            };
+        }
+
+        const slot = 1 + Math.floor(Math.random() * 3);
+        const scFin = await c.amf('RouletteService.scratchCardAtfer20Level', [
+            s.sessionKey, 'free', slot, h.getHash('free')
+        ]);
+        const fb = (scFin && scFin.body) || {};
+        const parsed = parseScratchCardReward(fb);
+        if (Number(fb.status) === 1) {
+            scratchFreeDone++;
+            scratchRewards.push(parsed.rewardLabel);
+            if (parsed.tokens > 0) {
+                totalTokensWon += parsed.tokens;
+                tokenMatchCount++;
+            }
+            if (parsed.rewardType && !['TOKEN', 'GOLD', 'XP', 'XP%'].includes(parsed.rewardType)) {
+                const kName = parsed.itemName || parsed.rewardLabel;
+                itemDropCounts[kName] = (itemDropCounts[kName] || 0) + 1;
+            }
+            return {
+                checked: true,
+                bango: true,
+                scratched: true,
+                mode: 'free',
+                slot,
+                freeRemaining,
+                rewardType: parsed.rewardType,
+                rewardAmount: parsed.rewardAmount,
+                rewardLabel: parsed.rewardLabel,
+                tokens: parsed.tokens,
+                gold: parsed.gold,
+                xp: parsed.xp,
+                rawRandom: rb,
+                rawScratchData: scDataBody,
+                rawResult: fb
+            };
+        }
+        return {
+            checked: true,
+            bango: true,
+            scratched: false,
+            mode: 'free',
+            slot,
+            freeRemaining,
+            error: JSON.stringify(fb).slice(0, 160),
+            rawRandom: rb,
+            rawScratchData: scDataBody,
+            rawResult: fb
+        };
+    }
 
     // Mode auto-grind murni misi grade level
     const ujianSkip = new Set();
@@ -513,13 +610,63 @@ function butuhUjian(st) {
             }
 
             n++; sukses = true; gagalBeruntun = 0; selesai++;
+            const scratchRes = await cekDanJalankanScratch(nextLv);
             const dXp = nextXp - prevXp;
             const dGold = nextGold - prevGold;
+            const parsedReward = parseMissionRewards(ub);
+            const dTokens = parsedReward.tokenGained + ((scratchRes && scratchRes.tokens) ? Number(scratchRes.tokens) : 0);
+            if (parsedReward.tokenGained > 0) {
+                totalTokensWon += parsedReward.tokenGained;
+                tokenMatchCount++;
+            }
+            for (const [itName, itQty] of Object.entries(parsedReward.itemCounts)) {
+                itemDropCounts[itName] = (itemDropCounts[itName] || 0) + itQty;
+            }
+            const dropOnly = parsedReward.items.filter(x => !/^\d+\s*Token$/i.test(x));
+            const dropStr = dropOnly.length ? dropOnly.join(', ') : '-';
+            const tokStr = dTokens > 0 ? `+${dTokens} Token ★` : '-';
+
+            const histEntry = {
+                source: 'ns_level',
+                account: s.username || u,
+                charId: String(charId),
+                charName: String(row[1] || ''),
+                level: nextLv,
+                missionId: mid,
+                missionName: mInfo.name || mid,
+                battleNo: selesai,
+                xp: dXp,
+                gold: dGold,
+                tokens: dTokens,
+                items: parsedReward.items,
+                rawItems: parsedReward.rawItems,
+                rawRewardFields: parsedReward.rawRewardFields,
+                scratch: scratchRes
+            };
+            try {
+                appendMissionHistory(MISSION_HISTORY_FILE, histEntry);
+                if (GRADE_S_SET.has(mid)) {
+                    appendMissionHistory(GRADE_S_HISTORY_FILE, histEntry);
+                }
+            } catch (_) { }
+            missionHistory.push(histEntry);
+
             line('  +-------------------------------------------------------------');
             line(`  | ✓ [#${n}] Misi ${mid} ${mName} SELESAI${syncedNow ? ' [Sync DB]' : ''}`);
-            line(`  |   Level : Lv ${prevLv}${nextLv > prevLv ? ' -> Lv ' + nextLv + ' (LEVEL UP! 🎉)' : ''}`);
-            line(`  |   XP    : +${dXp.toLocaleString()} (XP Karakter: ${nextXp.toLocaleString()})`);
-            line(`  |   Gold  : +${dGold.toLocaleString()} (Gold Karakter: ${nextGold.toLocaleString()})`);
+            line(`  |   Level   : Lv ${prevLv}${nextLv > prevLv ? ' -> Lv ' + nextLv + ' (LEVEL UP! 🎉)' : ''}`);
+            line(`  |   XP      : +${dXp.toLocaleString()} (XP Karakter: ${nextXp.toLocaleString()})`);
+            line(`  |   Gold    : +${dGold.toLocaleString()} (Gold Karakter: ${nextGold.toLocaleString()})`);
+            line(`  |   Hadiah  : Token ${tokStr} | Drop: ${dropStr}`);
+            if (scratchRes) {
+                if (scratchRes.scratched) {
+                    line(`  |   Scratch : GRATIS [bango=true, sisa=${scratchRes.freeRemaining}, slot=${scratchRes.slot}] -> ${scratchRes.rewardLabel}`);
+                } else if (scratchRes.bango) {
+                    line(`  |   Scratch : bango=true, TAPI jatah gratis=${scratchRes.freeRemaining || 0} (butuh ${scratchRes.tokenCost || 5} Token -> SKIP${scratchRes.error ? ' | err: ' + scratchRes.error : ''})`);
+                } else {
+                    line(`  |   Scratch : bango=false${scratchRes.error ? ' (err: ' + scratchRes.error + ')' : ''}`);
+                }
+            }
+            line(`  |   Counter : Sesi Token +${totalTokensWon} (${tokenMatchCount}x dapat token)`);
             line('  +-------------------------------------------------------------');
 
             if (dXp <= 0) {
@@ -604,5 +751,18 @@ function butuhUjian(st) {
     line('  misi sukses : ' + selesai);
     line('  XP          : ' + awal.xp + ' -> ' + st.xp);
     line('  gold        : ' + awal.gold + ' -> ' + st.gold);
+    line('  token sesi  : +' + totalTokensWon + ' (' + tokenMatchCount + 'x dapat token)');
+    if (checkScratch) {
+        line('  scratch cek : ' + scratchChecks + 'x | bango=true: ' + scratchBangoCount + 'x | scratch gratis: ' + scratchFreeDone + 'x | butuh token (skip): ' + scratchTokenSkipped + 'x');
+        if (scratchRewards.length) line('  hadiah scratch: ' + scratchRewards.join(', '));
+    }
+    const dropSummary = Object.entries(itemDropCounts).map(([k2, v2]) => `${k2} x${v2}`).join(', ');
+    if (dropSummary) line('  drop item   : ' + dropSummary);
+    const histLines = formatSessionHistoryLines(missionHistory, 20);
+    if (histLines.length) {
+        line('  riwayat sesi:');
+        for (const hl of histLines) line(hl);
+    }
+    line('  log history : logs/mission_history.jsonl');
     process.exit(st.level >= target ? 0 : 5);
 })().catch(e => { line('FATAL ' + e.message); process.exit(1); });

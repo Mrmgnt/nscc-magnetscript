@@ -334,13 +334,13 @@ echo ======================================================================
 echo       MISI GRADE S (MAP MISI 1 s/d 4 - AUTO ENERGY / STAMINA RUNNER)
 echo                     cc: MagnetScript(Razki)
 echo ======================================================================
-echo   Misi Grade S menggunakan sistem stamina / energi (-12 Stamina per battle)
-echo   dan memberikan XP serta Gold masif untuk karakter Level 80+:
-echo     - Misi 1 (Stage 1, Min Lv 80) : XP 82.700  ^| Gold 5.000 ^| -12 Energi
+echo   Misi Grade S memakai energi Rank S (SLevelMission, max 75) + roda SPIN hadiah
+echo   dan memberikan XP, Gold, serta peluang drop Ramen / Gan / 10 Token per match:
+echo     - Misi 1 (Stage 1, Min Lv 80) : XP 82.700  ^| Gold 5.000 ^| -10 Energi
 echo     - Misi 2 (Stage 2, Min Lv 81) : XP 88.600  ^| Gold 5.300 ^| -12 Energi
-echo     - Misi 3 (Stage 3, Min Lv 82) : XP 92.580  ^| Gold 5.500 ^| -12 Energi
-echo     - Misi 4 (Stage 4, Min Lv 83) : XP 95.430  ^| Gold 5.600 ^| -12 Energi
-echo     - Stage 5 (Bonus, Min Lv 84)  : XP 100.000 ^| Gold 5.900 ^| -12 Energi
+echo     - Misi 3 (Stage 3, Min Lv 82) : XP 92.580  ^| Gold 5.500 ^| -14 Energi
+echo     - Misi 4 (Stage 4, Min Lv 83) : XP 95.430  ^| Gold 5.600 ^| -16 Energi
+echo     - Stage 5 (Bonus, Min Lv 84)  : XP 100.000 ^| Gold 5.900 ^| -25 Energi
 echo.
 echo   Fitur:
 echo     - Menyelesaikan semua Misi 1-4 secara berurutan setiap hari sampai energi habis
@@ -352,18 +352,20 @@ echo     1. Selesaikan Semua Misi 1-4 Sampai Energi Habis [RECOMMENDED]
 echo     2. Scheduler Harian Loop (Habiskan Misi 1-4, standby tunggu refill)
 echo     3. Misi Tertentu Saja (Pilih Stage 1, 2, 3, 4, atau 5)
 echo     4. Spam Satu Misi Terus (Pilih Stage 1-5, stop manual)
+echo     5. Lihat History Misi Grade S ^& Counter Token
 echo     0. Kembali ke Menu Utama
 echo.
 set "GS_MODE="
-set /p "GS_MODE=Pilihan Mode [0-4, default: 1]: "
+set /p "GS_MODE=Pilihan Mode [0-5, default: 1]: "
 if "%GS_MODE%"=="" set "GS_MODE=1"
 if "%GS_MODE%"=="0" goto MENU
 if "%GS_MODE%"=="3" goto GRADES_PICK
 if "%GS_MODE%"=="4" goto GRADES_SPAM
+if "%GS_MODE%"=="5" goto GRADES_HISTORY
 
 set "JDA="
-set /p "JDA=Jeda antar battle dalam detik (default: 3s): "
-if "%JDA%"=="" set "JDA=3"
+set /p "JDA=Jeda antar battle dalam detik (min & default: 11s): "
+if "%JDA%"=="" set "JDA=11"
 echo.
 if "%GS_MODE%"=="2" (
   node ns_grade_s.js loop %JDA%
@@ -387,8 +389,8 @@ set "STG="
 set /p "STG=Pilihan Stage [1-5, default: 1]: "
 if "%STG%"=="" set "STG=1"
 set "JDA="
-set /p "JDA=Jeda antar battle dalam detik (default: 3s): "
-if "%JDA%"=="" set "JDA=3"
+set /p "JDA=Jeda antar battle dalam detik (min & default: 11s): "
+if "%JDA%"=="" set "JDA=11"
 echo.
 node ns_grade_s.js %STG% %JDA%
 echo.
@@ -413,13 +415,20 @@ set "STG="
 set /p "STG=Pilihan Stage [1-5, default: 1]: "
 if "%STG%"=="" set "STG=1"
 set "JDA="
-set /p "JDA=Jeda antar battle dalam detik (default: 3s): "
-if "%JDA%"=="" set "JDA=3"
+set /p "JDA=Jeda antar battle dalam detik (min & default: 11s): "
+if "%JDA%"=="" set "JDA=11"
 echo.
 node ns_grade_s.js spam %STG% %JDA%
 echo.
 pause
 goto MENU
+
+:GRADES_HISTORY
+cls
+node ns_grade_s.js history 30 --all
+echo.
+pause
+goto GRADES
 
 :LEVEL
 cls
@@ -561,8 +570,8 @@ echo   Config : coop_accounts.txt
 echo   Format : main:username:password:slot
 echo   Syarat : room punya player lain; Emblem dicek bila status dikirim server.
 echo.
-echo   [ 1 ] Auto quickmatch: cari dan join room Cerberus publik
-echo   [ 2 ] Create room: host, kick pemain Lv ^< 80, start saat 3 pemain ready
+echo   [ 1 ] Auto quickmatch: cari dan join room Cerberus publik ^(energy habis: cek ulang tiap 15 menit^)
+echo   [ 2 ] Create room: host, kick pemain Lv ^< 80, start saat 3 pemain ready ^(energy habis: cek ulang tiap 15 menit^)
 echo   [ 0 ] Kembali
 echo.
 set "COOP_OPT="

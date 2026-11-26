@@ -11,8 +11,8 @@ const { PveBattle } = require('./lib/ns_pve_battle.js');
 const source = fs.readFileSync(path.join(__dirname, 'ns_coop_minotaur.js'), 'utf8');
 const cut = source.indexOf('\n(async () => {');
 const context = { module: { exports: {} }, require(name) { if (name === 'fs') return fs; if (name === 'os') return os; if (name === 'path') return path; if (name === './nsclient.js') return {}; if (name.includes('ns_pve_socket')) return { PveSocket: {} }; if (name.includes('ns_pve_battle')) return { PveBattle }; if (name.includes('ns_hermes_notify')) return { formatCerberusReport, sendHermesReport }; throw new Error(name); }, console, process: { hrtime: process.hrtime, env: {}, stdout: {} }, setTimeout, clearTimeout };
-vm.runInNewContext(source.slice(0, cut) + '\nmodule.exports = { parseArgs, resolveMinStartEnergy, resolveBattleTimeoutMs, acquireRunLock, isTransientSocketError, parsePveRankingResponse, extractScoreForChar, findQuestId, buildCharSummaryMap, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, describeDeck, normCharId, idList, evaluateLevel, handleBattlePreTurnStep, clearBattleTimers, traceBattleProgress, handleMidBattleLeave, readSelfHp, readSelfResources, tickSelfSkillCooldowns, trackSelfActionOutcome, hasReactiveForcePacket, trackReactiveForce, pickSuperChargesSkill, recordRoomKick, recordLowLevelMaster, isPasswordRejection };', context);
-const { parseArgs, resolveMinStartEnergy, resolveBattleTimeoutMs, acquireRunLock, isTransientSocketError, parsePveRankingResponse, extractScoreForChar, findQuestId, buildCharSummaryMap, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, describeDeck, normCharId, idList, evaluateLevel, handleBattlePreTurnStep, clearBattleTimers, traceBattleProgress, handleMidBattleLeave, readSelfHp, readSelfResources, tickSelfSkillCooldowns, trackSelfActionOutcome, hasReactiveForcePacket, trackReactiveForce, pickSuperChargesSkill, recordRoomKick, recordLowLevelMaster, isPasswordRejection } = context.module.exports;
+vm.runInNewContext(source.slice(0, cut) + '\nmodule.exports = { parseArgs, resolveMinStartEnergy, resolveBattleTimeoutMs, acquireRunLock, isTransientSocketError, hasRequiredEnergy, waitForEnergyRefill, parsePveRankingResponse, extractScoreForChar, findQuestId, buildCharSummaryMap, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, describeDeck, normCharId, idList, evaluateLevel, handleBattlePreTurnStep, clearBattleTimers, traceBattleProgress, handleMidBattleLeave, readSelfHp, readSelfResources, tickSelfSkillCooldowns, trackSelfActionOutcome, hasReactiveForcePacket, trackReactiveForce, pickSuperChargesSkill, recordRoomKick, recordLowLevelMaster, isPasswordRejection };', context);
+const { parseArgs, resolveMinStartEnergy, resolveBattleTimeoutMs, acquireRunLock, isTransientSocketError, hasRequiredEnergy, waitForEnergyRefill, parsePveRankingResponse, extractScoreForChar, findQuestId, buildCharSummaryMap, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, describeDeck, normCharId, idList, evaluateLevel, handleBattlePreTurnStep, clearBattleTimers, traceBattleProgress, handleMidBattleLeave, readSelfHp, readSelfResources, tickSelfSkillCooldowns, trackSelfActionOutcome, hasReactiveForcePacket, trackReactiveForce, pickSuperChargesSkill, recordRoomKick, recordLowLevelMaster, isPasswordRejection } = context.module.exports;
 assert.equal(parseArgs([]).maxMatches, Infinity);
 assert.equal(parseArgs(['--max-matches', '2']).maxMatches, 2);
 assert.equal(parseArgs(['--host-room']).hostRoom, true);
@@ -29,6 +29,9 @@ assert.equal(resolveBattleTimeoutMs(parseArgs(['--host-start-timeout', '2000000'
 assert.equal(resolveBattleTimeoutMs(parseArgs([]), { NS_COOP_BATTLE_TIMEOUT: '1200000' }), 1200000);
 assert.equal(resolveBattleTimeoutMs(parseArgs(['--battle-timeout', '2700000']), { NS_COOP_BATTLE_TIMEOUT: '1200000' }), 2700000);
 assert.equal(parseArgs(['--lock']).lock, true);
+assert.equal(hasRequiredEnergy(5, 5), true);
+assert.equal(hasRequiredEnergy(4, 5), false);
+assert.equal(hasRequiredEnergy(undefined, 5), false);
 assert.equal(resolveMinStartEnergy('auto', true), 50);
 assert.equal(resolveMinStartEnergy('auto', false), 25);
 assert.equal(resolveMinStartEnergy(40, true), 40);
@@ -188,6 +191,17 @@ assert.ok(waPayload.summary.includes('Total Score:'));
 assert.ok(waPayload.summary.includes('#166 -> #165'));
 assert.ok(waPayload.summary.includes('gold46000'));
 (async () => {
+    const energyLogs = [];
+    const waits = [];
+    const refilled = await waitForEnergyRefill({}, 5, message => energyLogs.push(message), {
+        initialPve: { energy: 3 },
+        readEnergy: async () => ({ energy: 5 }),
+        wait: async ms => waits.push(ms),
+    });
+    assert.equal(refilled.energy, 5);
+    assert.deepEqual(waits, [15 * 60 * 1000]);
+    assert.equal(energyLogs.length, 1);
+
     let seenSig = '', seenBody = '';
     const srv = http.createServer((req, res) => {
         seenSig = req.headers['x-hub-signature-256'];

@@ -144,8 +144,9 @@ function sebab(out) {
             const gsTitle = 'Daily: Misi Grade S (Map 1-4)';
             line('');
             line('################ ' + gsTitle + ' ################');
-            const gsRes = await runGradeSSession({ target: '1-4', jeda: 3, shared });
-            hasil.push([gsTitle, gsRes.exitCode, gsRes.battles || 0, `Grade S ${gsRes.battles || 0}x`]);
+            const gsRes = await runGradeSSession({ target: '1-4', jeda: 11, shared });
+            const gsSummary = `Grade S ${gsRes.battles || 0}x` + (gsRes.totalTokensWon > 0 ? ` (+${gsRes.totalTokensWon} Token)` : '');
+            hasil.push([gsTitle, gsRes.exitCode, gsRes.battles || 0, gsSummary]);
         }
 
         let butuhUjianNama = '';

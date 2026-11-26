@@ -1,26 +1,28 @@
 #!/usr/bin/env node
 /**
- * ns_grade_s.js — Auto Selesaikan Misi Grade S (Map 1 s/d 4) Sampai Energi Habis
+ * ns_grade_s.js — Auto Selesaikan Misi Grade S (Stage 1 s/d 5) via SLevelMission + Spin Reward Log
  * Ninja Saga CC — cc: MagnetScript(Razki)
  *
  * Fitur:
- *   1. Menyelesaikan semua Misi Grade S (Map 1 s/d 4) secara berurutan setiap harinya
- *      sampai energi / stamina karakter habis:
- *        - Misi 1 (Stage 1, msn274, Req Lv 80) : XP 82.700  | Gold 5.000 | -12 Energi
- *        - Misi 2 (Stage 2, msn275, Req Lv 81) : XP 88.600  | Gold 5.300 | -12 Energi
- *        - Misi 3 (Stage 3, msn276, Req Lv 82) : XP 92.580  | Gold 5.500 | -12 Energi
- *        - Misi 4 (Stage 4, msn277, Req Lv 83) : XP 95.430  | Gold 5.600 | -12 Energi
- *      (Siklus berputar: 1 -> 2 -> 3 -> 4 -> 1 ... sampai energi < 12).
- *   2. Collect semua prize / reward after match:
- *        - Mengambil & memverifikasi update_inventory (XP, Gold, Item drop, Magatama, Ramen, Potion)
- *   3. Deteksi & Laporan jika Mendapatkan 10 Token di Log Script:
- *        - Mendeteksi hadiah 10 Token dari roulette / after match
- *        - Memverifikasi penambahan saldo token karakter sebelum & sesudah
- *        - Memberikan highlight laporan khusus di console & mencatat ke logs/grade_s_tokens.log
- *   4. Dukungan Mode:
- *        - node ns_grade_s.js 1-4 [jeda]      -> Rotasi Misi 1-4 sampai energi habis (Default)
- *        - node ns_grade_s.js 2 [jeda]        -> Pilih stage tertentu saja (1/2/3/4/5)
- *        - node ns_grade_s.js loop [jeda]     -> Scheduler harian (habiskan energi 1-4 lalu standby tunggu refill)
+ *   1. Menggunakan protokol resmi server `SLevelMission`:
+ *        - `SLevelMission.getBattleStatus` (cek energi & timer refill server real)
+ *        - `SLevelMission.startMission`    (dapat `slf` / `sln` + potong energi sesuai stage)
+ *        - `SLevelMission.finishMission`   (klaim XP, Gold, & hasil roda SPIN Grade S Mission Reward)
+ *      Biaya energi per stage (dari Panel_80level_mission_map.swf):
+ *        - Stage 1 (msn274, Req Lv 80) : XP 82.700  | Gold 5.000 | -10 Energi
+ *        - Stage 2 (msn275, Req Lv 81) : XP 88.600  | Gold 5.300 | -12 Energi
+ *        - Stage 3 (msn276, Req Lv 82) : XP 92.580  | Gold 5.500 | -14 Energi
+ *        - Stage 4 (msn277, Req Lv 83) : XP 95.430  | Gold 5.600 | -16 Energi
+ *        - Stage 5 (msn278, Req Lv 84) : XP 100.000 | Gold 5.900 | -25 Energi
+ *   2. Mencatat history per misi & hasil SPIN roda hadiah (Ramen, Ramen x3, 5000 Gold, 10 Token,
+ *      Gan of Fire God, Gan of Steel) ke console dan `logs/grade_s_history.jsonl`.
+ *   3. Counter Token (per match, sesi, loop, hari ini, total) + log khusus `logs/grade_s_tokens.log`.
+ *   4. Mode CLI:
+ *        - node ns_grade_s.js 1-4 [jeda]           -> Rotasi Stage 1-4 sampai energi habis
+ *        - node ns_grade_s.js 1 [jeda]             -> Fokus Stage 1 (atau 1..5) sampai energi habis
+ *        - node ns_grade_s.js loop [jeda]          -> Scheduler harian (rotasi 1-4, tunggu refill, lanjut)
+ *        - node ns_grade_s.js spam <1-5> [jeda]    -> Ulang 1 stage terus-menerus + tunggu refill
+ *        - node ns_grade_s.js history [limit] [--all] -> Lihat history misi & counter token tersimpan
  */
 'use strict';
 
@@ -28,18 +30,30 @@ const fs = require('fs');
 const path = require('path');
 const c = require('./nsclient.js');
 const k = require('./ns_crypto.js');
-const { ucEncode } = require('./nscrypt.js');
+const {
+    ITEM_NAMES,
+    formatItemName,
+    parseSGradeFinishReward,
+    parseMissionRewards,
+    appendMissionHistory,
+    readMissionHistory,
+    formatSessionHistoryLines
+} = require('./lib/ns_mission_history.js');
 
 const LOGS_DIR = path.join(__dirname, 'logs');
 const TOKEN_LOG_FILE = path.join(LOGS_DIR, 'grade_s_tokens.log');
+const HISTORY_LOG_FILE = path.join(LOGS_DIR, 'grade_s_history.jsonl');
+
+// Server SLevelMission.finishMission menolak battle < ~10.5 detik ("Mission completed too quickly")
+const MIN_BATTLE_WAIT_MS = 11000;
+const MAX_ENERGY_DEFAULT = 75;
 
 const line = s => console.log('[' + new Date().toTimeString().slice(0, 8) + '] ' + s);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-const now = () => Math.floor(Date.now() / 1000);
 
 function kv(s) {
     let o = '';
-    for (const ch of String(s)) {
+    for (const ch of String(s || '')) {
         const i = 'GhKmNpRtVwYzJqSx'.indexOf(ch);
         o += i < 0 ? ch : '0123456789abcdef'.charAt(i);
     }
@@ -47,110 +61,163 @@ function kv(s) {
 }
 
 const STAGES = [
-    { num: 1, id: 'msn274', mid: 'msn274', reqLv: 80, staminaCost: 12, xp: 82700, gold: 5000, name: 'Misi 1 (Stage 1)' },
-    { num: 2, id: 'msn275', mid: 'msn275', reqLv: 81, staminaCost: 12, xp: 88600, gold: 5300, name: 'Misi 2 (Stage 2 - Story Genin)' },
-    { num: 3, id: 'msn276', mid: 'msn276', reqLv: 82, staminaCost: 12, xp: 92580, gold: 5500, name: 'Misi 3 (Stage 3)' },
-    { num: 4, id: 'msn277', mid: 'msn277', reqLv: 83, staminaCost: 12, xp: 95430, gold: 5600, name: 'Misi 4 (Stage 4)' },
-    { num: 5, id: 'msn278', mid: 'msn278', reqLv: 84, staminaCost: 12, xp: 100000, gold: 5900, name: 'Stage 5 (Bonus)' }
+    { num: 1, id: 'msn274', mid: 'msn274', reqLv: 80, staminaCost: 10, energyCost: 10, xp: 82700, gold: 5000, name: 'Misi 1 (Stage 1)' },
+    { num: 2, id: 'msn275', mid: 'msn275', reqLv: 81, staminaCost: 12, energyCost: 12, xp: 88600, gold: 5300, name: 'Misi 2 (Stage 2 - Story Genin)' },
+    { num: 3, id: 'msn276', mid: 'msn276', reqLv: 82, staminaCost: 14, energyCost: 14, xp: 92580, gold: 5500, name: 'Misi 3 (Stage 3)' },
+    { num: 4, id: 'msn277', mid: 'msn277', reqLv: 83, staminaCost: 16, energyCost: 16, xp: 95430, gold: 5600, name: 'Misi 4 (Stage 4)' },
+    { num: 5, id: 'msn278', mid: 'msn278', reqLv: 84, staminaCost: 25, energyCost: 25, xp: 100000, gold: 5900, name: 'Stage 5 (Bonus)' }
 ];
 
-const ITEM_NAMES = {
-    'item509': 'Hunting Passport',
-    'item1026': 'Crystal of Kari',
-    'item1027': 'Heart of Kari',
-    'ramen': 'Ramen (+Energi)',
-    'ramen_3': 'Ramen x3 (+Energi)',
-    'fire_magatama': 'Fire Magatama (火)',
-    'steel_magatama': 'Steel Magatama (鋼)',
-    'hp_potion': 'HP Healing Potion'
-};
-
-function formatItemName(raw) {
-    const s = String(raw || '').trim();
-    if (ITEM_NAMES[s]) return ITEM_NAMES[s];
-    if (ITEM_NAMES[s.toLowerCase()]) return ITEM_NAMES[s.toLowerCase()];
-    if (/token/i.test(s)) return '★ 10 Saga Tokens';
-    if (/ramen/i.test(s)) return 'Ramen (+Energi)';
-    if (/magatama/i.test(s)) return 'Magatama Material';
-    if (/potion/i.test(s)) return 'Healing Potion';
-    return s;
+function parseRewardItems(ub, opts) {
+    return parseMissionRewards(ub, opts);
 }
 
-function parseRewardItems(ub) {
-    const inv = (ub && ub.update_inventory) || {};
-    const raw = inv.reward_items || ub.reward_items || ub.reward_get || ub.reward || ub.prize;
-    const items = [];
-    let tokenGained = 0;
-
-    if (Array.isArray(raw)) {
-        for (const it of raw) {
-            const itStr = String(it || '').trim();
-            if (!itStr) continue;
-            if (/token/i.test(itStr) || itStr === '10' || itStr === 'token_10') {
-                tokenGained += 10;
-                items.push('10 Token');
-            } else {
-                items.push(formatItemName(itStr));
-            }
-        }
-    } else if (raw && typeof raw === 'object') {
-        for (const [k, v] of Object.entries(raw)) {
-            const s = `${k}:${v}`;
-            if (/token/i.test(k) || /token/i.test(String(v))) {
-                tokenGained += 10;
-                items.push('10 Token');
-            } else {
-                items.push(formatItemName(s));
-            }
-        }
-    } else if (typeof raw === 'string' && raw.trim()) {
-        const parts = raw.split(/[,;|]/);
-        for (const p of parts) {
-            const tr = p.trim();
-            if (!tr) continue;
-            if (/token/i.test(tr)) {
-                tokenGained += 10;
-                items.push('10 Token');
-            } else {
-                items.push(formatItemName(tr));
-            }
-        }
-    }
-
-    if (inv.tokens !== undefined && Number(inv.tokens) > 0) {
-        tokenGained += Number(inv.tokens);
-        items.push(`${inv.tokens} Token`);
-    }
-
-    return { items, tokenGained };
-}
-
-function logTokenReward(user, charName, charId, stageName, tokenCount, beforeToken, afterToken) {
-    if (!fs.existsSync(LOGS_DIR)) {
-        try { fs.mkdirSync(LOGS_DIR, { recursive: true }); } catch (_) {}
+function logTokenReward(user, charName, charId, stageName, tokenCount, beforeToken, afterToken, note = '', tokenLogFile = TOKEN_LOG_FILE) {
+    const dir = path.dirname(tokenLogFile);
+    if (!fs.existsSync(dir)) {
+        try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {}
     }
     const timeStr = new Date().toISOString();
-    const logText = `[${timeStr}] Akun: ${user} | Karakter: ${charName} (ID: ${charId}) | Misi: ${stageName} | DAPAT ${tokenCount} TOKEN! | Saldo: ${beforeToken} -> ${afterToken}\n`;
+    const extra = note ? ` | ${note}` : '';
+    const logText = `[${timeStr}] Akun: ${user} | Karakter: ${charName} (ID: ${charId}) | Misi: ${stageName} | DAPAT ${tokenCount} TOKEN! | Saldo: ${beforeToken} -> ${afterToken}${extra}\n`;
     try {
-        fs.appendFileSync(TOKEN_LOG_FILE, logText, 'utf8');
+        fs.appendFileSync(tokenLogFile, logText, 'utf8');
     } catch (_) {}
+}
+
+function formatItemCounterSummary(itemCounts) {
+    const entries = Object.entries(itemCounts || {}).filter(([, qty]) => qty > 0);
+    if (!entries.length) return 'Tidak ada item/drop tambahan';
+    entries.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    return entries.map(([name, qty]) => `${name} x${qty}`).join(', ');
+}
+
+function formatSec(sec) {
+    const s = Math.max(0, Math.floor(Number(sec) || 0));
+    const m = Math.floor(s / 60);
+    const rem = s % 60;
+    return m > 0 ? `${m}m ${rem}s` : `${rem}s`;
+}
+
+function printHistoryReport(options = {}) {
+    const showAll = Boolean(options.all);
+    const limit = Math.max(1, parseInt(options.limit, 10) || 30);
+    const historyFile = options.historyFile || HISTORY_LOG_FILE;
+    const filterAccount = showAll ? '' : (options.account || process.env.NS_USER || '');
+    const filterCharId = showAll ? '' : (options.charId || process.env.NS_CHAR_ID || '');
+
+    const summary = readMissionHistory(historyFile, {
+        account: filterAccount,
+        charId: filterCharId,
+        limit
+    });
+
+    console.log('\n======================================================================');
+    console.log('             HISTORY & COUNTER TOKEN MISI GRADE S');
+    console.log('======================================================================');
+    console.log(` File Log   : ${historyFile}`);
+    if (filterAccount || filterCharId) {
+        console.log(` Filter     : Akun=${filterAccount || '*'} | CharID=${filterCharId || '*'} (pakai --all untuk semua akun)`);
+    } else {
+        console.log(' Filter     : Semua akun & karakter');
+    }
+    console.log('----------------------------------------------------------------------');
+    console.log(` Total Misi Selesai : ${summary.totals.missions}x`);
+    console.log(` Total XP           : +${summary.totals.xp.toLocaleString()}`);
+    console.log(` Total Gold         : +${summary.totals.gold.toLocaleString()}`);
+    console.log(` Counter Token Total: +${summary.totals.tokens} Token (${summary.totals.tokenMatches}x match dapat token)`);
+    console.log(` Hari Ini (${summary.todayDate}): ${summary.today.missions}x misi | +${summary.today.tokens} Token (${summary.today.tokenMatches}x match)`);
+    console.log(` Rekap Item Spin    : ${formatItemCounterSummary(summary.totals.itemTotals)}`);
+
+    const byMissionList = Object.values(summary.totals.byMission);
+    if (byMissionList.length) {
+        console.log('----------------------------------------------------------------------');
+        console.log(' Rekap Per Misi:');
+        for (const m of byMissionList) {
+            console.log(
+                `   - ${(m.missionName || m.missionId).padEnd(30)}: ${String(m.count).padStart(3)}x | Token: +${String(m.tokens).padEnd(4)} (${m.tokenMatches}x) | XP: +${m.xp.toLocaleString()}`
+            );
+        }
+    }
+
+    console.log('----------------------------------------------------------------------');
+    if (!summary.recent.length) {
+        console.log(' Belum ada riwayat misi Grade S yang tercatat.');
+    } else {
+        console.log(` ${summary.recent.length} Riwayat Misi Terakhir:`);
+        for (const e of summary.recent) {
+            const dt = e.timestamp ? new Date(e.timestamp) : null;
+            const timeLabel = dt && !isNaN(dt.getTime())
+                ? `${e.date || dt.toISOString().slice(0, 10)} ${dt.toTimeString().slice(0, 8)}`
+                : '-';
+            const who = e.charName ? `${e.account || '-'}/${e.charName}` : (e.account || '-');
+            const tokStr = e.tokens > 0 ? `+${e.tokens} Token ★` : '-';
+            const spinStr = (e.spinReward && e.spinReward !== '-')
+                ? e.spinReward
+                : (e.spinRewardRaw === 'item1' ? 'Tidak Roll (item1)' : '-');
+            const drops = Array.isArray(e.extraItems) && e.extraItems.length
+                ? e.extraItems
+                : (Array.isArray(e.items) ? e.items.filter(x => !/^\d+\s*Token$/i.test(x) && x !== e.spinReward) : []);
+            const dropStr = drops.length ? ` | Drop: ${drops.map(formatItemName).join(', ')}` : '';
+            console.log(
+                `   [${timeLabel}] (${who}) ${(e.missionName || e.missionId)} -> XP +${Number(e.xp || 0).toLocaleString()} | Gold +${Number(e.gold || 0).toLocaleString()} | Token: ${tokStr} | Spin: ${spinStr}${dropStr}`
+            );
+        }
+    }
+    console.log('======================================================================\n');
+    return summary;
 }
 
 const args = process.argv.slice(2);
 const rawTarget = (args[0] || '1-4').toLowerCase();
+const isHistoryMode = rawTarget === 'history' || rawTarget === '--history' || rawTarget === 'riwayat' || rawTarget === 'log';
 const isLoopMode = rawTarget === 'loop' || rawTarget === '--loop' || args.includes('--loop');
 const isSpamMode = rawTarget === 'spam' || rawTarget === '--spam';
 const isMapMode = rawTarget === 'all' || rawTarget === '1-4' || rawTarget === 'map' || rawTarget === 'rotation' || isLoopMode;
 let singleStageNum = 0;
-if (!isMapMode && !isSpamMode && rawTarget !== 'auto') {
+if (!isMapMode && !isSpamMode && !isHistoryMode && rawTarget !== 'auto') {
     singleStageNum = parseInt(rawTarget, 10) || 0;
 }
 const spamStageNum = isSpamMode ? parseInt(args[1], 10) || 0 : 0;
-const jedaSec = Math.max(2, parseFloat(args[isSpamMode ? 2 : 1]) || 3);
+const jedaSec = Math.max(11, parseFloat(args[isSpamMode ? 2 : 1]) || 11);
 const maxBattles = parseInt(args[isSpamMode ? 3 : 2], 10) || 0;
+
+function createLoopTracker() {
+    return {
+        cycles: 0,
+        battles: 0,
+        totalXp: 0,
+        totalGold: 0,
+        totalTokensWon: 0,
+        tokenMatchCount: 0,
+        itemCounts: {},
+        history: []
+    };
+}
+
+async function fetchSLevelBattleStatus(sessionKey) {
+    const res = await c.amf('SLevelMission.getBattleStatus', [sessionKey]);
+    const b = (res && res.body) || {};
+    if (Number(b.status) !== 1) {
+        return { ok: false, error: b.error || (res && res.netError) || JSON.stringify(b).slice(0, 140), raw: b };
+    }
+    const r = b.result || {};
+    return {
+        ok: true,
+        remainEnergy: b.remain_energy !== undefined ? Number(b.remain_energy) : MAX_ENERGY_DEFAULT,
+        refillRemainSec: Number(b.energy_refill_remain || 0),
+        chapterStatus: Number(r.chapter_status || 1),
+        missionStatus: Number(r.mission_status || 0),
+        raw: b
+    };
+}
 
 async function runGradeSSession(opts = {}) {
     const shared = opts.shared || null;
+    const tracker = opts.tracker || null;
+    const historyFile = opts.historyFile || HISTORY_LOG_FILE;
+    const tokenLogFile = opts.tokenLogFile || TOKEN_LOG_FILE;
+    const minWaitMs = opts.minWaitMs !== undefined ? Math.max(0, Number(opts.minWaitMs)) : MIN_BATTLE_WAIT_MS;
     const localTarget = String(opts.target || rawTarget).toLowerCase();
     const localIsLoopMode = localTarget === 'loop' || localTarget === '--loop' || args.includes('--loop');
     const localIsMapMode = localTarget === 'all' || localTarget === '1-4' || localTarget === 'map' || localTarget === 'rotation' || localIsLoopMode;
@@ -158,14 +225,16 @@ async function runGradeSSession(opts = {}) {
     if (!localIsMapMode && localTarget !== 'auto') {
         localSingleStageNum = parseInt(localTarget, 10) || 0;
     }
-    const localJedaSec = Math.max(2, parseFloat(opts.jeda !== undefined ? opts.jeda : jedaSec) || 3);
+    const requestedJeda = parseFloat(opts.jeda !== undefined ? opts.jeda : jedaSec);
+    const waitMs = Math.max(minWaitMs, Math.round((Number.isFinite(requestedJeda) ? requestedJeda : 11) * 1000));
+    const waitSecLabel = (waitMs / 1000).toFixed(1).replace(/\.0$/, '');
     const localMaxBattles = parseInt(opts.maxBattles !== undefined ? opts.maxBattles : maxBattles, 10) || 0;
 
     const user = (shared && shared.user) || process.env.NS_USER;
     const pass = (shared && shared.pass) || process.env.NS_PASS;
     if (!user || !pass) {
         console.log('[!] Diperlukan NS_USER dan NS_PASS di environment.');
-        return { exitCode: 1, battles: 0, totalTokensWon: 0, curStamina: 0 };
+        return { exitCode: 1, battles: 0, totalTokensWon: 0, tokenMatchCount: 0, curStamina: 0, curEnergy: 0 };
     }
 
     let s = (shared && shared.s) || null;
@@ -178,13 +247,14 @@ async function runGradeSSession(opts = {}) {
         s = await c.login(user, pass);
         if (!s.ok) {
             line('LOGIN GAGAL: ' + s.stage + ' (' + (s.message || s.body || 'status ' + s.http) + ')');
-            return { exitCode: 2, battles: 0, totalTokensWon: 0, curStamina: 0 };
+            return { exitCode: 2, battles: 0, totalTokensWon: 0, tokenMatchCount: 0, curStamina: 0, curEnergy: 0 };
         }
         h = k.mk(s.sessionKey);
     }
     if (!h) h = k.mk(s.sessionKey);
 
     let initialTokens = Number(s.tokens !== undefined ? s.tokens : (s.raw && s.raw.result && s.raw.result[2]) || 0);
+    const isEmblem = Boolean(s.isEmblem || Number(s.accountType) === 2);
 
     if (!charId || !charRow) {
         const rl = await c.amf('CharacterDAO.getCharactersList', [s.sessionKey]);
@@ -192,7 +262,7 @@ async function runGradeSSession(opts = {}) {
         charRow = c.getSelectedChar(chars, process.env.NS_CHAR_ID || process.env.NS_CHAR_SLOT);
         if (!charRow) {
             line('ERROR: Tidak ada karakter ditemukan.');
-            return { exitCode: 3, battles: 0, totalTokensWon: 0, curStamina: 0 };
+            return { exitCode: 3, battles: 0, totalTokensWon: 0, tokenMatchCount: 0, curStamina: 0, curEnergy: 0 };
         }
         charId = charRow[0];
     }
@@ -208,7 +278,7 @@ async function runGradeSSession(opts = {}) {
         });
         if (!chRes.ok || !chRes.result) {
             line('ERROR: Gagal membaca data karakter: ' + (chRes.error || 'server cooldown'));
-            return { exitCode: 4, battles: 0, totalTokensWon: 0, curStamina: 0 };
+            return { exitCode: 4, battles: 0, totalTokensWon: 0, tokenMatchCount: 0, curStamina: 0, curEnergy: 0 };
         }
         if (chRes.session && chRes.session.sessionKey && chRes.session.sessionKey !== s.sessionKey) {
             s = chRes.session;
@@ -223,93 +293,112 @@ async function runGradeSSession(opts = {}) {
     let curXp = Number(charObj.character_xp) || 0;
     let curGold = Number(charObj.character_gold) || 0;
 
-    // Ambil kunci tanda tangan extraData
-    let extraKeys = null;
-    let extraTokens = 0;
+    // Ambil kunci tanda tangan extraData (slx & xmas2014SpecailReward untuk SLevelMission.finishMission)
     let ex = (shared && shared.ex) || null;
     if (!ex) {
         const exRes = await c.getExtraDataWithRetry(s.sessionKey, charId, s.token, gk, 3);
         if (exRes.ok && exRes.result) ex = exRes.result;
     }
-    if (ex) {
-        if (ex.totalToken !== undefined) extraTokens = Number(ex.totalToken);
-        if (ex.isGraphic && ex.statistic_battle && ex.m7v && ex.q7t) {
-            const kq0 = kv(String(ex.isGraphic)), kq1 = kv(String(ex.statistic_battle));
-            const dvx = String(ex.m7v), egv = String(ex.q7t);
-            const cfn = ex.csf != null ? String(ex.csf) : '';
-            const pet = Array.isArray(ex.player_pet) && ex.player_pet.length ? ex.player_pet[0] : null;
-            if (kq0 && kq1 && dvx && egv) {
-                extraKeys = { kq0, kq1, dvx, egv, cfn, pet };
-            }
-        }
+
+    const extractSLevelKeys = (extraObj) => {
+        if (!extraObj) return null;
+        const slv = String(extraObj.slx || '');
+        const gk5 = kv(String(extraObj.xmas2014SpecailReward || ''));
+        if (!slv || !gk5) return null;
+        return { slv, gk5 };
+    };
+
+    let sLevelKeys = extractSLevelKeys(ex);
+    if (!sLevelKeys) {
+        line('ERROR: Kunci Grade S (slx / xmas2014SpecailReward) tidak ditemukan di extraData server.');
+        return { exitCode: 5, battles: 0, totalTokensWon: 0, tokenMatchCount: 0, curStamina: 0, curEnergy: 0 };
     }
 
-    if (!extraKeys) {
-        line('ERROR: Gagal memperoleh kunci tanda tangan extraData dari server.');
-        return { exitCode: 5, battles: 0, totalTokensWon: 0, curStamina: 0 };
+    if (!initialTokens && ex && ex.totalToken !== undefined) {
+        initialTokens = Number(ex.totalToken);
+    }
+    let curTokens = initialTokens;
+
+    // Cek status energi real Grade S dari server
+    const battleStatus = await fetchSLevelBattleStatus(s.sessionKey);
+    if (!battleStatus.ok) {
+        line('ERROR: Gagal membaca SLevelMission.getBattleStatus: ' + battleStatus.error);
+        return { exitCode: 6, battles: 0, totalTokensWon: 0, tokenMatchCount: 0, curStamina: 0, curEnergy: 0 };
     }
 
-    if (!initialTokens && extraTokens) initialTokens = extraTokens;
+    let curEnergy = battleStatus.remainEnergy;
+    let refillRemainSec = battleStatus.refillRemainSec;
+    const chapterStatus = battleStatus.chapterStatus;
+    const missionStatus = battleStatus.missionStatus;
 
-    let curStamina = (charObj.character_stamina !== undefined && charObj.character_stamina !== null)
-        ? Number(charObj.character_stamina) : 75;
+    const priorStats = readMissionHistory(historyFile, { account: user, charId, limit: 1 });
 
     console.log('\n======================================================================');
-    console.log('       MISI GRADE S (MAP 1 s/d 4) - AUTO ENERGY & REWARD RUNNER');
+    console.log('       MISI GRADE S (SLevelMission + SPIN REWARD) - AUTO RUNNER');
     console.log('                     cc: MagnetScript(Razki)');
     console.log('======================================================================');
-    console.log(` Akun         : ${user}`);
+    console.log(` Akun         : ${user} (${isEmblem ? 'Emblem' : 'Free'})`);
     console.log(` Karakter     : ${charName} (ID: ${charId})`);
     console.log(` Level        : Lv ${curLevel} | Gold: ${curGold.toLocaleString()} | XP: ${curXp.toLocaleString()}`);
-    console.log(` Saldo Token  : ${initialTokens} Tokens | Token Sesi: +0`);
-    console.log(` Energi/Stam  : ${curStamina} / 75 (Biaya: 12 energi per battle)`);
+    console.log(` Saldo Token  : ${initialTokens} Tokens | Token Sesi: +0 (0x match)`);
+    console.log(` History Char : ${priorStats.totals.missions}x misi tercatat | Total Token: +${priorStats.totals.tokens} (${priorStats.totals.tokenMatches}x)`);
+    console.log(` Energi Rank S: ${curEnergy} / ${MAX_ENERGY_DEFAULT}${refillRemainSec > 0 ? ` (Refill +1 dalam ${formatSec(refillRemainSec)})` : ' (Penuh)'}`);
     console.log('======================================================================\n');
 
     if (curLevel < 80) {
         line(`[!] Karakter "${charName}" masih Level ${curLevel}.`);
         line('    Misi Grade S membutuhkan minimal Level 80.');
-        return { exitCode: 0, battles: 0, totalTokensWon: 0, curStamina };
+        return { exitCode: 0, battles: 0, totalTokensWon: 0, tokenMatchCount: 0, curStamina: curEnergy, curEnergy, refillRemainSec, isEmblem };
     }
 
-    // Tentukan daftar stage yang akan dimainkan
+    const isStageUnlocked = (st) => {
+        if (st.num === 1) return true;
+        if (chapterStatus > 1) return true;
+        return missionStatus >= (st.num - 1);
+    };
+
     let stageQueue = [];
     let modeLabel = '';
 
     if (localIsMapMode) {
-        // Mode Misi 1-4 (Map Story): Rotasi msn274, msn275, msn276, msn277
-        stageQueue = STAGES.slice(0, 4).filter(st => curLevel >= st.reqLv);
-        modeLabel = `Rotasi Misi 1 s/d ${stageQueue.length} (Map Story)`;
+        stageQueue = STAGES.slice(0, 4).filter(st => curLevel >= st.reqLv && isStageUnlocked(st));
+        if (!stageQueue.length) stageQueue = [STAGES[0]];
+        modeLabel = `Rotasi Stage 1 s/d ${stageQueue.length}`;
         line(`Mode Target   : ${modeLabel}`);
-        line(`Daftar Misi   : ` + stageQueue.map(s => `${s.name} [${s.id}]`).join(', '));
+        line('Daftar Misi   : ' + stageQueue.map(st => `${st.name} [${st.id}, -${st.energyCost}E]`).join(', '));
     } else if (localSingleStageNum >= 1 && localSingleStageNum <= 5) {
         const picked = STAGES[localSingleStageNum - 1];
         if (curLevel < picked.reqLv) {
             line(`[!] Level tidak cukup untuk ${picked.name} (Butuh Lv ${picked.reqLv}, Level saat ini: ${curLevel}).`);
-            return { exitCode: 0, battles: 0, totalTokensWon: 0, curStamina };
+            return { exitCode: 0, battles: 0, totalTokensWon: 0, tokenMatchCount: 0, curStamina: curEnergy, curEnergy, refillRemainSec, isEmblem };
+        }
+        if (!isStageUnlocked(picked)) {
+            line(`[!] ${picked.name} belum terbuka (chapter_status=${chapterStatus}, mission_status=${missionStatus}).`);
+            return { exitCode: 0, battles: 0, totalTokensWon: 0, tokenMatchCount: 0, curStamina: curEnergy, curEnergy, refillRemainSec, isEmblem };
         }
         stageQueue = [picked];
-        modeLabel = `Fokus ${picked.name} [${picked.id}] Saja`;
+        modeLabel = `Fokus ${picked.name} [${picked.id}, -${picked.energyCost} Energi]`;
         line(`Mode Target   : ${modeLabel}`);
     } else {
-        // Auto stage tertinggi
-        const available = STAGES.filter(st => curLevel >= st.reqLv);
-        const topStage = available[available.length - 1];
+        const available = STAGES.filter(st => curLevel >= st.reqLv && isStageUnlocked(st));
+        const topStage = available[available.length - 1] || STAGES[0];
         stageQueue = [topStage];
-        modeLabel = `Auto Stage Tertinggi (${topStage.name})`;
+        modeLabel = `Auto Stage Tertinggi (${topStage.name}, -${topStage.energyCost} Energi)`;
         line(`Mode Target   : ${modeLabel}`);
     }
 
-    line(`Jeda Battle   : ${localJedaSec} detik | Auto Collect Prize: YA`);
-    line(`Tips: Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti dan kembali ke menu.\n`);
+    line(`Jeda Battle   : ${waitSecLabel} detik (syarat minimal server >= 10.5s) | Log: ${path.relative(__dirname, historyFile)}`);
+    line('Tips: Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti dan kembali ke menu.\n');
 
-    const { kq0, kq1, dvx, egv, pet } = extraKeys;
     let battleSuccess = 0;
     let totalXpGained = 0;
     let totalGoldGained = 0;
     let totalTokensWon = 0;
+    let tokenMatchCount = 0;
     let hadError = false;
     const stageBattleCounts = {};
-    const collectedItemsAll = [];
+    const collectedItemCounts = {};
+    const sessionHistory = [];
 
     let stageCursor = 0;
     let roundNumber = 1;
@@ -321,126 +410,218 @@ async function runGradeSSession(opts = {}) {
         }
 
         const curStage = stageQueue[stageCursor];
-        if (curStamina < curStage.staminaCost) {
-            line(`[i] Stamina lokal ${curStamina}/75, kurang dari biaya ${curStage.staminaCost}. Sesi dihentikan; mode spam akan menunggu refill.`);
+        if (curEnergy < curStage.energyCost) {
+            // Pada mode rotasi 1-4, cek apakah masih ada stage berbiaya lebih kecil yang cukup energinya
+            if (localIsMapMode && stageQueue.some(st => curEnergy >= st.energyCost)) {
+                stageCursor = (stageCursor + 1) % stageQueue.length;
+                continue;
+            }
+            line(`[i] Energi Grade S tersisa ${curEnergy}/${MAX_ENERGY_DEFAULT}, kurang dari biaya ${curStage.energyCost} untuk ${curStage.name}.`);
             break;
         }
+
         const mid = curStage.mid;
-        const t0 = now();
+        line(`>>> [Putaran #${roundNumber}] Memulai ${curStage.name} [${mid}] (Energi: ${curEnergy} -> ${curEnergy - curStage.energyCost})...`);
 
-        line(`>>> [Putaran #${roundNumber}] Memulai ${curStage.name} [${mid}] (Biaya: 12 Energi)...`);
-
-        // Update server 20 Nov 2026: CharacterService.startMission dihapus;
-        // cfn awal diambil dari extraData.csf, sbid dibuat lokal, lalu dirotasi dari ub.csf.
-        const sbid = String(1 + Math.floor(Math.random() * 2000000000));
-        const cfn = extraKeys.cfn || '';
-        line(`    Simulasi pertarungan (${localJedaSec}s, Battle ID: ${sbid})...`);
-
-        await sleep(localJedaSec * 1000);
-
-        // updateCharacter (Collect Prize & Rewards)
-        const bfl = JSON.stringify({ battles: [] });
-        const arr = [s.sessionKey, charId, curLevel, 0, 0, [], pet ? pet.id : 0, pet ? pet.level : 0, mid, 0, ''];
-        const upd = await c.amf('CharacterService.updateCharacter', [
-            s.sessionKey, charId, curLevel, 0, 0, [],
-            pet ? pet.id : 0, pet ? pet.level : 0, mid,
-            h.getArrayHash(arr), h.updateSequence(), 0, '',
-            '1', h.urk(kq1 + '|' + cfn), sbid, bfl, h.getHash('1' + sbid + bfl),
-            ucEncode(charId + '|0|0|' + mid + '|' + sbid), h.urk(egv + '|' + cfn)
-        ]);
-
-        const ub = upd.body || {};
-        if (ub.csf != null) {
-            extraKeys.cfn = String(ub.csf);
-            if (shared && shared.ex) shared.ex.csf = extraKeys.cfn;
-        }
-        if (Number(ub.status) === 1) {
-            battleSuccess++;
-            stageBattleCounts[curStage.name] = (stageBattleCounts[curStage.name] || 0) + 1;
-
-            const inv = ub.update_inventory || {};
-            let matchGold = curStage.gold;
-            if (inv.gold && Number(inv.gold) > curGold) {
-                matchGold = Number(inv.gold) - curGold;
-                curGold = Number(inv.gold);
-            } else {
-                curGold += curStage.gold;
+        // 1. SLevelMission.startMission
+        const stRes = await c.amf('SLevelMission.startMission', [s.sessionKey, mid, h.getHash(mid)]);
+        const sb = (stRes && stRes.body) || {};
+        if (Number(sb.status) !== 1 || !sb.slf) {
+            const errTxt = JSON.stringify(sb).slice(0, 180);
+            if (/energy|not enough/i.test(errTxt)) {
+                line(`[i] Server menyatakan energi tidak cukup untuk ${curStage.name}: ${errTxt}`);
+                break;
             }
-
-            let matchXp = curStage.xp;
-            if (inv.xp && Number(inv.xp) > curXp) {
-                matchXp = Number(inv.xp) - curXp;
-                curXp = Number(inv.xp);
-            } else {
-                curXp += curStage.xp;
-            }
-
-            totalGoldGained += matchGold;
-            totalXpGained += matchXp;
-            curStamina = Math.max(0, curStamina - curStage.staminaCost);
-
-            // Parsing item drop & token reward
-            const parsed = parseRewardItems(ub);
-            if (parsed.items.length) {
-                collectedItemsAll.push(...parsed.items);
-            }
-
-            // CEK HADIAH 10 TOKEN
-            let wonTokenThisMatch = false;
-            if (parsed.tokenGained > 0) {
-                wonTokenThisMatch = true;
-                totalTokensWon += parsed.tokenGained;
-            } else if (JSON.stringify(ub).toLowerCase().includes('token')) {
-                wonTokenThisMatch = true;
-                totalTokensWon += 10;
-            }
-
-            line(`  [DONE] #${battleSuccess} | ${curStage.name}`);
-            line(`         XP +${matchXp.toLocaleString()} | Gold +${matchGold.toLocaleString()} | Energy ~${curStamina}/75 | Token Session +${totalTokensWon}`);
-            if (parsed.items.length) {
-                line(`         Drop: ${parsed.items.join(', ')}`);
-            }
-
-            // LAPORAN SPESIAL JIKA MENDAPATKAN 10 TOKEN
-            if (wonTokenThisMatch) {
-                console.log('\n**********************************************************************');
-                console.log(' [TOKEN REWARD] SAGA TOKEN MASUK SETELAH MATCH');
-                console.log(`     Karakter : ${charName} (ID: ${charId})`);
-                console.log(`     Misi     : ${curStage.name} [ID: ${mid}]`);
-                console.log(`     Hadiah   : +${parsed.tokenGained || 10} Saga Token Berhasil Masuk!`);
-                console.log(`     Counter Sesi Token: +${totalTokensWon} Token`);
-                console.log('**********************************************************************\n');
-                logTokenReward(user, charName, charId, curStage.name, parsed.tokenGained || 10, initialTokens, initialTokens + totalTokensWon);
-            }
-
-            // Geser rotasi ke stage berikutnya jika mode 1-4
-            stageCursor++;
-            if (stageCursor >= stageQueue.length) {
-                stageCursor = 0;
-                roundNumber++;
-            }
-        } else {
             hadError = true;
-            line(`  ✗ Gagal update reward battle: ${JSON.stringify(ub).slice(0, 160)}`);
+            line(`  ✗ Gagal SLevelMission.startMission: ${errTxt}`);
             break;
+        }
+
+        const sln = String(sb.slf);
+        curEnergy = Math.max(0, curEnergy - curStage.energyCost);
+        line(`    Simulasi pertarungan (${waitSecLabel}s, Battle ID: ${sb.startBattleId || '-'})...`);
+
+        await sleep(waitMs);
+
+        // 2. SLevelMission.finishMission
+        const battleLog = k.srk(sLevelKeys.gk5, sln);
+        const finHash = h.getHash(mid + '0');
+        const finSig = k.srk(sLevelKeys.slv, sln);
+
+        const finRes = await c.amf('SLevelMission.finishMission', [
+            s.sessionKey, mid, battleLog, [], 0, finHash, finSig
+        ]);
+        const fb = (finRes && finRes.body) || {};
+
+        if (Number(fb.status) !== 1) {
+            hadError = true;
+            line(`  ✗ Gagal SLevelMission.finishMission: ${JSON.stringify(fb).slice(0, 180)}`);
+            break;
+        }
+
+        battleSuccess++;
+        stageBattleCounts[curStage.name] = (stageBattleCounts[curStage.name] || 0) + 1;
+
+        const parsed = parseSGradeFinishReward(fb, {
+            prevTokenBalance: curTokens,
+            baseXp: curStage.xp,
+            baseGold: curStage.gold
+        });
+
+        let matchXp = curStage.xp;
+        if (parsed.invXp !== null) {
+            matchXp = Math.max(0, parsed.invXp - curXp);
+            curXp = parsed.invXp;
+        } else if (parsed.addItemXp !== null) {
+            matchXp = parsed.addItemXp;
+            curXp += matchXp;
+        } else {
+            curXp += matchXp;
+        }
+
+        let matchGold = (parsed.addItemGold !== null ? parsed.addItemGold : curStage.gold) + (parsed.spinGold || 0);
+        if (parsed.invGold !== null && parsed.invGold > curGold) {
+            matchGold = parsed.invGold - curGold;
+            curGold = parsed.invGold;
+        } else {
+            curGold += matchGold;
+        }
+
+        const prevTokenBal = curTokens;
+        if (parsed.newTokenBalance !== null) {
+            curTokens = parsed.newTokenBalance;
+        } else {
+            curTokens += parsed.tokenGained;
+        }
+
+        const matchTokens = parsed.tokenGained;
+        if (matchTokens > 0) {
+            tokenMatchCount++;
+            totalTokensWon += matchTokens;
+        }
+
+        totalXpGained += matchXp;
+        totalGoldGained += matchGold;
+
+        for (const [itemName, qty] of Object.entries(parsed.itemCounts)) {
+            collectedItemCounts[itemName] = (collectedItemCounts[itemName] || 0) + qty;
+            if (tracker) {
+                tracker.itemCounts[itemName] = (tracker.itemCounts[itemName] || 0) + qty;
+            }
+        }
+
+        const historyRecord = appendMissionHistory(historyFile, {
+            source: 'ns_grade_s',
+            account: user,
+            charId: String(charId),
+            charName,
+            level: curLevel,
+            missionId: mid,
+            missionName: curStage.name,
+            battleNo: battleSuccess,
+            xp: matchXp,
+            gold: matchGold,
+            tokens: matchTokens,
+            spinReward: parsed.spinRewardLabel,
+            spinRewardRaw: parsed.spinRewardRaw,
+            rewardWheel: parsed.wheelList,
+            items: parsed.items,
+            extraItems: parsed.extraItems,
+            rawItems: parsed.rawItems,
+            rawRewardFields: parsed.rawRewardFields
+        });
+        sessionHistory.push(historyRecord);
+
+        if (tracker) {
+            tracker.battles++;
+            tracker.totalXp += matchXp;
+            tracker.totalGold += matchGold;
+            if (matchTokens > 0) {
+                tracker.totalTokensWon += matchTokens;
+                tracker.tokenMatchCount++;
+            }
+            tracker.history.push(historyRecord);
+        }
+
+        const tokLabel = matchTokens > 0 ? `+${matchTokens} Token ★` : '-';
+        const spinDisplay = parsed.spinRewardRaw === 'item1'
+            ? 'Tidak Roll [item1]'
+            : `${parsed.spinRewardLabel}${parsed.spinRewardRaw ? ` [${parsed.spinRewardRaw}]` : ''}`;
+        line(`  [DONE] #${battleSuccess} | ${curStage.name} [${mid}]`);
+        line(`         Spin   : ${spinDisplay}${parsed.extraItems.length ? ` | Drop Bonus: ${parsed.extraItems.join(', ')}` : ''}`);
+        line(`         Hasil  : XP +${matchXp.toLocaleString()} | Gold +${matchGold.toLocaleString()} | Token: ${tokLabel} (Saldo: ${curTokens})`);
+        if (tracker) {
+            line(`         Counter: Sesi +${totalTokensWon} Token (${tokenMatchCount}x) | Total Loop +${tracker.totalTokensWon} Token (${tracker.tokenMatchCount}/${tracker.battles} match) | Energi ~${curEnergy}/${MAX_ENERGY_DEFAULT}`);
+        } else {
+            line(`         Counter: Battle ${battleSuccess}x | Token Sesi +${totalTokensWon} (${tokenMatchCount}x dapat token) | Energi ~${curEnergy}/${MAX_ENERGY_DEFAULT}`);
+        }
+
+        if (matchTokens > 0) {
+            console.log('\n**********************************************************************');
+            console.log(' [TOKEN REWARD] SAGA TOKEN DARI SPIN GRADE S!');
+            console.log(`     Karakter : ${charName} (ID: ${charId})`);
+            console.log(`     Misi     : ${curStage.name} [ID: ${mid}]`);
+            console.log(`     Hadiah   : +${matchTokens} Saga Token (Saldo: ${prevTokenBal} -> ${curTokens})`);
+            console.log(`     Counter Sesi Token: +${totalTokensWon} Token (${tokenMatchCount}x match)`);
+            if (tracker) {
+                console.log(`     Counter Loop Token: +${tracker.totalTokensWon} Token (${tracker.tokenMatchCount}x match)`);
+            }
+            console.log('**********************************************************************\n');
+            logTokenReward(user, charName, charId, curStage.name, matchTokens, prevTokenBal, curTokens, `Spin=${parsed.spinRewardRaw || 'token'}`, tokenLogFile);
+        }
+
+        stageCursor++;
+        if (stageCursor >= stageQueue.length) {
+            stageCursor = 0;
+            roundNumber++;
         }
 
         await sleep(100);
     }
 
-    // Verifikasi saldo token akhir dari server hanya jika ada token / battle sukses (hemat request & hindari cooldown baru)
-    let finalTokens = initialTokens + totalTokensWon;
-    if (battleSuccess > 0 && totalTokensWon > 0) {
+    // Sinkron energi real & saldo token akhir dari server
+    const bsEnd = await fetchSLevelBattleStatus(s.sessionKey);
+    if (bsEnd.ok) {
+        curEnergy = bsEnd.remainEnergy;
+        refillRemainSec = bsEnd.refillRemainSec;
+    }
+
+    let finalTokens = curTokens;
+    let serverTokenVerified = true;
+    if (battleSuccess > 0 && !opts.skipEndTokenVerify) {
         try {
             const sEnd = await c.login(user, pass);
-            if (sEnd && sEnd.tokens !== undefined) {
+            if (sEnd && sEnd.ok && sEnd.tokens !== undefined) {
                 finalTokens = Number(sEnd.tokens);
-                if (finalTokens > initialTokens && totalTokensWon === 0) {
-                    totalTokensWon = finalTokens - initialTokens;
+                serverTokenVerified = true;
+                if (shared) {
+                    shared.s = sEnd;
+                    if (sEnd.sessionKey) shared.h = k.mk(sEnd.sessionKey);
+                }
+                const serverDiff = Math.max(0, finalTokens - initialTokens);
+                if (serverDiff > totalTokensWon) {
+                    const extraDelta = serverDiff - totalTokensWon;
+                    totalTokensWon = serverDiff;
+                    if (tokenMatchCount === 0) tokenMatchCount = 1;
+                    if (tracker) {
+                        tracker.totalTokensWon += extraDelta;
+                        if (tracker.tokenMatchCount === 0) tracker.tokenMatchCount = 1;
+                    }
+                    logTokenReward(
+                        user, charName, charId,
+                        'Verifikasi Saldo Akhir Server',
+                        extraDelta, initialTokens, finalTokens,
+                        'Terdeteksi dari selisih saldo token server',
+                        tokenLogFile
+                    );
                 }
             }
         } catch (_) {}
     }
+
+    if (tracker) tracker.cycles++;
+
+    const cumulativeStats = readMissionHistory(historyFile, { account: user, charId, limit: 1 });
 
     console.log('\n======================================================================');
     console.log('                   RINGKASAN FARMING MISI GRADE S');
@@ -450,77 +631,109 @@ async function runGradeSSession(opts = {}) {
     console.log(` Mode Dijalankan   : ${modeLabel}`);
     console.log(` Pertarungan Selesai: ${battleSuccess} kali battle`);
     if (Object.keys(stageBattleCounts).length > 1) {
-        console.log(` Detail Per Misi   :`);
+        console.log(' Detail Per Misi   :');
         for (const [stName, cnt] of Object.entries(stageBattleCounts)) {
             console.log(`   - ${stName.padEnd(28)}: ${cnt}x battle`);
         }
     }
     console.log(` Total XP Didapat  : +${totalXpGained.toLocaleString()} XP`);
     console.log(` Total Gold Masuk  : +${totalGoldGained.toLocaleString()} Gold`);
-    if (collectedItemsAll.length) {
-        console.log(` Total Item/Drop   : ${collectedItemsAll.join(', ')}`);
-    } else {
-        console.log(` Total Item/Drop   : Tidak ada item langka yang jatuh`);
+    console.log(` Rekap Item/Drop   : ${formatItemCounterSummary(collectedItemCounts)}`);
+
+    const historyLines = formatSessionHistoryLines(sessionHistory, 25);
+    if (historyLines.length) {
+        console.log('----------------------------------------------------------------------');
+        console.log(' Riwayat Per Misi Sesi Ini:');
+        for (const hl of historyLines) console.log(hl);
     }
 
-    // LAPORAN STATUS TOKEN
+    console.log('----------------------------------------------------------------------');
     if (totalTokensWon > 0 || finalTokens > initialTokens) {
         const tokDiff = Math.max(totalTokensWon, finalTokens - initialTokens);
-        console.log('----------------------------------------------------------------------');
-        console.log(` ★★★ LAPORAN TOKEN: MENDAPATKAN +${tokDiff} SAGA TOKEN DARI MISI GRADE S! ★★★`);
+        console.log(` ★★★ COUNTER TOKEN SESI: +${tokDiff} SAGA TOKEN (${tokenMatchCount}x match dapat token) ★★★`);
         console.log(`     Saldo Awal  : ${initialTokens} Token`);
-        console.log(`     Saldo Akhir : ${finalTokens} Token (+${tokDiff} Token)`);
-        console.log(`     Log Tersimpan di: logs/grade_s_tokens.log`);
-        console.log('----------------------------------------------------------------------');
+        console.log(`     Saldo Akhir : ${finalTokens} Token (+${tokDiff} Token)${serverTokenVerified ? ' [Verified Server]' : ''}`);
+        console.log('     Log Token   : logs/grade_s_tokens.log');
     } else {
-        console.log(` Status Hadiah Token: Tidak ada token dari response server sesi ini (Saldo: ${finalTokens} Token)`);
+        console.log(` Counter Token Sesi: +0 Token (0/${battleSuccess} match dapat token | Saldo: ${finalTokens} Token)`);
     }
-
-    console.log(` Status Energi     : Energi Habis / Grinding Selesai (Sisa: ${curStamina} / 75)`);
+    if (tracker) {
+        console.log(` Counter Loop Run  : Putaran #${tracker.cycles} | ${tracker.battles}x battle | +${tracker.totalTokensWon} Token (${tracker.tokenMatchCount}x match) | Spin Item: ${formatItemCounterSummary(tracker.itemCounts)}`);
+    }
+    console.log(` Counter Hari Ini  : ${cumulativeStats.today.missions}x misi | +${cumulativeStats.today.tokens} Token (${cumulativeStats.today.tokenMatches}x match)`);
+    console.log(` Counter Total Log : ${cumulativeStats.totals.missions}x misi | +${cumulativeStats.totals.tokens} Token (${cumulativeStats.totals.tokenMatches}x match) | File: logs/grade_s_history.jsonl`);
+    console.log('----------------------------------------------------------------------');
+    console.log(` Energi Rank S     : ${curEnergy} / ${MAX_ENERGY_DEFAULT}${refillRemainSec > 0 ? ` (Refill +1 dalam ${formatSec(refillRemainSec)})` : ''}`);
     console.log('======================================================================\n');
 
     return {
         exitCode: hadError ? 1 : 0,
         battles: battleSuccess,
         totalTokensWon,
-        curStamina
+        tokenMatchCount,
+        totalXpGained,
+        totalGoldGained,
+        itemCounts: collectedItemCounts,
+        history: sessionHistory,
+        curStamina: curEnergy,
+        curEnergy,
+        refillRemainSec,
+        isEmblem,
+        initialTokens,
+        finalTokens
     };
 }
 
-async function waitForRefill() {
-    line('Standby & menunggu regenerasi energi (15 menit)...');
-    for (let seconds = 900; seconds > 0; seconds -= 30) {
-        process.stdout.write(`\rMenunggu refill energi: ${Math.floor(seconds / 60)}m ${seconds % 60}s tersisa...  `);
-        await sleep(30000);
+async function waitForRefill(lastRes, minEnergyNeeded = 10) {
+    const curEnergy = Number((lastRes && lastRes.curEnergy) || 0);
+    const needEnergy = Math.max(1, minEnergyNeeded - curEnergy);
+    const secPerEnergy = (lastRes && lastRes.isEmblem) ? 360 : 600;
+    const firstRemain = Number((lastRes && lastRes.refillRemainSec) || 0);
+    const totalWaitSec = Math.max(60, (firstRemain > 0 ? firstRemain : secPerEnergy) + Math.max(0, needEnergy - 1) * secPerEnergy + 5);
+    line(`Standby menunggu regenerasi energi Rank S (+${needEnergy} energi -> min ${minEnergyNeeded}, estimasi ${formatSec(totalWaitSec)})...`);
+    for (let seconds = totalWaitSec; seconds > 0; seconds -= 30) {
+        process.stdout.write(`\rMenunggu refill energi Rank S: ${formatSec(seconds)} tersisa...   `);
+        await sleep(Math.min(30000, seconds * 1000));
     }
     console.log('');
 }
 
 async function main() {
     c.enableGracefulStop('menu bot');
+    if (isHistoryMode) {
+        const showAll = args.includes('--all');
+        const numArg = args.slice(1).find(a => /^\d+$/.test(a));
+        printHistoryReport({ all: showAll, limit: numArg ? parseInt(numArg, 10) : 30 });
+        process.exit(0);
+    }
+
     if (!isLoopMode && !isSpamMode) {
         const res = await runGradeSSession();
         process.exit(res ? res.exitCode : 0);
     }
 
+    const tracker = createLoopTracker();
+
     if (isSpamMode) {
         if (spamStageNum < 1 || spamStageNum > 5) throw new Error('Mode spam butuh Stage 1 sampai 5.');
+        const stageEnergy = STAGES[spamStageNum - 1].energyCost;
         line('>>> MODE SPAM MISI GRADE S DIAKTIFKAN <<<');
-        line(`Bot menjalankan Stage ${spamStageNum} terus menerus; saat energi habis bot menunggu refill.`);
+        line(`Bot menjalankan Stage ${spamStageNum} (-${stageEnergy} Energi) terus menerus; saat energi habis bot menunggu refill.`);
         line('Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti.\n');
         while (true) {
-            const res = await runGradeSSession({ target: String(spamStageNum), jeda: jedaSec });
+            const res = await runGradeSSession({ target: String(spamStageNum), jeda: jedaSec, tracker });
             if (res && res.exitCode) process.exit(res.exitCode);
-            await waitForRefill();
+            await waitForRefill(res, stageEnergy);
         }
     }
 
     line('>>> MODE SCHEDULER MISI GRADE S DIAKTIFKAN <<<');
-    line('Bot akan menghabiskan energi Misi 1-4, lalu standby otomatis saat energi kosong.');
+    line('Bot akan menghabiskan energi Stage 1-4, lalu standby otomatis menunggu refill energi.');
     line('Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti.\n');
     while (true) {
-        await runGradeSSession();
-        await waitForRefill();
+        const res = await runGradeSSession({ tracker });
+        if (res && res.exitCode) process.exit(res.exitCode);
+        await waitForRefill(res, 10);
     }
 }
 
@@ -531,4 +744,13 @@ if (require.main === module) {
     });
 }
 
-module.exports = { runGradeSSession };
+module.exports = {
+    STAGES,
+    ITEM_NAMES,
+    MIN_BATTLE_WAIT_MS,
+    formatItemName,
+    parseRewardItems,
+    createLoopTracker,
+    printHistoryReport,
+    runGradeSSession
+};

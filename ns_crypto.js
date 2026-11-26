@@ -264,7 +264,43 @@ function qd(s) {
 function tokenBoss(v, key) { return qd(qc(qb(qa(v, key), key), key)); }
 function tokenLog(v, key) { return qd(qc2(qb2(qa2(v, key), key), key)); }
 
-module.exports = { SALT, sha1, msa, msc, msb, msd, msk, ua, uc, ub, ud, urk, fa, fc, fb, fd, frk, mk, rotl, bytes, str, za, zb, zc, zra, za2, zb2, zc2, zrb, br, qa, qa2, qb, qb2, qc, qc2, qd, tokenBoss, tokenLog };
+// ---- _srk (token SLevelMission.finishMission: _sd(_sc(_sb(_sa(s, key), key), key))) ----
+// Main._sa : (c ^ k[(i+4)%len]), rotl 6
+function sa(s, key) {
+    if (!key.length) return s;
+    const a = bytes(s), kb = bytes(key);
+    return str(a.map((c, i) => rotl((c ^ kb[(i + 4) % kb.length]) & 0xFF, 6)));
+}
+// NinjaSaga._sb : balik urutan lalu (c + k[(2i+1)%len] + i) & 0xFF, nibble swap
+function sb(s, key) {
+    const rev = bytes(s).reverse();
+    if (!key.length) return str(rev);
+    const kb = bytes(key);
+    return str(rev.map((c, i) => {
+        const v = (c + kb[(2 * i + 1) % kb.length] + i) & 0xFF;
+        return (((v & 0x0F) << 4) | ((v & 0xF0) >> 4)) & 0xFF;
+    }));
+}
+// Main._sc : (c ^ k[(i+11)%len] ^ L ^ (i&0xFF)) & 0xFF, ror 1, L = v
+function sc(s, key) {
+    if (!key.length) return s;
+    const a = bytes(s), kb = bytes(key);
+    let L = kb[0] & 0xFF;
+    return str(a.map((c, i) => {
+        let v = (c ^ kb[(i + 11) % kb.length] ^ L ^ (i & 0xFF)) & 0xFF;
+        v = ((v >> 1) | (v << 7)) & 0xFF;
+        L = v;
+        return v;
+    }));
+}
+const sd = s => hexOf(bytes(s));
+function srk(s, key) {
+    const ss = String(s || ''), kk = String(key || '');
+    if (!ss.length || !kk.length) return '';
+    return sd(sc(sb(sa(ss, kk), kk), kk));
+}
+
+module.exports = { SALT, sha1, msa, msc, msb, msd, msk, ua, uc, ub, ud, urk, fa, fc, fb, fd, frk, mk, rotl, bytes, str, za, zb, zc, zra, za2, zb2, zc2, zrb, br, qa, qa2, qb, qb2, qc, qc2, qd, tokenBoss, tokenLog, sa, sb, sc, sd, srk };
 
 if (require.main === module && process.argv.includes('--test')) {
     let fail = 0;
@@ -284,6 +320,9 @@ if (require.main === module && process.argv.includes('--test')) {
     eq('getHash', s1.getHash('msn138'), sha1('msn138' + SALT + sk));
     eq('getArrayHash', s1.getArrayHash([sk, '00084542', 49]), sha1([sk, '00084542', 49].toString() + SALT + sk));
     eq('sk kosong -> msa identitas', msa('abc', ''), 'abc');
+    eq('srk deterministik', srk('55aaa52a', '3a23f322fa7b0fc1'), srk('55aaa52a', '3a23f322fa7b0fc1'));
+    eq('srk kosong -> empty', srk('', 'key'), '');
+    eq('srk panjang hex genap', String(srk('hello', 'secret').length), '10');
     console.log(fail === 0 ? '  SEMUA LULUS' : '  GAGAL: ' + fail);
     process.exit(fail === 0 ? 0 : 1);
 }

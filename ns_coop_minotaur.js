@@ -54,6 +54,7 @@ const STUN_SKILL_ID = String((process.env && process.env.NS_COOP_STUN_SKILL_ID) 
 const DEFAULT_BATTLE_TIMEOUT_MS = 3600000;
 const DEFAULT_WAIT_FULL_TIMEOUT_MS = 45000;
 const DEFAULT_HOST_START_TIMEOUT_MS = 75000;
+const ENERGY_RECHECK_MS = 15 * 60 * 1000;
 const CAPTCHA_JOIN_TIMEOUT_MS = 4000;
 const MAX_KICKS_PER_ROOM = 2;
 const MAX_LOW_LEVEL_RM_SEEN = 2;
@@ -206,6 +207,24 @@ async function checkPreRunEnergyGate(args, account) {
     }
     line('OK ENERGY: ' + pve.energy + ' >= minimal ' + threshold + '; lanjut jalankan Cerberus.');
     return true;
+}
+
+function hasRequiredEnergy(energy, cost) {
+    return Number.isFinite(Number(energy)) && Number(energy) >= Number(cost);
+}
+
+async function waitForEnergyRefill(session, cost, logFn, options = {}) {
+    const readEnergy = options.readEnergy || readPveInit;
+    const wait = options.wait || sleep;
+    let pve = options.initialPve || null;
+    while (true) {
+        if (!pve) pve = await readEnergy(session);
+        const energy = pve && pve.energy;
+        if (hasRequiredEnergy(energy, cost)) return pve;
+        logFn('  ENERGY HABIS: ' + energy + ' < ' + cost + '; tunggu 15 menit lalu cek lagi. Tekan Ctrl+C untuk berhenti.');
+        pve = null;
+        await wait(ENERGY_RECHECK_MS);
+    }
 }
 
 function createSolverSession(args, account, logFn) {
@@ -1351,11 +1370,12 @@ async function runLive(args, account) {
                     meta.energyEnd = knownEnergy;
                     lastEnergyCheckAt = Date.now();
                 }
-                if (!Number.isFinite(knownEnergy) || knownEnergy < joinCost) {
-                    divider('SELESAI');
-                    meta.stopReason = 'Energy habis (' + knownEnergy + ' < ' + joinCost + ')';
-                    line('  STOP: ' + meta.stopReason);
-                    break;
+                if (!hasRequiredEnergy(knownEnergy, joinCost)) {
+                    currentPve = await waitForEnergyRefill(result.session, joinCost, line, { initialPve: { energy: knownEnergy } });
+                    knownEnergy = Number(currentPve.energy);
+                    meta.energyEnd = knownEnergy;
+                    lastEnergyCheckAt = Date.now();
+                    continue;
                 }
                 if (fatal) throw fatal;
                 requestRooms();
@@ -1476,10 +1496,27 @@ async function runLive(args, account) {
                 }
                 if (!reconnected.ok) {
                     if (reconnected.energyDepleted) {
-                        divider('SELESAI');
-                        meta.stopReason = reconnected.stopReason;
-                        line('  STOP: ' + meta.stopReason);
-                        break;
+                        currentPve = await waitForEnergyRefill(result.session, joinCost, line, { initialPve: { energy: reconnected.energy } });
+                        knownEnergy = Number(currentPve.energy);
+                        meta.energyEnd = knownEnergy;
+                        lastEnergyCheckAt = Date.now();
+                        reconnectAttempts = 0;
+                        const resumed = await reconnectPveSession({
+                            oldSocket: socket,
+                            session: result.session,
+                            charId: botId,
+                            minEnergy: joinCost,
+                            label: 'energy tersedia; sambung ulang',
+                            logFn: line,
+                            bindSocket: (nextSock, nextPve) => {
+                                socket = nextSock;
+                                rooms = null;
+                                fatal = null;
+                                bindAllLive(nextSock, nextPve);
+                            },
+                        });
+                        if (!resumed.ok) throw new Error(resumed.stopReason || 'Reconnect setelah refill gagal.');
+                        continue;
                     }
                     throw new Error(reconnected.stopReason || err.message);
                 }
@@ -1606,7 +1643,7 @@ async function runHostRoom(args, account) {
         meta.charName = result.charName || account.username;
         const hostLevel = evaluateLevel(result.level, args.minLevel);
         if (!hostLevel.ok) throw new Error('Level host tidak memenuhi syarat (' + hostLevel.reason + ').');
-        const pve = await readPveInit(result.session);
+        let pve = await readPveInit(result.session);
         const quest = pve && findQuestId(pve.questList, args.boss, args.level);
         if (!pve || !quest || !pve.pvpServer || !pve.pvpServer[0]) throw new Error('PvE boss tidak tersedia.');
         const hostCost = Number(quest.energy[0]);
@@ -1619,7 +1656,7 @@ async function runHostRoom(args, account) {
         say('  HOST ' + result.charName + ' Lv' + result.level + ' energy=' + pve.energy + ' biaya_room=' + hostCost + ' quest=' + quest.quest);
         say('  DECK ' + describeDeck(result.equipped));
         if (initialRankText) say('  OK RANKING AWAL ' + initialRankText);
-        if (!(pve.energy >= hostCost)) throw new Error('Energy host kurang (' + pve.energy + ' < ' + hostCost + ').');
+        if (!hasRequiredEnergy(pve.energy, hostCost)) pve = await waitForEnergyRefill(result.session, hostCost, say, { initialPve: pve });
         socket = await connectPve({ server: pve.pvpServer[0], sessionKey: result.session.sessionKey, charId: hostId, handoffToken: pve.handoffToken, handoffNonce: pve.handoffNonce, ver: pve.ver });
         let active = null;
         let fatal = null;
@@ -1871,11 +1908,10 @@ async function runHostRoom(args, account) {
                 if (fatal) throw fatal;
                 const energyNow = (await readPveInit(result.session) || {}).energy;
                 if (Number.isFinite(Number(energyNow))) meta.energyEnd = Number(energyNow);
-                if (!(energyNow >= hostCost)) {
-                    divider('SELESAI');
-                    meta.stopReason = 'Energy habis (' + energyNow + ' < ' + hostCost + ')';
-                    say('  STOP: ' + meta.stopReason);
-                    break;
+                if (!hasRequiredEnergy(energyNow, hostCost)) {
+                    currentHostPve = await waitForEnergyRefill(result.session, hostCost, say, { initialPve: { energy: energyNow } });
+                    meta.energyEnd = Number(currentHostPve.energy);
+                    continue;
                 }
                 captchaAttempts = 0;
                 active = { roomId: null, createdAt: null, players: new Map(), readyIds: new Set(), pendingKicks: new Set(), missing: 0, started: false, startSentAt: null, battleStarted: false, battleStartedAt: null, done: false, outcome: null, reason: null, turn: 0, actions: [], battleStates: [], battle: new PveBattle({ charId: hostId, strategy: 'B', skills: result.equipped }) };
@@ -1958,10 +1994,25 @@ async function runHostRoom(args, account) {
                 if (Number.isFinite(Number(reconnected.energy))) meta.energyEnd = Number(reconnected.energy);
                 if (!reconnected.ok) {
                     if (reconnected.energyDepleted) {
-                        divider('SELESAI');
-                        meta.stopReason = reconnected.stopReason;
-                        say('  STOP: ' + meta.stopReason);
-                        break;
+                        currentHostPve = await waitForEnergyRefill(result.session, hostCost, say, { initialPve: { energy: reconnected.energy } });
+                        meta.energyEnd = Number(currentHostPve.energy);
+                        reconnectAttempts = 0;
+                        const resumed = await reconnectPveSession({
+                            oldSocket: socket,
+                            session: result.session,
+                            charId: hostId,
+                            minEnergy: hostCost,
+                            label: 'energy tersedia; sambung ulang',
+                            logFn: say,
+                            bindSocket: (nextSock, nextPve) => {
+                                socket = nextSock;
+                                if (nextPve) currentHostPve = nextPve;
+                                fatal = null;
+                                bindHostSocket(nextSock);
+                            },
+                        });
+                        if (!resumed.ok) throw new Error(resumed.stopReason || 'Reconnect setelah refill gagal.');
+                        continue;
                     }
                     throw new Error(reconnected.stopReason || err.message);
                 }
@@ -2007,4 +2058,4 @@ async function runHostRoom(args, account) {
     }
 })().catch(error => { line('STOP: ' + error.message); process.exitCode = 1; });
 
-module.exports = { parseArgs, parseAccountsFile, resolveMinStartEnergy, resolveBattleTimeoutMs, acquireRunLock, isTransientSocketError, parsePveRankingResponse, extractScoreForChar, findQuestId, buildCharSummaryMap, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, buildSkillDeck, describeDeck, normCharId, idList, evaluateLevel, traceBattleProgress, handleMidBattleLeave, readSelfResources, tickSelfSkillCooldowns, trackSelfActionOutcome, hasReactiveForcePacket, trackReactiveForce, pickSuperChargesSkill, recordRoomKick, recordLowLevelMaster, isPasswordRejection, runDryRun, runLive, runHostRoom };
+module.exports = { parseArgs, parseAccountsFile, resolveMinStartEnergy, resolveBattleTimeoutMs, acquireRunLock, isTransientSocketError, hasRequiredEnergy, waitForEnergyRefill, parsePveRankingResponse, extractScoreForChar, findQuestId, buildCharSummaryMap, normalizePlayer, normalizeRoom, pickRoom, scanSummary, countOtherEmblems, hasFullQuickmatchTeam, chooseMinotaurTurn, chooseQuickmatchTurn, chooseCerberusTurn, captchaRetryDecision, buildSkillDeck, describeDeck, normCharId, idList, evaluateLevel, traceBattleProgress, handleMidBattleLeave, readSelfResources, tickSelfSkillCooldowns, trackSelfActionOutcome, hasReactiveForcePacket, trackReactiveForce, pickSuperChargesSkill, recordRoomKick, recordLowLevelMaster, isPasswordRejection, runDryRun, runLive, runHostRoom };

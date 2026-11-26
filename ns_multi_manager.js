@@ -355,7 +355,7 @@ function buildScriptArgs(action, acc, extraArgs) {
     if (action === 'hunt_daily') return ['daily', '10', '10.5'];
     if (action === 'hunt' || action === 'both') return ['both', '10', '10.5'];
     if (action === 'train') return ['all', '5', '3'];
-    if (action === 'grades') return ['1-4', '3'];
+    if (action === 'grades') return ['1-4', '11'];
     if (action === 'level') return [String(acc.targetLevel || 60), '3'];
     if (action === 'thanksgiving_battle') return ['battle'];
     if (action === 'thanksgiving_minigame') return ['minigame'];

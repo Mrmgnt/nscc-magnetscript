@@ -12,7 +12,11 @@
  *   2. Dedicated Feed Link Clicker:
  *      - Fitur khusus di mana seluruh akun dummy serentak/bergiliran mengklaim
  *        link feed yang diberikan (https://ninjasaga.cc/?feed=<code_or_url>)
- *        langsung ke backend API (https://api.ninjasaga.cc/feed/claim).
+ *        langsung ke backend API (POST https://api.ninjasaga.cc/claim-feed {share_code}).
+ *   2b. Auto Buat Link Share Feed (menu 5 / CLI `share`):
+ *      - POST https://api.ninjasaga.cc/share-feed {item_name} -> https://ninjasaga.cc/?feed=<share_code>
+ *      - Hanya berhasil jika akun eligible (server: "This item cannot be shared." jika tidak),
+ *        dan dibatasi ±5 percobaan/jam/akun (HTTP 429 + retry_after) — limit dihormati, tidak diakali.
  *   3. Pemilihan Karakter Fleksibel (Character Selector):
  *      - Mendukung akun dengan banyak karakter (slot 1, slot 2, dst).
  *      - Memilih karakter target utama yang akan menerima reward / hadiah.
@@ -29,6 +33,7 @@
  *   node ns_dummy_farmer.js run --feed https://ninjasaga.cc/?feed=xxx         -> Jalankan task + dummy klik link
  *   node ns_dummy_farmer.js run --feed xxx --target mrmgnt1 --char 1          -> Jalankan task + target karakter 1
  *   node ns_dummy_farmer.js click https://ninjasaga.cc/?feed=xxx              -> Khusus semua dummy klik link feed
+ *   node ns_dummy_farmer.js share --target USER --pass PASS [--item dailyscratch] [--no-claim] -> Buat link + dummy klaim
  *   node ns_dummy_farmer.js gen dmmy 1001 20 pass123                          -> Generate 20 akun dummy
  *   node ns_dummy_farmer.js status                                            -> Cek database akun dummy
  */
@@ -265,60 +270,132 @@ async function ensureCharacter(session, db, username, pass) {
 }
 
 /**
- * Klaim feed code melalui Backend API resmi Ninja Saga:
- * POST https://api.ninjasaga.cc/feed/claim
+ * POST JSON ke https://api.ninjasaga.cc<path> dengan Bearer token.
+ * Windows: pakai curl.exe (+ proxy sistem) karena https.request Node sering hang di balik proxy.
  */
-async function claimFeed(session, feedCode) {
-    const code = cleanFeedCode(feedCode);
-    if (!session || !session.token || !code) {
-        return { ok: false, message: 'Missing session token or feed code', feedCode: code };
+const WEB_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+function apiPostAuth(apiPath, body, token) {
+    const payload = JSON.stringify(body || {});
+    if (process.platform === 'win32') {
+        const { spawnSync } = require('child_process');
+        const proxyArgs = typeof c.curlProxyArgs === 'function' ? c.curlProxyArgs() : [];
+        const args = ['-s', '-S', ...proxyArgs, '-X', 'POST', 'https://api.ninjasaga.cc' + apiPath,
+            '-H', 'Content-Type: application/json', '-H', 'Accept: application/json',
+            '-H', 'Authorization: Bearer ' + token,
+            '-H', 'Origin: https://ninjasaga.cc', '-H', 'Referer: https://ninjasaga.cc/',
+            '-H', 'User-Agent: ' + WEB_UA,
+            '--max-time', '20', '--data-binary', '@-', '-w', '\n%{http_code}'];
+        const r = spawnSync('curl.exe', args, { input: payload, encoding: 'utf8', timeout: 25000, windowsHide: true });
+        const out = r.stdout || '';
+        const nl = out.lastIndexOf('\n');
+        const status = nl >= 0 ? (parseInt(out.slice(nl + 1).trim(), 10) || 0) : 0;
+        const raw = nl >= 0 ? out.slice(0, nl) : out;
+        let json = null; try { json = JSON.parse(raw); } catch (_) {}
+        return Promise.resolve({ status, json, raw: raw || (r.stderr || (r.error && r.error.message) || '') });
     }
-
-    const payload = JSON.stringify({
-        feed: code,
-        client_unique_id: crypto.randomUUID()
-    });
-
     return new Promise(resolve => {
         const req = https.request({
-            hostname: 'api.ninjasaga.cc',
-            port: 443,
-            path: '/feed/claim',
-            method: 'POST',
-            rejectUnauthorized: false,
-            timeout: 15000,
+            hostname: 'api.ninjasaga.cc', port: 443, path: apiPath, method: 'POST', timeout: 20000,
             headers: {
-                'Content-Type': 'application/json',
-                'Content-Length': Buffer.byteLength(payload),
-                'Authorization': 'Bearer ' + session.token,
-                'Origin': 'https://ninjasaga.cc',
-                'Referer': 'https://ninjasaga.cc/',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+                'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload),
+                'Accept': 'application/json', 'Authorization': 'Bearer ' + token,
+                'Origin': 'https://ninjasaga.cc', 'Referer': 'https://ninjasaga.cc/', 'User-Agent': WEB_UA
             }
         }, res => {
             const chunks = [];
             res.on('data', d => chunks.push(d));
             res.on('end', () => {
                 const raw = Buffer.concat(chunks).toString('utf8');
-                let j = null;
-                try { j = JSON.parse(raw); } catch (_) {}
-                const ok = res.statusCode === 200 && j && j.success === true;
-                const msg = (j && (j.message || j.error)) || ('HTTP ' + res.statusCode);
-                resolve({
-                    ok,
-                    statusCode: res.statusCode,
-                    message: msg,
-                    feedCode: code,
-                    reward: (j && j.reward) || null,
-                    raw: j || raw
-                });
+                let json = null; try { json = JSON.parse(raw); } catch (_) {}
+                resolve({ status: res.statusCode, json, raw });
             });
         });
-        req.on('error', err => resolve({ ok: false, message: err.message, feedCode: code }));
-        req.on('timeout', () => { req.destroy(); resolve({ ok: false, message: 'Request timeout', feedCode: code }); });
+        req.on('error', err => resolve({ status: 0, json: null, raw: err.message }));
+        req.on('timeout', () => { req.destroy(); resolve({ status: 0, json: null, raw: 'Request timeout' }); });
         req.write(payload);
         req.end();
     });
+}
+
+/**
+ * Klaim feed code melalui Backend API web Ninja Saga (sama seperti handleFeedClaim di app.js):
+ * POST https://api.ninjasaga.cc/claim-feed  { share_code }
+ */
+async function claimFeed(session, feedCode) {
+    const code = cleanFeedCode(feedCode);
+    if (!session || !session.token || !code) {
+        return { ok: false, message: 'Missing session token or feed code', feedCode: code };
+    }
+    const r = await apiPostAuth('/claim-feed', { share_code: code }, session.token);
+    const j = r.json;
+    const ok = r.status === 200 && !!j && j.success === true;
+    const msg = (j && (j.message || j.error)) || ('HTTP ' + r.status + ' ' + String(r.raw).slice(0, 120));
+    return {
+        ok,
+        statusCode: r.status,
+        message: msg,
+        feedCode: code,
+        reward: j ? (j.item_display_name || j.item_name || j.reward || null) : null,
+        raw: j || r.raw
+    };
+}
+
+/**
+ * Item feed yang dikirim Flash via postMessage({action:'show_publish', item_name}).
+ *  - 'dailyscratch' : daily_login4.onshowPopUpReward (Daily Gift / super prize)
+ *  - fr_*           : SNSData di code_library.swf (FriendReward / mission popup)
+ * Server hanya menerima item yang memang eligible ("This item cannot be shared." untuk yang lain)
+ * dan membatasi ±5 percobaan /share-feed per jam per akun -> daftar default sengaja pendek.
+ */
+const SHARE_FEED_ITEMS = ['dailyscratch', 'fr_lucky_draw_token', 'fr_sp_token', 'fr_dt_token'];
+
+/**
+ * Buat link Daily Share Feed (sama seperti handler 'show_publish' di app.js):
+ * POST https://api.ninjasaga.cc/share-feed  { item_name } -> { success, share_code, message, ... }
+ * Link = https://ninjasaga.cc/?feed=<share_code>
+ * Server membatasi publish (HTTP 429 + retry_after); fungsi ini TIDAK mencoba mengakali limit tsb.
+ */
+async function shareFeed(session, itemNames = SHARE_FEED_ITEMS) {
+    if (!session || !session.token) return { ok: false, message: 'Missing session token' };
+    const list = Array.isArray(itemNames) ? itemNames : [itemNames];
+    const tried = [];
+    for (const item of list) {
+        const r = await apiPostAuth('/share-feed', { item_name: item }, session.token);
+        const j = r.json || {};
+        tried.push({ item, status: r.status, message: j.message || String(r.raw).slice(0, 120) });
+        if (r.status === 200 && j.success && j.share_code) {
+            return {
+                ok: true, item, shareCode: j.share_code,
+                link: 'https://ninjasaga.cc/?feed=' + j.share_code,
+                message: j.message || '', raw: j, tried
+            };
+        }
+        if (r.status === 429) {
+            return { ok: false, rateLimited: true, item, retryAfter: j.retry_after || null, message: j.message || 'Rate limited', tried };
+        }
+        if (r.status === 401) return { ok: false, item, message: j.message || 'Unauthorized', tried };
+    }
+    return { ok: false, message: 'Tidak ada item feed yang bisa dishare saat ini', tried };
+}
+
+/**
+ * Login akun utama -> buat link share feed -> (opsional) klaim dengan semua akun dummy.
+ */
+async function autoShareAndClaim(mainUser, mainPass, opts = {}) {
+    const { claim = true, delaySec = 3, items = SHARE_FEED_ITEMS } = opts;
+    line(`[SHARE] Login akun utama: ${mainUser}`);
+    const s = await c.login(mainUser, mainPass);
+    if (!s || !s.ok || !s.token) { line('[SHARE] ✗ Login gagal: ' + ((s && s.error) || 'unknown')); return { ok: false }; }
+    const res = await shareFeed(s, items);
+    for (const t of res.tried || []) line(`[SHARE]   item=${t.item} -> HTTP ${t.status}: ${t.message}`);
+    if (!res.ok) {
+        if (res.rateLimited) line(`[SHARE] ⏳ Limit publish server: coba lagi dalam ${res.retryAfter || '?'} detik (${res.message})`);
+        else line('[SHARE] ✗ ' + res.message);
+        return res;
+    }
+    line(`[SHARE] ✓ Link feed dibuat (item ${res.item}): ${res.link}`);
+    if (claim) await clickFeedForAllDummies(res.link, '', '', null, delaySec);
+    return res;
 }
 
 /**
@@ -418,7 +495,7 @@ async function clickFeedForAllDummies(feedUrlOrCode, targetMainUser = '', target
     console.log('==========================================================');
     console.log(`  Target Feed Code     : ${code}`);
     console.log(`  URL Asli             : https://ninjasaga.cc/?feed=${code}`);
-    console.log(`  API Endpoint         : https://api.ninjasaga.cc/feed/claim`);
+    console.log(`  API Endpoint         : https://api.ninjasaga.cc/claim-feed`);
     console.log(`  Total Akun Dummy     : ${accounts.length}`);
     console.log(`  Jeda Antar Akun      : ${delaySec} detik`);
     console.log('==========================================================\n');
@@ -605,10 +682,21 @@ async function interactiveMenu() {
         console.log('  2. Klik / Klaim Link Feed Saja (Semua Akun Dummy)');
         console.log('  3. Generate Akun Dummy Penomoran Otomatis (Counter Engine)');
         console.log('  4. Lihat Status Seluruh Akun Dummy Tersimpan');
+        console.log('  5. Auto Buat Link Share Feed (Akun Utama) + Klaim oleh Semua Dummy');
         console.log('  0. Keluar');
         console.log('==========================================================');
 
-        const ans = (await ask('Pilih (0-4) : ')).trim();
+        const ans = (await ask('Pilih (0-5) : ')).trim();
+        if (ans === '5') {
+            const defaultUser = process.env.NS_USER || '';
+            let mainU = (await ask(`Username Akun Utama (pembuat link)${defaultUser ? ` [${defaultUser}]` : ''} : `)).trim() || defaultUser;
+            if (!mainU) { console.log('Username wajib diisi.'); continue; }
+            const mainP = (mainU === defaultUser && process.env.NS_PASS) ? process.env.NS_PASS : (await ask('Password Akun Utama : ')).trim();
+            const doClaim = (await ask('Langsung klaim dengan semua akun dummy? [Y/n] : ')).trim().toLowerCase() !== 'n';
+            let del = parseInt((await ask('Jeda antar klik dalam detik (default = 3) : ')).trim(), 10) || 3;
+            await autoShareAndClaim(mainU, mainP, { claim: doClaim, delaySec: del });
+            continue;
+        }
         if (ans === '1') {
             const feedUrl = (await ask('Masukkan Link / Code Feed (tekan Enter jika tidak ada) : ')).trim();
 
@@ -703,6 +791,18 @@ if (require.main === module) {
             const delayIdx = process.argv.indexOf('--delay');
             const delaySec = delayIdx !== -1 ? parseInt(process.argv[delayIdx + 1], 10) || 3 : 3;
             await clickFeedForAllDummies(feedArg, targetUser, targetPass, targetChar, delaySec);
+        } else if (cmd === 'share') {
+            // node ns_dummy_farmer.js share --target USER --pass PASS [--item fr_sp_token] [--no-claim] [--delay 3]
+            const ai = k => { const i = process.argv.indexOf(k); return i !== -1 ? process.argv[i + 1] : null; };
+            const accs = loadAccountsList();
+            const targetUser = ai('--target') || process.env.NS_USER || (accs[0] && (accs[0].username || accs[0].user)) || '';
+            const targetPass = ai('--pass') || process.env.NS_PASS || (accs[0] && (accs[0].password || accs[0].pass)) || '';
+            const item = ai('--item');
+            await autoShareAndClaim(targetUser, targetPass, {
+                claim: !process.argv.includes('--no-claim'),
+                delaySec: parseInt(ai('--delay'), 10) || 3,
+                items: item ? item.split(',') : SHARE_FEED_ITEMS
+            });
         } else if (cmd === 'run') {
             const feedIdx = process.argv.indexOf('--feed');
             const feedArg = feedIdx !== -1 ? process.argv[feedIdx + 1] : '';
@@ -727,6 +827,10 @@ if (require.main === module) {
 
 module.exports = {
     claimFeed,
+    shareFeed,
+    autoShareAndClaim,
+    apiPostAuth,
+    SHARE_FEED_ITEMS,
     selectTargetCharacter,
     ensureCharacter,
     executeGiftsForDummy,

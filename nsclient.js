@@ -436,4 +436,4 @@ function enableGracefulStop(label = 'menu') {
     }
 }
 
-module.exports = { login, amf, httpJson, getSelectedChar, getCharacterByIdWithWait, getExtraDataWithRetry, enableGracefulStop, AMF_HOST, API_HOST, BUILD_NO, SALT, CODEC, sha1, getHash, getArrayHash, getLoginHash, ucEncode };
+module.exports = { login, amf, httpJson, curlProxyArgs, getSelectedChar, getCharacterByIdWithWait, getExtraDataWithRetry, enableGracefulStop, AMF_HOST, API_HOST, BUILD_NO, SALT, CODEC, sha1, getHash, getArrayHash, getLoginHash, ucEncode };
