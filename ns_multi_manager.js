@@ -7,12 +7,16 @@
  *   - Membaca daftar akun dari accounts.txt dengan format:
  *       username:password:targetLevel:characterSlot
  *   - Mendukung slot "all" / "*" (auto-detect semua karakter di akun) atau "1,2" (multi-slot).
- *   - Mode PARALEL PER AKUN (default 5 akun berbeda jalan bersamaan):
+ *   - Mode PARALEL PER AKUN (default 3 akun berbeda jalan bersamaan):
  *       * Akun berbeda berjalan paralel sehingga total waktu terpangkas drastis.
  *       * Karakter di dalam akun yang SAMA tetap dijalankan berurutan (serial) dengan
  *         penjaga cooldown 21s agar aman dari "Session validation failed".
- *   - Mode sekuensial tetap tersedia dengan --serial atau --parallel 1.
- *   - Laporan ringkasan di akhir eksekusi disimpan ke multi_manager_report.json.
+ *   - Full Auto Claim Daily Login terintegrasi (Absen 5 Hari, Daily Calendar, Free Scratch, Claim Token Harian).
+ *   - Full Automate Scheduler Loop 15 Menit untuk Event Mission (Battle + Werewolf Mini-game) & Misi Energi:
+ *       * Ketika energi/Heart/Bullet habis di seluruh akun, otomatis menunggu 15 menit lalu me-run ulang!
+ *       * Pada mode Harian + Full Event Loop, putaran #1 menjalankan Full Login + Daily + Event,
+ *         putaran #2 dst. fokus ke Full Event (Battle + Wolf), dan otomatis mengulang Daily saat ganti hari.
+ *   - Laporan ringkasan disimpan ke multi_manager_report.json.
  */
 'use strict';
 
@@ -21,14 +25,23 @@ const path = require('path');
 const readline = require('readline');
 const { spawn } = require('child_process');
 const c = require('./nsclient.js');
+const { getLocalDateStr } = require('./lib/ns_mission_history.js');
 
 const ACCOUNTS_FILE = path.join(__dirname, 'accounts.txt');
 const REPORT_FILE = path.join(__dirname, 'multi_manager_report.json');
 const DEFAULT_CONCURRENCY = Number(process.env.NS_MULTI_CONCURRENCY || 3);
 const DEFAULT_DELAY_SEC = 1;
+const DEFAULT_LOOP_INTERVAL_MIN = 15;
 const MIN_LAUNCH_GAP_MS = 2300; // Jeda anti rate-limit IP antar peluncuran login child process
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const line = s => console.log('[' + new Date().toTimeString().slice(0, 8) + '] ' + s);
+
+function formatSec(seconds) {
+    const s = Math.max(0, Math.floor(Number(seconds) || 0));
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
+}
 
 const activeChildren = new Set();
 process.on('exit', () => {
@@ -342,32 +355,73 @@ function groupQueuesByAccount(list) {
     return Array.from(groups.values()).sort((a, b) => b.length - a.length);
 }
 
+const DEFAULT_AUTO_LOOP_ACTIONS = new Set([
+    'auto_all_event',
+    'daily_thanksgiving_full_loop',
+    'thanksgiving_full_loop',
+    'thanksgiving_battle_loop',
+    'thanksgiving_minigame_loop'
+]);
+
+function normalizeLoopBaseAction(action) {
+    if (action === 'auto_all_event' || action === 'daily_thanksgiving_full_loop') return 'daily_thanksgiving_full';
+    if (action === 'thanksgiving_full_loop') return 'thanksgiving_full';
+    if (action === 'thanksgiving_battle_loop') return 'thanksgiving_battle';
+    if (action === 'thanksgiving_minigame_loop') return 'thanksgiving_minigame';
+    return action;
+}
+
+function getFollowupEventAction(baseAction) {
+    if (baseAction === 'daily_thanksgiving_full' || baseAction === 'auto_all_event') return 'thanksgiving_full';
+    if (baseAction === 'daily_thanksgiving_battle' || baseAction === 'daily_thanksgiving' || baseAction === 'daily_tg_battle') return 'thanksgiving_battle';
+    if (baseAction === 'daily_thanksgiving_minigame') return 'thanksgiving_minigame';
+    return baseAction;
+}
+
+function isDailyPlusEventAction(baseAction) {
+    return [
+        'daily_thanksgiving_full',
+        'daily_tg_full',
+        'daily_thanksgiving_battle',
+        'daily_thanksgiving',
+        'daily_tg_battle',
+        'daily_thanksgiving_minigame'
+    ].includes(baseAction);
+}
+
 function buildScriptArgs(action, acc, extraArgs) {
     if (extraArgs && extraArgs.length > 0) return extraArgs;
-    if (action === 'daily' || action === 'daily_pure') return ['--pure'];
-    if (action === 'daily_hh') return ['--pure', '--with-hh-battle'];
-    if (action === 'daily_level' || action === 'full') return acc.targetLevel ? ['--level', String(acc.targetLevel)] : [];
-    if (action === 'daily_thanksgiving_battle' || action === 'daily_thanksgiving' || action === 'daily_tg_battle') return ['--pure', '--with-thanksgiving-battle'];
-    if (action === 'daily_thanksgiving_full' || action === 'daily_tg_full') return ['--pure', '--with-thanksgiving-full'];
-    if (action === 'eudemon' || action === 'dragon') return ['eudemon', '10', '10.5'];
-    if (action === 'house' || action === 'hunting') return ['house', '10', '10.5'];
-    if (action === 'claim') return ['claim'];
-    if (action === 'hunt_daily') return ['daily', '10', '10.5'];
-    if (action === 'hunt' || action === 'both') return ['both', '10', '10.5'];
-    if (action === 'train') return ['all', '5', '3'];
-    if (action === 'grades') return ['1-4', '11'];
-    if (action === 'level') return [String(acc.targetLevel || 60), '3'];
-    if (action === 'thanksgiving_battle') return ['battle'];
-    if (action === 'thanksgiving_minigame') return ['minigame'];
-    if (action === 'thanksgiving_full') return ['full'];
+    const base = normalizeLoopBaseAction(action);
+    if (base === 'daily_login' || base === 'login_claim') return [];
+    if (base === 'daily' || base === 'daily_pure') return ['--pure'];
+    if (base === 'daily_hh') return ['--pure', '--with-hh-battle'];
+    if (base === 'daily_level' || base === 'full') return acc.targetLevel ? ['--level', String(acc.targetLevel)] : [];
+    if (base === 'daily_thanksgiving_battle' || base === 'daily_thanksgiving' || base === 'daily_tg_battle') return ['--pure', '--with-thanksgiving-battle'];
+    if (base === 'daily_thanksgiving_minigame') return ['--pure', '--with-thanksgiving-minigame'];
+    if (base === 'daily_thanksgiving_full' || base === 'daily_tg_full') return ['--pure', '--with-thanksgiving-full'];
+    if (base === 'eudemon' || base === 'dragon') return ['eudemon', '10', '10.5'];
+    if (base === 'house' || base === 'hunting') return ['house', '10', '10.5'];
+    if (base === 'claim') return ['claim'];
+    if (base === 'hunt_daily') return ['daily', '10', '10.5'];
+    if (base === 'hunt' || base === 'both') return ['both', '10', '10.5'];
+    if (base === 'train') return ['all', '5', '3'];
+    if (base === 'grades') return ['1-4', '11'];
+    if (base === 'level') return [String(acc.targetLevel || 60), '3'];
+    if (base === 'thanksgiving_battle') return ['battle'];
+    if (base === 'thanksgiving_minigame') return ['minigame'];
+    if (base === 'thanksgiving_full') return ['full'];
     return ['--pure'];
 }
 
 function resolveActionMeta(action) {
-    switch (action) {
+    const base = normalizeLoopBaseAction(action);
+    switch (base) {
+        case 'daily_login':
+        case 'login_claim':
+            return { targetScript: 'ns_daily_login.js', actionLabel: 'FULL AUTO CLAIM LOGIN HARIAN (ABSEN + CALENDAR + SCRATCH + TOKEN)' };
         case 'daily':
         case 'daily_pure':
-            return { targetScript: 'ns_daily.js', actionLabel: 'JATAH HARIAN FULL (TP + SS + EUDEMON DRAGON + CLAIM HH TANPA BATTLE)' };
+            return { targetScript: 'ns_daily.js', actionLabel: 'JATAH HARIAN FULL (ABSEN+CALENDAR+SCRATCH+TOKEN + TP/SS + EUDEMON + CLAIM HH)' };
         case 'daily_hh':
             return { targetScript: 'ns_daily.js', actionLabel: 'JATAH HARIAN FULL + BATTLE BOSS HUNTING HOUSE' };
         case 'daily_level':
@@ -377,9 +431,11 @@ function resolveActionMeta(action) {
         case 'daily_thanksgiving':
         case 'daily_tg_battle':
             return { targetScript: 'ns_daily.js', actionLabel: 'JATAH HARIAN FULL + THANKSGIVING BATTLE (TANPA BATTLE HH)' };
+        case 'daily_thanksgiving_minigame':
+            return { targetScript: 'ns_daily.js', actionLabel: 'JATAH HARIAN FULL + THANKSGIVING WEREWOLF MINI-GAME' };
         case 'daily_thanksgiving_full':
         case 'daily_tg_full':
-            return { targetScript: 'ns_daily.js', actionLabel: 'JATAH HARIAN FULL + THANKSGIVING FULL EVENT (BATTLE + WEREWOLF)' };
+            return { targetScript: 'ns_daily.js', actionLabel: 'JATAH HARIAN FULL + FULL EVENT MISSION (BATTLE + WEREWOLF MINI-GAME)' };
         case 'eudemon':
         case 'dragon':
             return { targetScript: 'ns_hunt.js', actionLabel: 'EUDEMON DRAGON SAJA (AUTO 3X EMBLEM / 1X FREE)' };
@@ -402,30 +458,37 @@ function resolveActionMeta(action) {
         case 'thanksgiving_battle':
             return { targetScript: 'ns_thanksgiving.js', actionLabel: 'THANKSGIVING BATTLE (HABISKAN HEART)' };
         case 'thanksgiving_minigame':
-            return { targetScript: 'ns_thanksgiving.js', actionLabel: 'THANKSGIVING MINI-GAME (HABISKAN AMMO + WEREWOLF)' };
+            return { targetScript: 'ns_thanksgiving.js', actionLabel: 'THANKSGIVING MINI-GAME (HABISKAN AMMO WEREWOLF)' };
         case 'thanksgiving_full':
-            return { targetScript: 'ns_thanksgiving.js', actionLabel: 'THANKSGIVING FULL EVENT (BATTLE + MINI-GAME)' };
+            return { targetScript: 'ns_thanksgiving.js', actionLabel: 'FULL EVENT MISSION THANKSGIVING (BATTLE + WEREWOLF MINI-GAME)' };
         default:
-            return { targetScript: 'ns_daily.js', actionLabel: 'JATAH HARIAN FULL (TP + SS + EUDEMON DRAGON + CLAIM HH TANPA BATTLE)' };
+            return { targetScript: 'ns_daily.js', actionLabel: 'JATAH HARIAN FULL (ABSEN+CALENDAR+SCRATCH+TOKEN + TP/SS + EUDEMON + CLAIM HH)' };
     }
 }
 
-async function runBulk(action, extraArgs = [], delaySec = DEFAULT_DELAY_SEC, concurrency = DEFAULT_CONCURRENCY) {
-    const rawAccounts = loadAccounts();
-    if (rawAccounts.length === 0) return;
-
+async function runBulk(action, extraArgs = [], delaySec = DEFAULT_DELAY_SEC, concurrency = DEFAULT_CONCURRENCY, options = {}) {
     const normConcurrency = Math.max(1, parseInt(concurrency, 10) || DEFAULT_CONCURRENCY);
-    const expanded = await expandAccountsIfNeeded(rawAccounts, normConcurrency);
-    if (expanded.length === 0) return;
+    let expanded = options.preExpanded || null;
+    if (!expanded) {
+        const rawAccounts = options.rawAccounts || loadAccounts();
+        if (rawAccounts.length === 0) return { total: 0, success: 0, failed: 0, details: [] };
+        expanded = await expandAccountsIfNeeded(rawAccounts, normConcurrency);
+    }
+    if (!expanded || expanded.length === 0) return { total: 0, success: 0, failed: 0, details: [] };
 
+    const baseAction = normalizeLoopBaseAction(action);
     const accountQueues = groupQueuesByAccount(expanded);
     const effectiveConcurrency = Math.min(normConcurrency, accountQueues.length);
-    const { targetScript, actionLabel } = resolveActionMeta(action);
+    const { targetScript, actionLabel } = resolveActionMeta(baseAction);
+    const runTaskFn = options.runScriptFn || runScriptForAccount;
 
     console.log('\n==========================================================');
     console.log('      NINJA SAGA MULTI-ACCOUNT & MULTI-CHAR RUNNER');
     console.log('                cc: MagnetScript(Razki)');
     console.log('==========================================================');
+    if (options.cycleNumber) {
+        console.log(`  Putaran Auto-Loop     : #${options.cycleNumber} (Cek ulang tiap ${options.intervalMin || DEFAULT_LOOP_INTERVAL_MIN} menit)`);
+    }
     console.log(`  Total Karakter Antrean: ${expanded.length} (${accountQueues.length} akun unik)`);
     console.log(`  Mode Farming          : ${actionLabel}`);
     console.log(`  Script Target         : ${targetScript}`);
@@ -472,7 +535,7 @@ async function runBulk(action, extraArgs = [], delaySec = DEFAULT_DELAY_SEC, con
             await acquireLaunchSlot();
         }
 
-        const scriptArgs = buildScriptArgs(action, acc, extraArgs);
+        const scriptArgs = buildScriptArgs(baseAction, acc, extraArgs);
         const charDesc = acc.charName ? `${acc.charName} (Lv ${acc.charLevel}, Slot ${acc.slot})` : `Slot ${acc.slot}`;
         const prefix = isParallelMode ? `[${acc.user}#${acc.slot}]` : '';
         line(`${idxLabel} Memulai: ${acc.user} | Karakter: ${charDesc} | Target: Lv ${acc.targetLevel} ...`);
@@ -480,20 +543,20 @@ async function runBulk(action, extraArgs = [], delaySec = DEFAULT_DELAY_SEC, con
         const accStart = Date.now();
         let res;
         try {
-            res = await runScriptForAccount(targetScript, scriptArgs, acc, { prefix });
+            res = await runTaskFn(targetScript, scriptArgs, acc, { prefix });
         } catch (e) {
             res = { ok: false, error: e.message };
         }
 
         if (!res.ok) {
-            const retryWaitSec = 21;
+            const retryWaitSec = options.retryWaitSec !== undefined ? options.retryWaitSec : 21;
             line(`${idxLabel} [RETRY] ${acc.user} (${charDesc}) gagal (exit: ${res.code || res.error}). Mencoba ulang setelah ${retryWaitSec}s...`);
-            await sleep(retryWaitSec * 1000);
+            if (retryWaitSec > 0) await sleep(retryWaitSec * 1000);
             if (isParallelMode) {
                 await acquireLaunchSlot();
             }
             try {
-                res = await runScriptForAccount(targetScript, scriptArgs, acc, { prefix });
+                res = await runTaskFn(targetScript, scriptArgs, acc, { prefix });
             } catch (e) {
                 res = { ok: false, error: e.message };
             }
@@ -501,7 +564,7 @@ async function runBulk(action, extraArgs = [], delaySec = DEFAULT_DELAY_SEC, con
 
         const accEnd = Date.now();
         const accDuration = Math.round((accEnd - accStart) / 1000);
-        const anchorMs = endAnchorActions.has(action) ? accEnd : Math.min(accEnd, accStart + 3500);
+        const anchorMs = endAnchorActions.has(baseAction) ? accEnd : Math.min(accEnd, accStart + 3500);
         lastCooldownAnchor.set(userKey, anchorMs);
 
         if (res.ok) {
@@ -551,22 +614,27 @@ async function runBulk(action, extraArgs = [], delaySec = DEFAULT_DELAY_SEC, con
     const successCount = results.filter(r => r.status === 'SUCCESS').length;
     const failCount = results.filter(r => r.status === 'FAILED').length;
 
-    try {
-        fs.writeFileSync(REPORT_FILE, JSON.stringify({
-            action,
-            actionLabel,
-            concurrency: effectiveConcurrency,
-            timestamp: new Date().toISOString(),
-            total: expanded.length,
-            success: successCount,
-            failed: failCount,
-            total_duration_sec: totalDuration,
-            details: results
-        }, null, 2), 'utf8');
-    } catch (_) { }
+    const summaryPayload = {
+        action: baseAction,
+        actionLabel,
+        cycleNumber: options.cycleNumber || 1,
+        concurrency: effectiveConcurrency,
+        timestamp: new Date().toISOString(),
+        total: expanded.length,
+        success: successCount,
+        failed: failCount,
+        total_duration_sec: totalDuration,
+        details: results
+    };
+
+    if (!options.skipReportWrite) {
+        try {
+            fs.writeFileSync(REPORT_FILE, JSON.stringify(summaryPayload, null, 2), 'utf8');
+        } catch (_) { }
+    }
 
     console.log('\n==========================================================');
-    console.log('           LAPORAN RINGKASAN MULTI-ACCOUNT');
+    console.log(`        LAPORAN RINGKASAN MULTI-ACCOUNT${options.cycleNumber ? ` (PUTARAN #${options.cycleNumber})` : ''}`);
     console.log('==========================================================');
     console.log(`  Total Karakter Dikerjakan : ${expanded.length}`);
     console.log(`  Mode Paralel              : ${effectiveConcurrency} akun sekaligus`);
@@ -581,6 +649,85 @@ async function runBulk(action, extraArgs = [], delaySec = DEFAULT_DELAY_SEC, con
         console.log(`  ${idx + 1}. [${st}] ${r.user.padEnd(16)} ${cLabel.padEnd(22)} (${r.duration}s)`);
     });
     console.log('==========================================================\n');
+
+    return summaryPayload;
+}
+
+/**
+ * Mode Full Automate Loop (Standby 15 menit lalu run ulang semua akun secara otomatis).
+ */
+async function runBulkLoop(action, extraArgs = [], delaySec = DEFAULT_DELAY_SEC, concurrency = DEFAULT_CONCURRENCY, options = {}) {
+    const intervalMin = Number.isFinite(Number(options.intervalMin)) && Number(options.intervalMin) > 0
+        ? Number(options.intervalMin)
+        : DEFAULT_LOOP_INTERVAL_MIN;
+    const waitSec = Math.max(60, Math.round(intervalMin * 60));
+    const sleepFn = options.sleep || sleep;
+    const getDateFn = options.getDateStr || getLocalDateStr;
+    const maxCycles = options.maxCycles || Infinity;
+    const normConcurrency = Math.max(1, parseInt(concurrency, 10) || DEFAULT_CONCURRENCY);
+
+    let expanded = options.preExpanded || null;
+    if (!expanded) {
+        const rawAccounts = options.rawAccounts || loadAccounts();
+        if (rawAccounts.length === 0) return [];
+        expanded = await expandAccountsIfNeeded(rawAccounts, normConcurrency);
+    }
+    if (!expanded || expanded.length === 0) return [];
+
+    const baseAction = normalizeLoopBaseAction(action);
+    const smartDailyEvent = isDailyPlusEventAction(baseAction);
+    const followupAction = getFollowupEventAction(baseAction);
+
+    line(`>>> MULTI-ACCOUNT FULL AUTOMATE LOOP DIAKTIFKAN (Interval Standby: ${intervalMin} menit) <<<`);
+    if (smartDailyEvent) {
+        line('  Alur Pintar: Putaran #1 menjalankan Full Daily Login + Jatah Harian + Full Event (Battle & Wolf),');
+        line('               Putaran #2 dst. menjalankan Full Event (Battle & Wolf) tiap 15 menit (+ ulangi Daily saat ganti hari).');
+    } else {
+        line('  Alur Loop  : Menjalankan seluruh akun di accounts.txt, lalu menunggu 15 menit saat energi/kuota habis untuk run lagi.');
+    }
+    line('  Kontrol    : Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti kembali ke menu.\n');
+
+    let lastDailyDate = '';
+    let cycle = 1;
+    const cycleSummaries = [];
+
+    while (cycle <= maxCycles) {
+        const todayStr = getDateFn();
+        const shouldRunFullDaily = smartDailyEvent && (cycle === 1 || todayStr !== lastDailyDate);
+        const currentAction = shouldRunFullDaily ? baseAction : (smartDailyEvent ? followupAction : baseAction);
+
+        if (smartDailyEvent && cycle > 1 && shouldRunFullDaily) {
+            line(`[AUTO-LOOP] Pergantian tanggal terdeteksi (${todayStr})! Mengulang Full Daily Login + Jatah Harian + Event...`);
+        }
+
+        const summary = await runBulk(currentAction, extraArgs, delaySec, normConcurrency, {
+            ...options,
+            preExpanded: expanded,
+            cycleNumber: cycle,
+            intervalMin
+        });
+        cycleSummaries.push(summary);
+        if (shouldRunFullDaily) {
+            lastDailyDate = todayStr;
+        }
+
+        if (cycle >= maxCycles) break;
+
+        line(`[SCHEDULER MULTI-AKUN] Putaran #${cycle} tuntas. Energi/Heart & Bullet Werewolf habis -> Standby ${intervalMin} menit (${formatSec(waitSec)}) sebelum Putaran #${cycle + 1}...`);
+        line('[SCHEDULER MULTI-AKUN] Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti.');
+        let remain = waitSec;
+        while (remain > 0) {
+            const step = Math.min(30, remain);
+            await sleepFn(step * 1000);
+            remain -= step;
+            if (remain > 0) {
+                line(`[STANDBY MULTI-AKUN] Putaran #${cycle + 1} dimulai dalam ${formatSec(remain)}...`);
+            }
+        }
+        cycle++;
+    }
+
+    return cycleSummaries;
 }
 
 async function interactiveMenu() {
@@ -595,35 +742,79 @@ async function interactiveMenu() {
     console.log(`  File Akun: ${ACCOUNTS_FILE} (${accounts.length} baris konfigurasi terdeteksi)`);
     console.log('  Tips Slot: Gunakan "all" di kolom slot untuk jalankan semua karakter');
     console.log('             pada akun Emblem/Multi-Char, atau "1,2" / baris terpisah.');
-    console.log('  Fast Mode: Akun berbeda dijalankan PARALEL bersamaan secara otomatis!');
+    console.log('  Auto Login: Semua paket Harian otomatis klaim Absen + Calendar +');
+    console.log('              Free Scratch Card + Claim Token Harian!');
     console.log('----------------------------------------------------------------------');
-    console.log('  [ PAKET JATAH HARIAN MULTI-AKUN ]');
-    console.log('  1. Jatah Harian Full (TP + SS + Eudemon Dragon + Claim HH Tanpa Battle)');
+    console.log('  [ PAKET JATAH HARIAN + AUTO LOGIN CLAIM MULTI-AKUN ]');
+    console.log('  1. Jatah Harian Full (Absen+Calendar+Scratch+Token + TP/SS + Eudemon + Claim HH)');
     console.log('  2. Jatah Harian Full + Battle Boss Hunting House');
     console.log('  3. Jatah Harian Lengkap + Auto Leveling / Grade S (Sesuai accounts.txt)');
     console.log('  4. Jatah Harian Full + Thanksgiving Battle (Tanpa Battle HH)');
-    console.log('  5. Jatah Harian Full + Thanksgiving Full Event (Battle + Werewolf)');
+    console.log('  5. FULL AUTOMATE SEMUA: Harian + Full Event Battle & Wolf [AUTO-LOOP 15 MENIT]');
+    console.log(' 15. Klaim Login Harian Saja (Absen + Daily Calendar + Scratch + Token Harian)');
     console.log('');
     console.log('  [ FARMING SPESIFIK MULTI-AKUN ]');
     console.log('  6. Eudemon Dragon Saja (Auto 3x Emblem / 1x Free per Room)');
     console.log('  7. Hunting House Saja (Auto Claim Daily Passport + Battle Boss)');
     console.log('  8. Claim Daily Hunting House Saja (Tanpa Battle - Ambil 5/10 Tiket)');
     console.log('  9. Training TP & SS Saja');
-    console.log('  [ EVENT KHUSUS (THANKSGIVING 2026) ]');
-    console.log(' 10. Farming Battle Thanksgiving (Sampai Heart Habis)');
-    console.log(' 11. Farming Mini-game Thanksgiving (Ammo + Werewolf)');
-    console.log(' 12. Full Thanksgiving Event (Battle + Mini-game)');
+    console.log('');
+    console.log('  [ EVENT THANKSGIVING 2026 & WOLF MINI-GAME ]');
+    console.log(' 10. Farming Battle Thanksgiving (Sampai Heart Habis / Loop 15m)');
+    console.log(' 11. Farming Wolf Mini-game Thanksgiving (Sampai Bullet Habis / Loop 15m)');
+    console.log(' 12. FULL EVENT MISSION: Battle + Wolf Mini-game [AUTO-LOOP 15 MENIT]');
     console.log('');
     console.log('  [ MISI & LEVELING MULTI-AKUN ]');
-    console.log(' 13. Misi Grade S Saja (Auto Stamina Runner - Stage 1-4)');
+    console.log(' 13. Misi Grade S Saja (Auto Stamina Runner - Stage 1-4 / Loop 15m)');
     console.log(' 14. Auto Grinding Level + Ujian Saja (Target level di accounts.txt)');
     console.log('  0. Kembali ke Menu Utama');
     console.log('======================================================================');
 
-    const choice = (await ask('Pilih menu [0-14, Enter = 1] : ')).trim() || '1';
+    const choice = (await ask('Pilih menu [0-15, Enter = 5 (Full Automate)] : ')).trim() || '5';
     if (choice === '0') {
         rl.close();
         return;
+    }
+
+    const choiceMap = {
+        '1': 'daily_pure',
+        '2': 'daily_hh',
+        '3': 'daily_level',
+        '4': 'daily_thanksgiving_battle',
+        '5': 'auto_all_event',
+        '6': 'eudemon',
+        '7': 'house',
+        '8': 'claim',
+        '9': 'train',
+        '10': 'thanksgiving_battle',
+        '11': 'thanksgiving_minigame',
+        '12': 'thanksgiving_full_loop',
+        '13': 'grades',
+        '14': 'level',
+        '15': 'daily_login'
+    };
+
+    const selectedAction = choiceMap[choice];
+    if (!selectedAction) {
+        rl.close();
+        console.log('Pilihan tidak valid.');
+        return;
+    }
+
+    let useLoop = DEFAULT_AUTO_LOOP_ACTIONS.has(selectedAction);
+    let intervalMin = DEFAULT_LOOP_INTERVAL_MIN;
+
+    if (['10', '11', '13', '4'].includes(choice)) {
+        const loopAns = (await ask('Aktifkan Auto-Loop tunggu 15 menit saat energi/kuota habis? [Y/n, Enter = Y] : ')).trim().toLowerCase();
+        useLoop = loopAns === '' || loopAns === 'y' || loopAns === 'yes';
+    }
+
+    if (useLoop) {
+        const rawInt = (await ask(`Interval cek ulang saat energi habis dalam menit (default = ${DEFAULT_LOOP_INTERVAL_MIN} menit) : `)).trim();
+        const parsedInt = Number(rawInt);
+        if (Number.isFinite(parsedInt) && parsedInt > 0) {
+            intervalMin = parsedInt;
+        }
     }
 
     const rawConc = (await ask(`Jumlah akun paralel sekaligus (default = ${DEFAULT_CONCURRENCY}, 1 = sekuensial) : `)).trim();
@@ -637,63 +828,64 @@ async function interactiveMenu() {
     rl.close();
     c.enableGracefulStop('menu multi-account');
 
-    const choiceMap = {
-        '1': 'daily_pure',
-        '2': 'daily_hh',
-        '3': 'daily_level',
-        '4': 'daily_thanksgiving_battle',
-        '5': 'daily_thanksgiving_full',
-        '6': 'eudemon',
-        '7': 'house',
-        '8': 'claim',
-        '9': 'train',
-        '10': 'thanksgiving_battle',
-        '11': 'thanksgiving_minigame',
-        '12': 'thanksgiving_full',
-        '13': 'grades',
-        '14': 'level'
-    };
-
-    if (choiceMap[choice]) {
-        await runBulk(choiceMap[choice], [], delay, concurrency);
+    if (useLoop) {
+        await runBulkLoop(selectedAction, [], delay, concurrency, { intervalMin });
     } else {
-        console.log('Pilihan tidak valid.');
+        await runBulk(selectedAction, [], delay, concurrency);
     }
 }
 
 // ═══════════════════════════════════════════════════════════════
 // CLI Dispatcher
 // ═══════════════════════════════════════════════════════════════
-const args = process.argv.slice(2);
-let action = '';
-let delaySec = DEFAULT_DELAY_SEC;
-let concurrency = DEFAULT_CONCURRENCY;
-const cleanArgs = [];
+function parseMultiCliArgs(rawArgs) {
+    let action = '';
+    let delaySec = DEFAULT_DELAY_SEC;
+    let concurrency = DEFAULT_CONCURRENCY;
+    let loopFlag = null;
+    let intervalMin = DEFAULT_LOOP_INTERVAL_MIN;
+    const cleanArgs = [];
 
-for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a === '--delay' && args[i + 1] !== undefined) {
-        const parsed = parseInt(args[i + 1], 10);
-        delaySec = Number.isNaN(parsed) ? DEFAULT_DELAY_SEC : Math.max(0, parsed);
-        i++;
-    } else if ((a === '--parallel' || a === '--concurrency' || a === '-p') && args[i + 1] !== undefined) {
-        const parsed = parseInt(args[i + 1], 10);
-        concurrency = Number.isNaN(parsed) ? DEFAULT_CONCURRENCY : Math.max(1, parsed);
-        i++;
-    } else if (a === '--serial') {
-        concurrency = 1;
-    } else if (!action) {
-        action = a.toLowerCase();
-    } else {
-        cleanArgs.push(a);
+    for (let i = 0; i < rawArgs.length; i++) {
+        const a = rawArgs[i];
+        if (a === '--delay' && rawArgs[i + 1] !== undefined) {
+            const parsed = parseInt(rawArgs[++i], 10);
+            delaySec = Number.isNaN(parsed) ? DEFAULT_DELAY_SEC : Math.max(0, parsed);
+        } else if ((a === '--parallel' || a === '--concurrency' || a === '-p') && rawArgs[i + 1] !== undefined) {
+            const parsed = parseInt(rawArgs[++i], 10);
+            concurrency = Number.isNaN(parsed) ? DEFAULT_CONCURRENCY : Math.max(1, parsed);
+        } else if ((a === '--interval' || a === '--interval-min') && rawArgs[i + 1] !== undefined) {
+            const parsed = Number(rawArgs[++i]);
+            if (Number.isFinite(parsed) && parsed > 0) intervalMin = parsed;
+        } else if (a === '--loop') {
+            loopFlag = true;
+        } else if (a === '--once' || a === '--no-loop') {
+            loopFlag = false;
+        } else if (a === '--serial') {
+            concurrency = 1;
+        } else if (!action) {
+            action = a.toLowerCase();
+        } else {
+            cleanArgs.push(a);
+        }
     }
+
+    const useLoop = loopFlag !== null ? loopFlag : DEFAULT_AUTO_LOOP_ACTIONS.has(action);
+    return { action, delaySec, concurrency, useLoop, intervalMin, cleanArgs };
 }
 
 if (require.main === module) {
     (async () => {
-        if (action) {
+        const parsed = parseMultiCliArgs(process.argv.slice(2));
+        if (parsed.action) {
             c.enableGracefulStop('menu multi-account');
-            await runBulk(action, cleanArgs, delaySec, concurrency);
+            if (parsed.useLoop) {
+                await runBulkLoop(parsed.action, parsed.cleanArgs, parsed.delaySec, parsed.concurrency, {
+                    intervalMin: parsed.intervalMin
+                });
+            } else {
+                await runBulk(parsed.action, parsed.cleanArgs, parsed.delaySec, parsed.concurrency);
+            }
         } else {
             await interactiveMenu();
         }
@@ -704,4 +896,17 @@ if (require.main === module) {
     });
 }
 
-module.exports = { loadAccounts, expandAccountsIfNeeded, interleaveAccounts, groupQueuesByAccount, runBulk };
+module.exports = {
+    loadAccounts,
+    expandAccountsIfNeeded,
+    interleaveAccounts,
+    groupQueuesByAccount,
+    normalizeLoopBaseAction,
+    getFollowupEventAction,
+    isDailyPlusEventAction,
+    buildScriptArgs,
+    resolveActionMeta,
+    parseMultiCliArgs,
+    runBulk,
+    runBulkLoop
+};

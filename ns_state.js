@@ -7,6 +7,7 @@
 'use strict';
 
 const c = require('./nsclient.js');
+const { summarizeDailyLoginStatusFromExtra } = require('./ns_daily_login.js');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 const RANK_NAMES = {
@@ -149,6 +150,40 @@ function countItemInString(rawStr, itemId) {
     const ssMissions = ['279', '280', '281', '282', '283', '284', '285'];
     const ssOut = ssMissions.map(m => `msn${m}: ${cariMsn(m)}`).join('  ');
     console.log(`   ${ssOut}`);
+
+    // Daily Login, Calendar, Scratch, & Daily Token Status
+    try {
+        const exRes = await c.getExtraDataWithRetry(s.sessionKey, charId, s.token, String(chRes.gk || ''), 2);
+        if (exRes && exRes.ok && exRes.result) {
+            const dl = summarizeDailyLoginStatusFromExtra(exRes.result, {
+                isEmblem,
+                accountType: s.accountType,
+                level,
+                rank
+            });
+            let calText = dl.dailyCalendar.stampAvailableFlag ? 'Stamp tersedia' : 'Tercatat hari ini';
+            try {
+                const calRes = await c.amf('NewDailyRewardStamp2017.getStatus', [s.sessionKey, 'en']);
+                const cb = (calRes && calRes.body) || {};
+                if (!calRes.fault && (Number(cb.status) === 1 || Array.isArray(cb.loginDay))) {
+                    const days = Array.isArray(cb.loginDay) ? cb.loginDay.filter(d => String(d) === '1').length : 0;
+                    const ready = Array.isArray(cb.claimReward) ? cb.claimReward.filter(v => String(v) === '1').length : 0;
+                    const done = Array.isArray(cb.claimReward) ? cb.claimReward.filter(v => String(v) === '2').length : 0;
+                    calText = `${days} hari login bulan ini | Milestone siap klaim: ${ready} (selesai: ${done}/6)`;
+                }
+            } catch (_) { }
+
+            console.log('\n Status Klaim Harian (Login / Calendar / Scratch / Token):');
+            console.log(`   - Absen Login 5 Hari  : ${dl.dailyAttendance.available ? `SIAP DIKLAIM (Hari ke-${dl.dailyAttendance.dayIndex})` : 'Sudah diklaim hari ini'}`);
+            console.log(`   - Daily Calendar      : ${calText}`);
+            console.log(`   - Free Scratch Card   : ${dl.scratchCard.unlocked ? `${dl.scratchCard.freeRemainingExtra}x gratis tersisa` : 'Terkunci (< Lv 8)'}`);
+            console.log(`   - Daily Token Emblem  : ${dl.dailyTokens.emblemTokenAvailable ? `SIAP DIKLAIM (+${dl.dailyTokens.emblemTokenAmount} Token)` : (isEmblem ? 'Sudah diklaim hari ini' : 'Khusus Emblem / Trial')}`);
+            if (isEmblem) {
+                console.log(`   - Emblem +1 Level Up  : ${dl.dailyTokens.emblemLevelUpAvailable ? 'SIAP DIKLAIM (+1 Level Gratis)' : (level >= 80 ? 'Batas fitur < Lv 80' : 'Sudah diklaim / tertahan cap ujian')}`);
+            }
+            console.log(`   - Daily Lucky Spin    : ${dl.dailyTokens.luckySpinRemaining}x spin gratis tersisa`);
+        }
+    } catch (_) { }
 
     // Hunting House, Eudemon Dragon & Thanksgiving 2026 Status
     try {

@@ -136,7 +136,9 @@ assert.deepStrictEqual(parseCliArgs(['node', 'ns_thanksgiving.js', 'full', '1', 
     maxBattles: 1,
     maxMiniGames: 1,
     enemyId: '',
-    force: false
+    force: false,
+    loop: false,
+    intervalMin: 15
 });
 assert.deepStrictEqual(parseCliArgs(['node', 'ns_thanksgiving.js', 'minigame', '--max-minigame', '2', '--force']), {
     mode: 'minigame',
@@ -144,7 +146,19 @@ assert.deepStrictEqual(parseCliArgs(['node', 'ns_thanksgiving.js', 'minigame', '
     maxBattles: null,
     maxMiniGames: 2,
     enemyId: '',
-    force: true
+    force: true,
+    loop: false,
+    intervalMin: 15
+});
+assert.deepStrictEqual(parseCliArgs(['node', 'ns_thanksgiving.js', 'loop', 'full']), {
+    mode: 'loop',
+    subMode: 'full',
+    maxBattles: null,
+    maxMiniGames: null,
+    enemyId: '',
+    force: false,
+    loop: true,
+    intervalMin: 15
 });
 assert.deepStrictEqual(
     summarizeBattleReward({ reward: ['xp_30000', 'gold_30000', 'item918', 'item925'], reward_get: ['item918', 'item925'] }, cfg),

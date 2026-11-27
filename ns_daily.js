@@ -2,21 +2,24 @@
 /**
  * cc: MagnetScript(Razki)
  *
- * ns_daily.js — Satu script untuk semua jatah harian NinjaSaga.
+ * ns_daily.js — Satu script untuk semua jatah harian NinjaSaga + Auto Claim Login Harian.
  *
  * Penggunaan:
- *   NS_USER=... NS_PASS=... node ns_daily.js                   # Claim HH + Eudemon Dragon + TP & SS (+ Grade S jika Lv>=80)
- *   NS_USER=... NS_PASS=... node ns_daily.js --pure            # Murni: Claim HH (tanpa battle HH) + Eudemon Dragon + TP + SS
+ *   NS_USER=... NS_PASS=... node ns_daily.js                   # Login Claim + Claim HH + Eudemon Dragon + TP & SS (+ Grade S jika Lv>=80)
+ *   NS_USER=... NS_PASS=... node ns_daily.js --pure            # Murni: Login Claim + Claim HH (tanpa battle HH) + Eudemon Dragon + TP + SS
+ *   NS_USER=... NS_PASS=... node ns_daily.js --only-login-claim # Khusus Absen + Calendar + Scratch Gratis + Claim Token Harian saja
  *   NS_USER=... NS_PASS=... node ns_daily.js --with-hh-battle  # Tambah battle Boss Hunting House juga
  *   NS_USER=... NS_PASS=... node ns_daily.js --with-thanksgiving-battle    # Tambah event battle Thanksgiving
  *   NS_USER=... NS_PASS=... node ns_daily.js --with-thanksgiving-minigame  # Tambah mini-game Thanksgiving
  *   NS_USER=... NS_PASS=... node ns_daily.js --with-thanksgiving-full      # Tambah battle + mini-game Thanksgiving
+ *   NS_USER=... NS_PASS=... node ns_daily.js --pure --with-thanksgiving-full --loop-event # Full Automate + Loop Event tiap 15m
  *   NS_USER=... NS_PASS=... node ns_daily.js --level 85        # Tambah auto misi/ujian ke target level
  *
  * Urutan Jatah Harian:
+ *   0. Full Auto Claim Daily Login (Absen 5 Hari + Daily Calendar + Free Scratch Card + Claim Token Harian & Lucky Spin)
  *   1. Daily Claim Hunting House + Eudemon Dragon (3x per room untuk Emblem, 1x untuk Free)
  *   2. Daily TP Training + SS Training
- *   3. Opsional: Battle Hunting House / Grade S / Auto Leveling
+ *   3. Opsional: Thanksgiving Event (Battle + Werewolf) / Battle Hunting House / Grade S / Auto Leveling
  */
 'use strict';
 const { spawn } = require('child_process');
@@ -24,19 +27,28 @@ const line = s => console.log(s);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const dir = __dirname;
 const c = require('./nsclient.js');
+const { getLocalDateStr } = require('./lib/ns_mission_history.js');
+const { runDailyLoginSession } = require('./ns_daily_login.js');
 const { runHuntSession } = require('./ns_hunt.js');
 const { runTrainSession } = require('./ns_train.js');
 const { runGradeSSession } = require('./ns_grade_s.js');
-const { runThanksgivingSession } = require('./ns_thanksgiving.js');
+const { runThanksgivingSession, formatTime } = require('./ns_thanksgiving.js');
 
 const argv = process.argv.slice(2);
 const iLv = argv.indexOf('--level');
 const targetLevel = iLv >= 0 ? Number(argv[iLv + 1] || 0) : (process.env.NS_TARGET_LEVEL ? Number(process.env.NS_TARGET_LEVEL) : 0);
+const iInt = argv.indexOf('--interval-min');
+const intervalMin = iInt >= 0 ? Math.max(1, Number(argv[iInt + 1] || 15)) : 15;
 const isPureDaily = argv.includes('--pure');
 const withHhBattle = argv.includes('--with-hh-battle');
+const skipLoginClaim = argv.includes('--no-login-claim');
+const onlyLoginClaim = argv.includes('--only-login-claim');
+const noEmblemLevelUp = argv.includes('--no-emblem-levelup');
+const loopEvent = argv.includes('--loop-event') || argv.includes('--loop');
 const thanksgivingMode = argv.includes('--with-thanksgiving-full') ? 'full'
     : argv.includes('--with-thanksgiving-battle') ? 'battle'
-        : argv.includes('--with-thanksgiving-minigame') ? 'minigame' : '';
+        : argv.includes('--with-thanksgiving-minigame') ? 'minigame'
+            : (loopEvent ? 'full' : '');
 
 if (!process.env.NS_USER || !process.env.NS_PASS) { line('Butuh NS_USER dan NS_PASS.'); process.exit(1); }
 
@@ -92,13 +104,42 @@ function sebab(out) {
     return penting.length ? penting[penting.length - 1].trim().slice(0, 120) : '';
 }
 
-(async () => {
-    c.enableGracefulStop('menu bot');
+async function runFullDailyOnce() {
     const shared = {
         user: process.env.NS_USER,
         pass: process.env.NS_PASS
     };
     const hasil = [];
+
+    if (!skipLoginClaim || onlyLoginClaim) {
+        const loginTitle = 'Daily: Absen + Calendar + Scratch + Token';
+        line('');
+        line('################ ' + loginTitle + ' ################');
+        const loginRes = await runDailyLoginSession({
+            shared,
+            claimEmblemLevelUp: !noEmblemLevelUp
+        });
+        hasil.push([loginTitle, loginRes.exitCode, loginRes.kredit || 0, loginRes.summary || '']);
+
+        if (loginRes.exitCode !== 0 || !shared.s || !shared.st || !shared.ex) {
+            line('');
+            line('################ RINGKASAN HARIAN ################');
+            for (const [nama, kode, kredit, alasan] of hasil) {
+                line('  ' + nama.padEnd(42) + '| ' + (kode === 0 ? 'exit 0' : 'exit ' + kode) + ' | sukses/reward: ' + kredit + (alasan ? ' | ' + alasan : ''));
+            }
+            return { ok: false, hasil };
+        }
+
+        if (onlyLoginClaim) {
+            line('');
+            line('################ RINGKASAN LOGIN HARIAN ################');
+            for (const [nama, kode, kredit, alasan] of hasil) {
+                line('  ' + nama.padEnd(42) + '| ' + (kode === 0 ? 'exit 0' : 'exit ' + kode) + ' | sukses/reward: ' + kredit + (alasan ? ' | ' + alasan : ''));
+            }
+            return { ok: true, hasil };
+        }
+        await sleep(50);
+    }
 
     const huntMode = withHhBattle ? 'both' : 'daily';
     const huntTitle = withHhBattle
@@ -114,9 +155,9 @@ function sebab(out) {
         line('');
         line('################ RINGKASAN HARIAN ################');
         for (const [nama, kode, kredit, alasan] of hasil) {
-            line('  ' + nama.padEnd(38) + '| ' + (kode === 0 ? 'exit 0' : 'exit ' + kode) + ' | sukses/reward: ' + kredit + (alasan ? ' | ' + alasan : ''));
+            line('  ' + nama.padEnd(42) + '| ' + (kode === 0 ? 'exit 0' : 'exit ' + kode) + ' | sukses/reward: ' + kredit + (alasan ? ' | ' + alasan : ''));
         }
-        process.exit(1);
+        return { ok: false, hasil };
     }
 
     await sleep(50);
@@ -177,11 +218,56 @@ function sebab(out) {
     line('');
     line('################ RINGKASAN HARIAN ################');
     for (const [nama, kode, kredit, alasan] of hasil) {
-        line('  ' + nama.padEnd(38) + '| ' + (kode === 0 ? 'exit 0' : 'exit ' + kode) + ' | sukses/reward: ' + kredit + (alasan ? ' | ' + alasan : ''));
+        line('  ' + nama.padEnd(42) + '| ' + (kode === 0 ? 'exit 0' : 'exit ' + kode) + ' | sukses/reward: ' + kredit + (alasan ? ' | ' + alasan : ''));
     }
     line('');
-    line('Catatan: TP/SS dibatasi server 1x per hari, Eudemon Dragon 3x/room (Emblem) atau 1x/room (Free).');
-    process.exit(hasil.every(h => h[1] === 0) ? 0 : 1);
+    line('Catatan: Absen/Kalender/Scratch/Token/TP/SS 1x per hari; Eudemon 3x/room (Emblem) atau 1x/room (Free).');
+    return { ok: hasil.every(h => h[1] === 0), hasil };
+}
+
+async function waitIntervalMinutes(minutes) {
+    const waitSec = Math.max(60, Math.round(minutes * 60));
+    const ts = () => '[' + new Date().toTimeString().slice(0, 8) + '] ';
+    console.log(`\n${ts()}[AUTO-LOOP] Energi Event (Heart & Bullet Werewolf) habis. Menunggu ${minutes} menit (${formatTime(waitSec)}) sebelum cek & run ulang...`);
+    console.log(`${ts()}[AUTO-LOOP] Tekan [Q] atau [Ctrl+C] kapan saja untuk kembali ke menu.`);
+    let remain = waitSec;
+    while (remain > 0) {
+        const step = Math.min(30, remain);
+        await sleep(step * 1000);
+        remain -= step;
+        if (remain > 0) {
+            console.log(`${ts()}[STANDBY] Cek ulang Event dalam ${formatTime(remain)}...`);
+        }
+    }
+}
+
+(async () => {
+    c.enableGracefulStop('menu bot');
+    let lastDailyDate = getLocalDateStr();
+    const firstRun = await runFullDailyOnce();
+    if (!loopEvent) {
+        process.exit(firstRun.ok ? 0 : 1);
+    }
+
+    const evMode = thanksgivingMode || 'full';
+    let cycle = 2;
+    while (true) {
+        await waitIntervalMinutes(intervalMin);
+        const today = getLocalDateStr();
+        if (today !== lastDailyDate) {
+            line(`\n=== [AUTO-LOOP PUTARAN #${cycle}] HARI BARU TERDETEKSI (${today}) -> JALANKAN ULANG FULL DAILY + EVENT ===`);
+            await runFullDailyOnce();
+            lastDailyDate = today;
+        } else {
+            line(`\n=== [AUTO-LOOP PUTARAN #${cycle}] CEK & JALANKAN EVENT THANKSGIVING (${evMode}: Battle + Wolf Mini-game) ===`);
+            const evRes = await runThanksgivingSession({
+                mode: evMode,
+                shared: { user: process.env.NS_USER, pass: process.env.NS_PASS }
+            });
+            line(`  -> Ringkasan Putaran #${cycle}: ${evRes.summary || '-'} (exit ${evRes.exitCode})`);
+        }
+        cycle++;
+    }
 })().catch(e => {
     line('FATAL ' + (e.message || e));
     process.exit(1);

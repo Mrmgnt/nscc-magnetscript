@@ -94,14 +94,14 @@ if not "%NS_CHAR_NAME%"=="" (
 echo ======================================================================
 echo.
 echo   [ 1 ] RUTINITAS HARIAN ^& HUNTING
-echo         1. Jatah Harian Lengkap (TP + SS + Eudemon Dragon + Claim HH)
+echo         1. Jatah Harian Lengkap (Auto Absen/Calendar/Scratch/Token + TP/SS + Dragon + HH)
 echo         2. TP Training ^& SS Training (Jalur Misi Resmi)
 echo         3. Eudemon Dragon Saja (Auto 3x Emblem / 1x Free Sampai Habis)
 echo         4. Hunting House Saja (Auto Claim 5/10 Tiket + Battle Boss / Claim)
 echo         5. Menu Gabungan Hunting House ^& Eudemon Dragon (Semua Mode)
 echo.
 echo   [ 2 ] EVENT THANKSGIVING 2026
-echo         6. Thanksgiving Event (Battle / Mini-game / Full)
+echo         6. Thanksgiving Event (Battle / Wolf Mini-game / Full Automate Loop 15m)
 echo.
 echo   [ 3 ] MISI ^& GRINDING LEVEL
 echo         7. Misi Grade S (Auto Selesaikan Misi 1-4 Sampai Energi Habis)
@@ -110,7 +110,7 @@ echo         9. Murni Grinding Misi Grade Level (C / B / A / S)
 echo        10. Cek Daftar Misi ^& Status Selesai (Per Grade)
 echo.
 echo   [ 4 ] MULTI-ACCOUNT ^& TOOLS
-echo        11. Multi-Account ^& Multi-Character Runner (accounts.txt)
+echo        11. Multi-Account ^& Multi-Character Runner (Full Daily Login + Event Loop 15m)
 echo        12. Dummy Farmer (Auto Register/Login Akun ^& Kirim Gift Harian)
 echo        13. Test Local Feed (Multi-Threaded Dev Test)
 echo.
@@ -150,22 +150,29 @@ goto MENU
 :DAILY
 cls
 echo ======================================================================
-echo       JATAH HARIAN LENGKAP (TP + SS + EUDEMON DRAGON + CLAIM HH)
+echo    JATAH HARIAN LENGKAP + FULL AUTO CLAIM LOGIN HARIAN
 echo ======================================================================
+echo   [Auto Login Claim Aktif: Absen 5 Hari + Daily Calendar + Free Scratch
+echo    + Claim Token Harian Emblem/Lucky Spin + Emblem Free +1 Lv ^< 80]
+echo.
 echo   Pilih paket rutinitas harian yang ingin dijalankan:
-echo     1. Jatah Harian Murni (Claim Tiket HH + TP + SS + Eudemon Dragon)
+echo     1. Jatah Harian Murni (Login Claim + Claim Tiket HH + TP + SS + Eudemon)
 echo        [Tanpa battle Hunting House ^& tanpa grinding misi level]
 echo     2. Jatah Harian + Sekalian Battle Boss Hunting House
 echo     3. Jatah Harian + Lanjut Auto Leveling / Ujian / Grade S
 echo     4. Jatah Harian + Thanksgiving Battle
-echo     5. Jatah Harian + Thanksgiving Mini-game
-echo     6. Jatah Harian + Thanksgiving Full Event
+echo     5. Jatah Harian + Thanksgiving Wolf Mini-game
+echo     6. Jatah Harian + Thanksgiving Full Event (Sekali Jalan)
+echo     7. FULL AUTOMATE Harian + Event Loop Tiap 15 Menit (Battle + Wolf Loop)
+echo     8. Klaim Login Harian Saja (Absen + Calendar + Scratch Gratis + Token)
+echo     0. Kembali ke Menu Utama
 echo.
 echo   Tips: Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti ke menu.
 echo.
 set "DOPT="
-set /p "DOPT=Pilih mode [1-6, Enter = 1]: "
+set /p "DOPT=Pilih mode [0-8, Enter = 1]: "
 if "%DOPT%"=="" set "DOPT=1"
+if "%DOPT%"=="0" goto MENU
 echo.
 if "%DOPT%"=="1" (
   node ns_daily.js --pure
@@ -186,6 +193,10 @@ if "%DOPT%"=="1" (
   node ns_daily.js --pure --with-thanksgiving-minigame
 ) else if "%DOPT%"=="6" (
   node ns_daily.js --pure --with-thanksgiving-full
+) else if "%DOPT%"=="7" (
+  node ns_daily.js --pure --with-thanksgiving-full --loop-event
+) else if "%DOPT%"=="8" (
+  node ns_daily_login.js
 ) else (
   node ns_daily.js --pure
 )
@@ -311,19 +322,25 @@ echo ======================================================================
 echo   1. Cek Status Event
 echo   2. Auto Battle: rotasi 5 musuh sampai Heart habis
 echo   3. Auto Mini-game: habiskan Ammo termasuk Werewolf
-echo   4. Full Event: Battle lalu Mini-game
+echo   4. Full Event (Sekali Jalan): Battle lalu Wolf Mini-game
+echo   5. FULL AUTOMATE LOOP 15 MENIT: Battle + Wolf Mini-game ^(energi habis tunggu 15m^)
+echo   6. Auto-Loop Battle Saja ^(Heart habis tunggu 15 menit lalu run lagi^)
+echo   7. Auto-Loop Wolf Mini-game Saja ^(Bullet habis tunggu 15 menit lalu run lagi^)
 echo     0. Kembali ke Menu Utama
 echo.
 echo   Tips: Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti ke menu.
 echo.
 set "TG_OPT="
-set /p "TG_OPT=Pilih mode [0-4, default: 1]: "
-if "%TG_OPT%"=="" set "TG_OPT=1"
+set /p "TG_OPT=Pilih mode [0-7, default: 5]: "
+if "%TG_OPT%"=="" set "TG_OPT=5"
 if "%TG_OPT%"=="0" goto MENU
 if "%TG_OPT%"=="1" node ns_thanksgiving.js status
 if "%TG_OPT%"=="2" node ns_thanksgiving.js battle
 if "%TG_OPT%"=="3" node ns_thanksgiving.js minigame
 if "%TG_OPT%"=="4" node ns_thanksgiving.js full
+if "%TG_OPT%"=="5" node ns_thanksgiving.js loop full
+if "%TG_OPT%"=="6" node ns_thanksgiving.js loop battle
+if "%TG_OPT%"=="7" node ns_thanksgiving.js loop minigame
 echo.
 pause
 goto THANKSGIVING
@@ -551,6 +568,8 @@ echo             MULTI-ACCOUNT ^& MULTI-CHARACTER BULK RUNNER
 echo ======================================================================
 echo   Menjalankan akun dan karakter dari accounts.txt secara otomatis
 echo   dengan jeda aman tanpa saling bertabrakan sesi login.
+echo   - Mendukung Full Auto Claim Login (Absen, Calendar, Scratch, Token)
+echo   - Mendukung Full Automate Event + Wolf Mini-game (Loop Tiap 15 Menit)
 echo.
 echo   Tips: Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti ke menu.
 echo.

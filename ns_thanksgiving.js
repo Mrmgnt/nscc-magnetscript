@@ -713,6 +713,8 @@ function parseCliArgs(argv) {
     let maxMiniGames = null;
     let enemyId = '';
     let force = false;
+    let loopFlag = false;
+    let intervalMin = 15;
 
     for (let i = 0; i < args.length; i++) {
         const a = args[i];
@@ -724,6 +726,11 @@ function parseCliArgs(argv) {
             if (!Number.isNaN(val)) maxMiniGames = val;
         } else if (a === '--enemy' && args[i + 1] !== undefined) {
             enemyId = String(args[++i]).trim();
+        } else if ((a === '--interval' || a === '--interval-min') && args[i + 1] !== undefined) {
+            const val = Number(args[++i]);
+            if (Number.isFinite(val) && val > 0) intervalMin = val;
+        } else if (a === '--loop') {
+            loopFlag = true;
         } else if (a === '--force') {
             force = true;
         } else {
@@ -731,42 +738,62 @@ function parseCliArgs(argv) {
         }
     }
 
-    const mode = (positional[0] || 'status').toLowerCase();
-    if (positional[1] !== undefined && /^\d+$/.test(positional[1])) {
-        const n = parseInt(positional[1], 10);
-        if (mode === 'minigame' || mode === 'werewolf') maxMiniGames = n;
-        else if (maxBattles === null) maxBattles = n;
-    }
-    if (positional[2] !== undefined && /^\d+$/.test(positional[2]) && maxMiniGames === null) {
-        maxMiniGames = parseInt(positional[2], 10);
+    const rawFirst = (positional[0] || 'status').toLowerCase();
+    const mode = loopFlag && rawFirst !== 'loop' ? 'loop' : rawFirst;
+    const subMode = loopFlag && rawFirst !== 'loop'
+        ? (['battle', 'minigame', 'werewolf', 'full'].includes(rawFirst) ? rawFirst : 'full')
+        : (positional[1] || 'full').toLowerCase();
+
+    if (!loopFlag && rawFirst !== 'loop') {
+        if (positional[1] !== undefined && /^\d+$/.test(positional[1])) {
+            const n = parseInt(positional[1], 10);
+            if (mode === 'minigame' || mode === 'werewolf') maxMiniGames = n;
+            else if (maxBattles === null) maxBattles = n;
+        }
+        if (positional[2] !== undefined && /^\d+$/.test(positional[2]) && maxMiniGames === null) {
+            maxMiniGames = parseInt(positional[2], 10);
+        }
     }
 
-    return { mode, subMode: (positional[1] || 'full').toLowerCase(), maxBattles, maxMiniGames, enemyId, force };
+    return { mode, subMode, maxBattles, maxMiniGames, enemyId, force, loop: mode === 'loop', intervalMin };
 }
 
-async function runSchedulerLoop(user, pass, slotOrId, subMode = 'full', config = loadConfig()) {
+async function runSchedulerLoop(user, pass, slotOrId, subMode = 'full', config = loadConfig(), options = {}) {
     c.enableGracefulStop('menu thanksgiving');
     const targetMode = ['battle', 'minigame', 'werewolf', 'full'].includes(subMode) ? subMode : 'full';
+    const intervalMin = Number.isFinite(Number(options.intervalMin)) && Number(options.intervalMin) > 0
+        ? Number(options.intervalMin)
+        : 15;
+    const waitSecDefault = Math.max(60, Math.round(intervalMin * 60));
+    const sleepFn = options.sleep || sleep;
+    const maxCycles = options.maxCycles || Infinity;
     let cycle = 1;
 
-    while (true) {
-        line(`=== THANKSGIVING SCHEDULER CYCLE #${cycle} (${targetMode}) ===`);
-        const entry = await runForAccount(user, pass, slotOrId, targetMode, config);
-        const refills = [];
+    line(`>>> MODE AUTO-LOOP EVENT THANKSGIVING DIAKTIFKAN (${targetMode.toUpperCase()} | Cek tiap ${intervalMin} menit) <<<`);
+    line('Bot otomatis menghabiskan Battle Heart & Werewolf Mini-game Bullet, lalu menunggu 15 menit untuk run lagi.');
+    line('Tekan [Q] atau [Ctrl+C] kapan saja untuk berhenti kembali ke menu.\n');
+
+    while (cycle <= maxCycles) {
+        line(`=== THANKSGIVING AUTO-LOOP PUTARAN #${cycle} (${targetMode}) ===`);
+        const entry = await runForAccount(user, pass, slotOrId, targetMode, config, options);
         if (entry.ok && entry.result) {
-            const res = entry.result;
-            if (res.status && res.status.refillRemain > 0) refills.push(res.status.refillRemain);
-            if (res.battle && res.battle.status && res.battle.status.refillRemain > 0) refills.push(res.battle.status.refillRemain);
-            if (res.minigame && res.minigame.status && res.minigame.status.refillRemain > 0) refills.push(res.minigame.status.refillRemain);
+            const bCount = entry.result.battles ?? (entry.result.battle && entry.result.battle.battles) ?? 0;
+            const mCount = entry.result.minigames ?? (entry.result.minigame && entry.result.minigame.minigames) ?? 0;
+            line(`[PUTARAN #${cycle} SELESAI] Battle: ${bCount}x | Werewolf Mini-game: ${mCount}x`);
+        } else if (!entry.ok) {
+            line(`[PUTARAN #${cycle} PERINGATAN] ${entry.error || 'Gagal menjalankan putaran ini'}`);
         }
-        const waitSec = refills.length ? Math.min(...refills) : 1800;
-        line(`[SCHEDULER] Menunggu refill berikutnya: ${formatTime(waitSec)} (${waitSec}s). Tekan Q / Ctrl+C untuk berhenti.`);
+
+        if (cycle >= maxCycles) break;
+
+        const waitSec = waitSecDefault;
+        line(`[SCHEDULER] Energi Event (Heart & Bullet Werewolf) habis. Menunggu ${intervalMin} menit (${formatTime(waitSec)}) lalu run ulang... Tekan Q / Ctrl+C untuk berhenti.`);
         let remain = waitSec;
         while (remain > 0) {
             const step = Math.min(30, remain);
-            await sleep(step * 1000);
+            await sleepFn(step * 1000);
             remain -= step;
-            if (remain > 0) line(`[STANDBY] Sisa waktu refill: ${formatTime(remain)}...`);
+            if (remain > 0) line(`[STANDBY] Cek & run ulang Event dalam: ${formatTime(remain)}...`);
         }
         cycle++;
     }
@@ -786,10 +813,10 @@ function releaseTerminalInput() {
 async function main() {
     c.enableGracefulStop('menu event');
     const parsed = parseCliArgs(process.argv);
-    const { mode, subMode, maxBattles, maxMiniGames, enemyId, force } = parsed;
+    const { mode, subMode, maxBattles, maxMiniGames, enemyId, force, intervalMin } = parsed;
 
     if (!['status', 'battle', 'minigame', 'werewolf', 'full', 'loop'].includes(mode)) {
-        throw new Error('Pakai: status | battle [max] | minigame [max] | full [maxBattle] [maxMini] | loop [mode]');
+        throw new Error('Pakai: status | battle [max] | minigame [max] | full [maxBattle] [maxMini] | loop [mode] [--interval-min 15]');
     }
 
     const user = process.env.NS_USER;
@@ -799,7 +826,7 @@ async function main() {
 
     const config = loadConfig();
     if (mode === 'loop') {
-        await runSchedulerLoop(user, pass, slot, subMode, config);
+        await runSchedulerLoop(user, pass, slot, subMode, config, { force, intervalMin });
         return;
     }
 
@@ -857,6 +884,7 @@ module.exports = {
     runMiniGame,
     runForAccount,
     runThanksgivingSession,
+    runSchedulerLoop,
     formatTime,
     releaseTerminalInput,
     main

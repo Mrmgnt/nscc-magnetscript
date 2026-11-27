@@ -1,0 +1,16 @@
+{
+  "type": "rotate",
+  "start_angle": 240,
+  "step": 15,
+  "dom": {},
+  "details": {
+    "rotation": {
+      "angle": 210,
+      "score": 0.39824561403508774
+    },
+    "start": 240,
+    "target": 210,
+    "clicks": 2,
+    "useRight": false
+  }
+}
